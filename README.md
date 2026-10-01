@@ -10,6 +10,10 @@
 
 - [Manager JD](notes/manager-jd.md)：意图判断、信息过滤、任务翻译与必要时的直接对齐
 - [Organization Runtime](notes/organization-runtime.md)：角色、session、持久状态和 GUI
+- [Harness adapter](notes/harness-adapter.md)：CLI 调用方式、worktree 槽位与同步策略（含实测）
+- [Manager actions](notes/manager-actions.md)：向下转发、向上附件、记录、会议与对外操作
+- [Roles and tasks](notes/roles-and-tasks.md)：角色类型与具名角色、任务生命周期、Workboard
+- [Ideas](notes/ideas.md)：暂不实现的小功能
 - [HCI rationale](notes/hci-rationale.md)：人机协作研究节选
 - [Market landscape](notes/market-landscape.md)：2026-10-01 调研草稿，产品事实与市场判断待核实
 
