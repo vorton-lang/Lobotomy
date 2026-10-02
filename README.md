@@ -17,6 +17,7 @@
 - [Frontend](notes/frontend.md)：Electron 形态、布局、前后端协议与渲染选型
 - [Roadmap](notes/roadmap.md)：M1 执行闭环 → M2 审查 → M3 Binah 与会议 → M4 Angela
 - [Ideas](notes/ideas.md)：暂不实现的小功能
+- 调研快照：[harness 接入与条款](notes/research/harness-interfaces.md)、[agent GUI 前端](notes/research/frontend-survey.md)；实测脚本见 `spikes/`
 - [HCI rationale](notes/hci-rationale.md)：人机协作研究节选
 - [Market landscape](notes/market-landscape.md)：2026-10-01 调研草稿，产品事实与市场判断待核实
 

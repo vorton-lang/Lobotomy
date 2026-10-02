@@ -1,7 +1,7 @@
 # 前端
 
 > Status: 设计决定 v0.1（2026-10-02）
-> 依据：[#6](https://github.com/vorton-lang/Lobotomy/issues/6) §5；对 20 个 agent GUI 产品的调研（issue、PR、源码）；本机 Codex / Claude 桌面应用的依赖扫描。
+> 依据：[#6](https://github.com/vorton-lang/Lobotomy/issues/6) §5；对 20 个 agent GUI 产品的调研（issue、PR、源码，见 [research/frontend-survey.md](research/frontend-survey.md)）；本机 Codex / Claude 桌面应用的依赖扫描。
 
 ## 0. 原则
 

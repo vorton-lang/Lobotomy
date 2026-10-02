@@ -163,7 +163,8 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 
 - jj-lib 的版本锁定与封装边界：jj-lib 的库 API 尚未稳定，需锁定版本，并封装在一个模块后面，不让 jj 的类型扩散到业务代码。
 - 跨平台的原生中断：per-turn 进程在 Windows 与 Linux 上如何一致地触发 harness 原生中断，被中断 turn 在两家会话记录中的状态。
-- Linux 上重跑实测（spike 脚本为 Node，可直接移植）。
+- Linux 上重跑实测：[spikes/harness-cli/spike.mjs](../spikes/harness-cli/spike.mjs) 为 Node 脚本，可直接移植。
+- 接入方式与条款的调研依据见 [research/harness-interfaces.md](research/harness-interfaces.md)。
 - Claude `--append-system-prompt-file`：帮助文本中出现过，尚未实测。
 - Codex 的长指令方案：`-p` profile 文件，还是 `model_instructions_file`。
 - Codex `--thread-source` 的取值。

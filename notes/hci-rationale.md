@@ -279,4 +279,4 @@ realized master trajectory
 
 ---
 
-完整研究与实验依据继续在 [Ember 原文](https://github.com/vorton-lang/Ember/blob/530debb699b90a5ae88211e5a2cea04b0c2f7f9a/notes/master-model-research.md) 维护；迁入材料许可见 [Ember notice](../THIRD_PARTY_NOTICES/Ember-MIT-LICENSE.txt)。
+完整研究与实验依据继续在 [Ember 原文](https://github.com/vorton-lang/Ember/blob/530debb699b90a5ae88211e5a2cea04b0c2f7f9a/notes/master-model-research.md) 维护。
