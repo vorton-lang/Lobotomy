@@ -47,7 +47,7 @@ v1 中 role 与槽位一一固定，因此任务层不会出现"取得了 role�
   - 每个 turn 本来就要重新传 MCP 配置（harness-adapter.md §1.3 第 2 条），按 turn 发放 token 没有额外的调用成本。
   - token 与发放它的 turn 永久对应。`done` 等调用因此直接绑定到 turn，不按"角色当前任务"反查归属。
   - turn 结束后，如果旧进程仍用该 token 调用，后端把调用记为迟到。迟到的调用不能推进状态。
-  - URL 不出现在 prompt 中，因此预期不影响 prompt cache。这一点尚未实测：现有的跨进程缓存实测使用的是固定 URL。
+  - 更换 URL 不影响 prompt cache：Codex 已实测，第二个 turn 的缓存命中与不更换相同（harness-adapter.md §1.4）。Claude 待 M3 实测。
 
 ### 3.2 turn 的状态
 

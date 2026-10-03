@@ -58,7 +58,8 @@ Codex（消息经 stdin，位置参数为 -）
 6. **停止与中断（#6 §3）：**
    - 收到正常停止请求后，运行时等待当前 turn 结束和 CLI 退出。运行时不启动下一个 turn。
    - 收到立即中断请求后，运行时调用 harness 的原生中断路径，并等待 CLI 退出。
-   - 子进程由 harness 自行清理。这是设计假设，未经验证；Lobotomy 不自建进程树管理。
+   - 子进程由 harness 自行清理；Lobotomy 不自建进程树管理。Codex 在 Windows 上已实测成立，包括被直接终止的情况（§1.4）。Claude 与 Linux 上仍是设计假设。
+   - Windows 上的原生中断是 Ctrl+C，发给目标进程独占的控制台（§1.4、§1.8）。
    - CLI 未退出或执行状态不明时，该 turn 保持"待对账"。运行时保留占用，不重放，也不为同一 native session 或执行现场启动替代执行（[#2](https://github.com/vorton-lang/Lobotomy/issues/2)）。
    - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"只核对 CLI 是否已经退出，见 [data-model.md](data-model.md) §3.3。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
@@ -79,7 +80,24 @@ Codex（消息经 stdin，位置参数为 -）
 | 工具输出流式 | 不流式：命令结束后一次给出完整 `tool_result`；之前只有 `tool_use` 和不带输出的 `system/task_started` | 不流式：`item.started`（带命令，in_progress）之后，`item.completed` 一次给出完整 `aggregated_output` |
 | turn 结束事件到进程退出 | 约 0.5s | 约 4s |
 
-流式与退出间隔三行来自一次探针（[spikes/harness-cli/stream-probe.mjs](../spikes/harness-cli/stream-probe.mjs)，2026-10-04）：命令每秒打印一行，共 5 秒。两家的事件格式不在稳定承诺内，CLI 升级后需重测。
+| 每个 turn 更换 MCP URL | 未测（M3） | 不影响缓存：第二个 turn 的缓存命中均为 98.7%，与不更换相同 |
+| 全局指令文件 | 未测（M3） | `--ignore-user-config` 或 `-c project_doc_max_bytes=0` 下，`~/.codex/AGENTS.md` 仍然生效 |
+
+流式与退出间隔三行来自一次探针（[spikes/harness-cli/stream-probe.mjs](../spikes/harness-cli/stream-probe.mjs)，2026-10-04）：命令每秒打印一行，共 5 秒。MCP URL 与全局指令文件两行分别来自 [cache-probe.mjs](../spikes/harness-cli/cache-probe.mjs) 与 [agents-md-probe.mjs](../spikes/harness-cli/agents-md-probe.mjs)（2026-10-04）。两家的事件格式不在稳定承诺内，CLI 升级后需重测。
+
+**Codex 中断实测**（Windows 11，Codex CLI 0.159.2，2026-10-04，[spikes/win-proc](../spikes/win-proc)）。turn 运行一条每秒写一行、共 40 秒的命令，在约 18 秒时用以下方式结束：
+
+| 结束方式 | codex.exe | 工具命令 | rollout | resume |
+|---|---|---|---|---|
+| 后端崩溃：Job 内的父进程被终止 | 被 Job 终止 | 随之结束 | 只有工具调用，没有工具结果 | 正常。Codex 补一个 "aborted" 工具结果，stderr 打印一行 ERROR |
+| 直接终止 codex.exe，不用 Job | 终止 | 随之结束 | 同上 | 同上 |
+| Ctrl+Break 发给独立进程组 | 立即退出（0xC000013A） | 随之结束 | 同上 | 同上 |
+| Ctrl+C 发给目标进程独占的控制台 | 约 2–5 秒后退出 | 随之结束 | 记录工具结果（"aborted by user after …"）和 `turn_aborted` | 正常，没有 ERROR |
+
+- 四种方式下，工具命令都没有残留进程，包括不用 Job 直接终止 codex.exe 的情况。
+- 只有 Ctrl+C 是优雅中断。Ctrl+C 发给整个控制台：发给共享控制台时，同一控制台上的所有进程都会收到。定向中断要求每个 harness 进程有自己的控制台（`CREATE_NO_WINDOW`），由辅助进程临时 attach 到目标控制台后发送。实测中，另一控制台上的旁观进程不受影响。
+- 所有方式下，`--json` 输出都停在 `item.started`，没有被中断 turn 的结束事件。运行时按 interrupted 记录（[data-model.md](data-model.md) §3.2）。
+- resume 后，模型能说出最后执行的命令，并知道它被中断、没有收到输出。
 
 ### 1.5 二进制定位
 
@@ -137,6 +155,13 @@ Lobotomy 不恢复被中断的执行现场。
 OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功。
 
 两个平台的效果不同：Linux 只请求退出，Windows 直接终止。按 §0 的交集原则，后端重启后仍按 1.3 第 6 条核对 CLI 是否已退出，不假定 harness 已经结束。
+
+**Windows 实现要点**（2026-10-04 实测，[spikes/win-proc](../spikes/win-proc)）：
+
+- Job Object 绑定有效：父进程被终止后，Job 内的 codex.exe 随之终止。
+- 先启动再加入 Job，中间有一个短暂窗口，子进程可能在加入前启动孙进程。实现时以挂起方式创建进程，或使用 `PROC_THREAD_ATTRIBUTE_JOB_LIST`。
+- Rust 标准库的 `Command::spawn` 在 Windows 上会让子进程继承父进程所有可继承的句柄。实测中，一个子进程因此持有父进程的 stdout 管道，使调用方一直等到它退出。后端启动 harness 时，要用 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 限定可继承的句柄，避免后端的管道与 socket 泄漏给长期运行的 harness。
+- 原生中断：每个 harness 进程以 `CREATE_NO_WINDOW` 启动，拥有自己的控制台。中断时，由一个短命的辅助进程 attach 到目标控制台并发送 Ctrl+C。控制台是进程级状态，不在后端进程内 attach。
 
 ## 2. MCP 服务
 
@@ -267,14 +292,14 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 ## 6. 待验证 / 未决
 
 - jj-lib 的版本锁定与封装边界：jj-lib 的库 API 尚未稳定，需锁定版本，并封装在一个模块后面，不让 jj 的类型扩散到业务代码。
-- 跨平台的原生中断：per-turn 进程在 Windows 与 Linux 上如何一致地触发 harness 原生中断，被中断 turn 在两家会话记录中的状态，以及工具调用中途被中断后 resume 能否正常接续。结果也决定 ideas.md 中的"中断并发送"能否加入。
+- 原生中断与中断后的 resume：Codex 在 Windows 上已实测（§1.4）。Claude、以及 Linux 上的两家仍待实测。结果也决定 ideas.md 中的"中断并发送"能否加入。
+- 全局指令文件：role 是否应继承用户个人的 `~/.codex/AGENTS.md`（Claude 对应 `~/.claude/CLAUDE.md`）。实测 `--ignore-user-config` 不能排除它；已知的办法只有为 role 使用单独的 `CODEX_HOME`。待用户决定。
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。
 - `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。下次自然发生时记录。Codex 被拒的形式暂不处理。
-- 每个 turn 更换 MCP URL 后，跨进程 prompt cache 是否仍命中。预期命中，尚未实测。
-- 平台启动适配（1.8）的实现与验证：Linux 的设置竞态与启动线程，Windows 的进程创建与加入 Job 的顺序。
+- 每个 turn 更换 MCP URL 后，Claude 的跨进程 prompt cache 是否仍命中。Codex 已实测不受影响（§1.4）。
+- 平台启动适配（1.8）：Windows 已实测；Linux 的设置竞态与启动线程待实测。
 - Linux 上重跑实测：[spikes/harness-cli/spike.mjs](../spikes/harness-cli/spike.mjs) 为 Node 脚本，可直接移植。
 - 接入方式与条款的调研依据见 [research/harness-interfaces.md](research/harness-interfaces.md)。
 - Claude `--append-system-prompt-file`：帮助文本中出现过，尚未实测。
-- Codex 的长指令方案：`-p` profile 文件，还是 `model_instructions_file`。
+- Codex 的长指令方案：`-p` profile 文件，还是 `model_instructions_file`。暂不需要：Windows 命令行上限约 32K 字符，role 指令预计远小于此，先用 `-c developer_instructions`；指令实际接近上限时再研究。
 - Codex `--thread-source` 的取值。
-- `--ignore-user-config` 下全局 `AGENTS.md` 是否仍生效。
