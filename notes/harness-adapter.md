@@ -1,7 +1,8 @@
 # Harness Adapter、执行现场与成果
 
-> Status: 设计决定 v0.2（2026-10-02）
+> Status: 设计决定 v0.3（2026-10-03）
 > v0.1 的 git worktree + rebase + 快进同步方案已由 [#5](https://github.com/vorton-lang/Lobotomy/issues/5) 的已确认评论与 [#6](https://github.com/vorton-lang/Lobotomy/issues/6) 的推荐实现取代：SQLite 是业务事实的唯一权威，jj 承载不可变成果，工作目录只是执行现场。
+> v0.3 按 [#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)修订：中断后的范围（1.7）、turn 身份（1.3 第 8 条）、`done` 与采集的顺序（4.1）、验收与发布的原子边界（4.2）、后端与 harness 的生命周期绑定（1.8）。#7 中标为"建议"的内容，本文同样标为建议；具体字段与 API 待设计。
 > 实测环境：Windows 11，Claude Code 2.1.283，Codex CLI 0.159.2（随 Codex desktop app 分发）。
 
 ## 0. 原则
@@ -9,7 +10,7 @@
 - **机械操作归运行时，判断归 Manager。** Manager 是 agent，会犯错；能用确定性规则完成的事不经过它，它只收到事件用于知情。
 - **只按正常方式调用官方 CLI。** 不依赖 Claude Agent SDK、Codex SDK / app-server 或 ACP adapter。订阅绑定官方入口，正常调用 CLI 与用户手动使用一致。CLI 做不到的，由 Lobotomy 的 MCP 服务提供。
 - **不依赖平台特有行为。** 能力取 Windows 与 Linux 的交集。先在 Windows 上开发运行，正式发版前集中修 Linux 问题。下文标为"Windows 实测"的细节属于平台适配层，不是设计依赖。
-- **不依赖 harness 的权限系统。** 所有 role 关闭审批。安全靠结构：成果采集可恢复、守护进程与开发副本分离、对外能力裁剪。
+- **不依赖 harness 的权限系统。** 所有 role 关闭审批。安全靠结构：成果采集可恢复、后端与开发副本分离、对外能力裁剪。
 - **harness 自己的日志和会话文件不管理。**
 
 ## 1. Adapter
@@ -19,7 +20,7 @@
 每个 turn 启动一次 CLI，结束即退出；跨 turn 的连续性完全靠 harness 原生的 resume。
 
 - 与用户手动执行命令相同；
-- 守护进程重启后，下一轮照常 resume；上一轮结果不明时按对账处理（见 1.3 第 6 条）；
+- 后端重启后，下一轮照常 resume。上一轮的结果不明时，按 1.3 第 6 条处理；运行时不自动恢复被中断的 turn（见 1.7）；
 - 两家 CLI 形状一致，不需要监管长驻子进程；
 - prompt cache 在服务端按前缀命中，与进程是否常驻无关（实测命中）。
 
@@ -53,8 +54,14 @@ Codex（消息经 stdin，位置参数为 -）
 3. **消息走 stdin，长配置走文件。** 命令行长度有平台上限（Windows 约 32K 字符）。Codex 在 stdin 非 TTY 时会读取 stdin 并追加为 `<stdin>` 块，必须显式提供或关闭 stdin。Claude 的 `--mcp-config` 接收多个值，会把其后的位置参数（提示词）当作配置文件路径吞掉（实测踩到）。
 4. **压缩：** Claude 从 stdout 的 `system/compact_boundary` 读取（含 trigger、压缩前后 token 数）。Codex 的压缩设计上不影响工作，不做追踪；可尽力读 rollout 文件中的 `compacted` 记录，仅用于 GUI 显示。
 5. **用量：** Claude 每轮 `result.usage`，另有 `rate_limit_event`（5 小时 / 7 天额度利用率与重置时间），用于运行时的并发控制和 GUI 显示。Codex 的 `turn.completed.usage` 实测为线程累计值，需与上一轮做差。额度作用域与降级见 [#4](https://github.com/vorton-lang/Lobotomy/issues/4)。
-6. **停止与中断（#6 §3）：** 复用 harness 原生的 interrupt / graceful exit 并等待 CLI 退出；假定官方 harness 自行清理子进程，不自建进程树管理。正常停止只 drain 当前 turn；立即中断走原生中断路径。CLI 未退出或执行状态不明时保持"待对账"，不重放（[#2](https://github.com/vorton-lang/Lobotomy/issues/2)）。
+6. **停止与中断（#6 §3）：**
+   - 收到正常停止请求后，运行时等待当前 turn 结束和 CLI 退出。运行时不启动下一个 turn。
+   - 收到立即中断请求后，运行时调用 harness 的原生中断路径，并等待 CLI 退出。
+   - 子进程由 harness 自行清理。这是设计假设，未经验证；Lobotomy 不自建进程树管理。
+   - CLI 未退出或执行状态不明时，该 turn 保持"待对账"。运行时保留占用，不重放，也不为同一 native session 或执行现场启动替代执行（[#2](https://github.com/vorton-lang/Lobotomy/issues/2)）。
+   - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"具体核对什么，待 #7 的 turn 契约确定（见 §6）。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
+8. **启动前登记 turn（#7 建议）。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。同一 attempt 内正常接续时，运行时只新建 turn，不新建 attempt。
 
 ### 1.4 实测结果（Windows）
 
@@ -89,9 +96,47 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
 - Codex role 不读用户的 `config.toml`，模型、推理强度等由 Lobotomy 显式传入。
 - 外部系统（GitHub 等）由 Lobotomy 统一接入，role 经 Lobotomy MCP 访问，见 [manager-actions.md](manager-actions.md)。
 
+### 1.7 中断后的范围（#7）
+
+Lobotomy 不恢复被中断的执行现场。
+
+- 运行时不重建工作目录，不还原工具的执行位置，也不自动恢复或重放被中断的 turn。
+- 运行时保留三类内容：已知的业务事实、已固定的成果、结果不确定的 turn 记录。
+- 运行时提供两个入口：经 harness 原生 resume 启动新 turn，或新建 native session。
+- 流式输出中尚未完成的部分（partial）只保存在后端内存中。后端崩溃时，partial 丢失（[frontend.md](frontend.md) §3 第 2 条）。
+
+用户主动"继续"时，建议这样调用（#7 建议）：
+
+1. 运行时经原生 resume 启动新 turn。
+2. 本轮输入告知 harness：上一个 turn 已中断，请先检查当前 cwd。
+
+这种调用方式不承诺回到中断的位置。
+
+§3 的重新物化发生在采集完成后，或运行时自己的 checkout 中断、就绪状态不明时（#6 §2）。它不是对被中断 turn 的恢复。
+
+### 1.8 后端与 harness 的生命周期绑定（#7 建议）
+
+后端退出时，操作系统默认不保证后端启动的 harness 进程一起退出。#7 建议加一层很薄的平台启动适配，把后端与它直接启动的 harness 进程绑定。harness 仍负责自己的子进程；Lobotomy 不扩展成自建的进程树监管器。
+
+| 平台 | 做法 | 效果 | 实现时注意 |
+|---|---|---|---|
+| Linux | 子进程 exec 前设置 [`PR_SET_PDEATHSIG`](https://www.man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)`=SIGTERM` | 请求 harness 退出并尽量清理，不保证强制终止 | 处理设置之前父进程已退出的竞态。信号针对创建子进程的父线程，需注意启动线程的生命周期 |
+| Windows | 带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)，句柄由后端独占且不可继承 | 最后一个句柄关闭时，终止已关联的进程；不是优雅退出 | 处理好进程创建与加入 Job 的顺序 |
+
+后端正常关闭时：
+
+1. 运行时调用 harness 的原生中断或退出路径。
+2. 运行时等待 CLI 退出。
+
+OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功。
+
+两个平台的效果不同：Linux 只请求退出，Windows 直接终止。按 §0 的交集原则，后端重启后仍按 1.3 第 6 条核对 CLI 是否已退出，不假定 harness 已经结束。
+
 ## 2. MCP 服务
 
-守护进程在 localhost 提供 streamable HTTP MCP。每个 role 分配一个带 token 的 URL，由 URL 识别调用者，每轮不需要额外启动子进程。工具集见 [manager-actions.md](manager-actions.md) 与 [roles-and-tasks.md](roles-and-tasks.md)。
+后端在 localhost 提供 streamable HTTP MCP。运行时每轮把带 token 的 URL 传给 CLI（1.3 第 2 条），由 URL 识别调用者；每轮不需要额外启动子进程。工具集见 [manager-actions.md](manager-actions.md) 与 [roles-and-tasks.md](roles-and-tasks.md)。
+
+**语义更新（#7 建议）：** `done` 等 MCP 调用要绑定发出它的 turn 的实际启动上下文（1.3 第 8 条），不能按"角色当前任务"反查归属。v0.2 写的是"每个 role 分配一个 URL"，只能识别到 role。token 按 role 还是按 turn 发放，待设计。
 
 ## 3. 执行现场
 
@@ -123,6 +168,7 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
 ```
 
 - 已有 pin 时，恢复与重试始终使用同一份成果；没有 pin 时保持 pending，确认写者停止后再决定是否采集。
+- **`done` 可能早于 CLI 退出（#7 建议）。** 收到 `done` 后，运行时先持久保存采集意图，并保持现有占用。CLI 退出后，运行时再采集并固定成果。turn 结束、任务完成、参与者释放是三个不同的状态变化，不能互相代替。
 - 迟到或过期的成果保留来源，但不能推进当前状态。
 - **采集范围由运行时声明**，不只依赖 harness 可修改的 ignore 文件（`force_tracking_matcher`）。特殊文件、嵌套仓库等 fail closed：报告未覆盖的内容并保留现场（[#3](https://github.com/vorton-lang/Lobotomy/issues/3)）。
 - 每轮采集取代了 v0.1 的 `git stash create` 快照，"撤销这一轮"基于采集记录实现。
@@ -134,12 +180,19 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
 - **验证阶段**：运行时用 jj 把候选成果 rebase 到当前集成版本上。jj 把冲突作为数据记录在提交中，rebase 不会中断；有冲突时以运行时模板消息交还给相应 role 处理。检查命令在 rebase 后的结果上运行。
 - **证据绑定**：检查、审查与验收的证据都绑定到具体成果、基线与条件版本（[#5](https://github.com/vorton-lang/Lobotomy/issues/5) 已确认的 TASK 方向）。
 - **验收即发布**：发布是对集成版本头的 CAS。若集成版本在验证之后已经前进，运行时把候选成果 rebase 到新的头并重新验证，必要时重新审查；不能凭旧证据发布。
+- **验收与发布的原子边界（#7 建议）：**
+  - 候选成果的登记与验收后的发布是两个分开的步骤。
+  - 验收请求写明 `candidate_id`、完成条件版本和预期的集成版本头。
+  - 运行时在同一个 SQLite 事务中提交四项内容：验收决定、集成版本头的 CAS、任务关闭、预览的 outbox 记录。
+  - CAS 失败时，任务不关闭。运行时在新的集成版本上重新验证，旧证据不能直接沿用。
+  - 事务已提交而预览物化失败时，只表示预览尚未跟上。运行时不撤销已提交的验收与发布。
 - **未验收的候选成果不进入预览，也不能被其他任务依赖。** 需要用到它的任务排在它之后。
 - **撤销已发布的代码**只能作为新任务向前发布，例如一个 revert 成果，同样经过验证、审查与验收。
 
 ### 4.3 主仓库：集成版本的只读预览
 
 - 用户的主仓库是集成版本的**单向物化**，由运行时机械写入，不是任何事实的来源。只包含已验收的成果。
+- 预览物化经 outbox 执行。物化失败时，预览暂时落后于集成版本（见 4.2）。
 - 前提是用户不手工修改项目文件（#5）。Angela 在这里只读运行，与用户看到同一份代码。
 - 进行中的工作通过 GUI 查看（Inspector 的"改动"页：按执行轮的成果与 diff），不进入预览。
 - push 与 GitHub 导出的内容范围、触发和批准单独处理，v1 中 Lobotomy 不 push。
@@ -163,6 +216,10 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 
 - jj-lib 的版本锁定与封装边界：jj-lib 的库 API 尚未稳定，需锁定版本，并封装在一个模块后面，不让 jj 的类型扩散到业务代码。
 - 跨平台的原生中断：per-turn 进程在 Windows 与 Linux 上如何一致地触发 harness 原生中断，被中断 turn 在两家会话记录中的状态。
+- "待对账"的具体内容：运行时核对哪些事实，何时结束待对账，结束后 turn 记为什么状态。待 #7 的 turn 契约确定。
+- MCP token 按 role 还是按 turn 发放（见 §2）。
+- 平台启动适配（1.8）的实现与验证：Linux 的设置竞态与启动线程，Windows 的进程创建与加入 Job 的顺序。
+- 被中断 turn 留下的未采集改动：用户选择新建 native session 或放弃任务时如何处理。#5 §1 中"未提交现场留在哪里"的问题仍未回答。
 - Linux 上重跑实测：[spikes/harness-cli/spike.mjs](../spikes/harness-cli/spike.mjs) 为 Node 脚本，可直接移植。
 - 接入方式与条款的调研依据见 [research/harness-interfaces.md](research/harness-interfaces.md)。
 - Claude `--append-system-prompt-file`：帮助文本中出现过，尚未实测。

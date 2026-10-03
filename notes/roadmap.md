@@ -20,4 +20,6 @@
 | **M3 Binah 与会议** | Claude adapter；研究类任务按非代码证据验收；会议（无 Angela 时由用户主持） |
 | **M4 Angela** | 对话、向下转发原话、向上附件与暂缓、共识面板、`ask_user`、由状态触发的通知；评估统一 role 模型 |
 
+M1 开工前，先在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 定下数据地基：业务对象、命令入口与对话记录模型。
+
 M4 之后考虑用 Lobotomy 开发它自己。
