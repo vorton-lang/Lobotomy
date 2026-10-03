@@ -2,7 +2,7 @@
 
 > Status: 设计决定 v0.3（2026-10-03）
 > v0.1 的 git worktree + rebase + 快进同步方案已由 [#5](https://github.com/vorton-lang/Lobotomy/issues/5) 的已确认评论与 [#6](https://github.com/vorton-lang/Lobotomy/issues/6) 的推荐实现取代：SQLite 是业务事实的唯一权威，jj 承载不可变成果，工作目录只是执行现场。
-> v0.3 按 [#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)修订：中断后的范围（1.7）、turn 身份（1.3 第 8 条）、`done` 与采集的顺序（4.1）、验收与发布的原子边界（4.2）、后端与 harness 的生命周期绑定（1.8）。其中 1.7 的继续调用方式与 1.8 仍是 #7 的建议，其余已在 [data-model.md](data-model.md) 的讨论中确认。
+> v0.3 按 [#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)修订：中断后的范围（1.7）、turn 身份（1.3 第 8 条）、`done` 与采集的顺序（4.1）、验收与发布的原子边界（4.2）、后端与 harness 的生命周期绑定（1.8）。其中 1.8 仍是 #7 的建议，其余已在 [data-model.md](data-model.md) 的讨论中确认。
 > 实测环境：Windows 11，Claude Code 2.1.283，Codex CLI 0.159.2（随 Codex desktop app 分发）。
 
 ## 0. 原则
@@ -111,7 +111,7 @@ Lobotomy 不恢复被中断的执行现场。
 - 运行时提供两个入口：经 harness 原生 resume 启动新 turn，或新建 native session。
 - 流式输出中尚未完成的部分（partial）只保存在后端内存中。后端崩溃时，partial 丢失（[frontend.md](frontend.md) §3 第 2 条）。
 
-用户主动"继续"时，建议这样调用（#7 建议）：
+用户主动"继续"时，运行时这样调用（[data-model.md](data-model.md) §9.2）：
 
 1. 运行时经原生 resume 启动新 turn。
 2. 本轮输入告知 harness：上一个 turn 已中断，请先检查当前 cwd。
@@ -189,11 +189,23 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
 - 已有 pin 时，恢复与重试始终使用同一份成果；没有 pin 时保持 pending，确认写者停止后再决定是否采集。
 - **`done` 可能早于 CLI 退出。** 收到 `done` 后，运行时先持久保存采集意图，并保持现有占用。CLI 退出后，运行时再采集并固定成果。turn 结束、任务完成、参与者释放是三个不同的状态变化，不能互相代替。
 - 迟到或过期的成果保留来源，但不能推进当前状态。
-- **采集范围由运行时声明**，不只依赖 harness 可修改的 ignore 文件（`force_tracking_matcher`）。特殊文件、嵌套仓库等 fail closed：报告未覆盖的内容并保留现场（[#3](https://github.com/vorton-lang/Lobotomy/issues/3)）。
+- **采集时机**：每个 turn 结束、CLI 退出后，运行时采集一次。报告 `done` 的 turn，其采集就是候选成果；被中断的 turn，其采集就是中断现场（[data-model.md](data-model.md) §4.1）。
+- **成果是工作区快照**：采集只看采集时工作区中的文件，以槽位的基线为父提交生成一个提交。agent 在槽位中的提交、分支切换、HEAD 移动都不影响成果，成果的 diff 始终是工作区对比基线。
+- **采集范围由运行时声明**，不只依赖 harness 可修改的 ignore 文件（[#3](https://github.com/vorton-lang/Lobotomy/issues/3)）：
+  - 运行时读取采集时工作区中的 ignore 规则，agent 新增的规则立即生效。
+  - 基线中已跟踪的文件始终采集，即使后来被 ignore 规则匹配。预期这是 jj 的默认行为，实现时确认。
+  - 项目配置可以声明强制采集的路径（`force_tracking_matcher`），以及始终排除的路径（例如 `target/`、`node_modules/`）。排除的路径在重新物化时按缓存保留。
+  - `.gitignore` 的修改本身属于成果，验收时在 diff 中可见。
+- **体积护栏**：一次采集中新增文件的总大小或数量超过阈值时，运行时在 pin 之前停止，不写入 jj。
+  - `done` 的采集：运行时把文件清单作为模板消息发回执行者。执行者补 ignore 规则或删除文件后，重新报告 `done`。用户也可以确认放行。
+  - 其他 turn 的采集：记为"本次跳过"并在 GUI 中显示，下一次采集再试。
+  - 阈值在 M1 中用真实项目测量典型新增量后确定。
+- 特殊文件、嵌套仓库等 fail closed：报告未覆盖的内容并保留现场（#3）。
 - **保留现场不是处理完毕。** 任务在 GUI 中显示为阻塞，并列出未覆盖的内容。以下两件事之一发生后，槽位才能复用：
   1. 原因消除后，运行时重新采集成功；
   2. 用户明确确认丢弃未覆盖的内容。
-- 每轮采集取代了 v0.1 的 `git stash create` 快照，"撤销这一轮"基于采集记录实现。
+- 每轮采集取代了 v0.1 的 `git stash create` 快照。
+- **"撤销这一轮"推迟到 M1 之后。** 它把槽位改写为上一个 turn 的采集，属于第 4 种重新物化（§3）。加入时作为用户命令，前提是 role 没有未结束的 turn，且当前现场已经采集。
 
 ### 4.2 集成：只发布已验收的成果
 

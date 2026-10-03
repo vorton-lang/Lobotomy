@@ -104,7 +104,7 @@ completed 只表示 turn 正常结束，不表示任务完成。任务完成取�
 
 - 每次进入执行阶段，运行时开一个新的 attempt。进入执行的情况有四种：任务开始、验证失败、退回、重开。
 - attempt 内每次运行 CLI 是一个 turn。同一个 attempt 内接续时，运行时只新建 turn，不新建 attempt。例如：执行者提问后用户回答，turn 被中断后用户选择继续，更换 native session 后的第一个 turn。
-- 执行者报告 `done` 或任务被放弃时，attempt 结束。之后的验证与验收针对这个 attempt 产出的候选成果。
+- 执行者的 `done` 被采集为候选成果时，或任务被放弃时，attempt 结束。之后的验证与验收针对这个 attempt 产出的候选成果。`done` 的采集被体积护栏挡下时，attempt 继续（harness-adapter.md §4.1）。
 
 turn 是执行单位：一个进程、一个 MCP token，对账按 turn 进行。attempt 是业务单位：一次执行交出一份候选成果，证据与验收针对它。
 
@@ -161,7 +161,7 @@ turn 是执行单位：一个进程、一个 MCP token，对账按 turn 进行�
 |---|---|---|---|
 | 启动 CLI | turn 记录（已登记） | pid；turn 结束事件 | 按 §3.3 对账。运行时不自动重启 CLI |
 | 物化槽位或验证现场 | 物化记录：现场、generation、目标提交 | 核对通过后记为"就绪" | 运行时核对目录是否等于目标。一致时记为就绪；不一致时隔离旧目录，以新 generation 重做（§6） |
-| 采集与 pin | 采集意图（harness-adapter.md §4.1） | pin 的 commit_id | 按 #6 §2 的发布协议处理 |
+| 采集与 pin | 每个 turn 结束时的采集意图；报告 `done` 的 turn 标为候选成果（harness-adapter.md §4.1） | pin 的 commit_id | 按 #6 §2 的发布协议处理 |
 | 运行检查 | 检查记录：成果、基线、检查配置 | 检查结果 | 重跑 |
 | 物化预览 | 验收事务中的 outbox 记录 | 预览已到达的集成版本 | 比较主仓库与目标版本后重做。只物化最新的集成版本，跳过中间版本 |
 | 系统通知 | 通知意图 | 显示确认 | 不补发系统通知，GUI 内照常显示。宁可漏发一次，也不重复 |
@@ -315,10 +315,11 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | turn | turn_id | role、native session、task 与 attempt（可空）、现场 generation、MCP token、状态与结果、失败原因、pid 与进程启动时间、原始输出文件 | 每个 native session 最多一个未结束的 turn；token 唯一 |
 | message | message_id | 目标 role、来源、正文、到达顺序、状态、绑定的 turn | 每个 role 内按到达顺序排列 |
 | workspace | workspace_id | 种类（槽位、验证现场、审查现场、隔离）、路径、generation、目标提交、状态 | 每个路径同时最多一个就绪的 generation |
-| capture | capture_id | 种类（候选成果、中断现场）、turn、attempt、基线、采集范围、状态（意图、已 pin、未覆盖）、commit_id、未覆盖清单 | 每个 attempt 最多一个候选成果的采集意图 |
+| capture | capture_id | 种类（turn 结束采集、候选成果、中断现场）、turn、attempt、基线、采集范围、状态（意图、已 pin、未覆盖、被体积护栏挡下）、commit_id、未覆盖或超限的文件清单 | 每个 turn 最多一次采集 |
+| project_config | (project, version) | 检查命令（待定）、强制采集路径、排除路径、体积护栏阈值 | 只追加；检查结果引用所用的版本 |
 | verification | verification_id | 候选成果、集成版本头、rebase 后的提交、是否有冲突 | — |
 | check_run | check_id | verification、检查配置版本、结果、输出引用 | — |
-| decision | decision_id | 种类（验收、退回、放弃、重开、丢弃未覆盖内容）、操作者、依据（候选成果、完成条件版本、预期集成版本头）、理由 | 只追加 |
+| decision | decision_id | 种类（验收、退回、放弃、重开、丢弃未覆盖内容、放行新增文件）、操作者、依据（候选成果、完成条件版本、预期集成版本头）、理由 | 只追加 |
 | integration | 单行 | 当前集成版本头、revision；发布记录 | 发布使用 CAS |
 | outbox | outbox_id | 种类、载荷、状态、回执 | 幂等键唯一 |
 | notification_intent | 状态键 | 内容引用、是否已显示 | 每个状态键一条 |
@@ -352,6 +353,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | 新建 native session | role 没有未结束的 turn | native session 记录 | — |
 | 终止残留进程 | turn 为 unknown 且进程仍在运行 | 终止意图 | 终止进程，之后按 §3.3 对账 |
 | 丢弃未覆盖内容 | 采集状态为"未覆盖" | 决定；采集记为完成 | 之后槽位可以复用 |
+| 放行新增文件 | 采集被体积护栏挡下 | 决定 | 按原清单继续采集与 pin |
 | 额度重试 | 额度域受阻 | 检查意图；取消已计划的自动检查（§8.4） | 立即进行一次检查调用 |
 
 **role（经 MCP，按 turn 的 token 识别）**
@@ -360,7 +362,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 |---|---|---|---|---|
 | `org_report(progress)` | turn 未结束 | 命令记录 | — | — |
 | `org_report(blocked)` | turn 未结束；任务在执行阶段 | 阻塞原因 | 同一原因重复报告不再写入 | 卡在等用户时进入"等你决定" |
-| `org_report(done)` | turn 未结束；任务在执行阶段 | 采集意图；保持占用 | 同一 attempt 已有采集意图时不再写入 | CLI 退出后采集 |
+| `org_report(done)` | turn 未结束；任务在执行阶段 | 把本 turn 的采集标为候选成果；保持占用 | 同一 turn 重复报告不再写入 | CLI 退出后采集 |
 
 **运行时**
 
@@ -370,7 +372,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | 登记 turn | 有排队消息或待开始的执行；native session 没有未结束的 turn；额度域未受阻；未暂停；发给执行者的消息只在执行阶段投递（§4.2） | turn、token、绑定的消息 | turn_id | 启动 CLI |
 | 记录 turn 进展 | — | 状态、pid、native session ID、结果；额度失败时额度域受阻 | (turn_id, 状态) | 系统故障通知意图 |
 | 对账 | turn 为 unknown | turn 结果、释放运行权 | turn_id | 可能接着采集 |
-| 采集 | 有采集意图；CLI 已退出 | capture 状态、pin；任务进入验证 | capture_id | jj 采集与 pin（#6 §2） |
+| 采集 | turn 已结束；CLI 已退出 | capture 状态、pin。候选成果 pin 成功时任务进入验证；被体积护栏挡下时，候选成果的采集写入发给执行者的消息 | capture_id | jj 采集与 pin（#6 §2） |
 | 验证 | 有候选成果 | verification、check_run；通过时进入验收；不通过时开新 attempt 并写入消息 | (候选成果, 集成版本头, 检查配置) | 物化验证现场、运行检查 |
 | 物化现场 | 旧内容已采集 | generation、就绪状态 | (workspace, generation) | 写目录；隔离并删除隔离目录 |
 | 物化预览 | 主仓库工作区等于上次物化的版本 | 回执：预览到达的版本 | 目标集成版本 | 写主仓库 |
