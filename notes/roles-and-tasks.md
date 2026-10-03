@@ -3,7 +3,7 @@
 > Status: 设计决定 v0.3（2026-10-03）
 > 前置：[harness-adapter.md](harness-adapter.md)、[manager-actions.md](manager-actions.md)
 > v0.2 按 [#5](https://github.com/vorton-lang/Lobotomy/issues/5) 已确认的"持久工单 + 受控状态机"方向修订：执行轮（attempt）、完成条件版本化、证据绑定具体成果。
-> v0.3 按 [#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)修订：attempt 与 turn 的关系、`done` 与采集的顺序、验收的原子边界。这三项在 #7 中都是建议。
+> v0.3 按 [#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)修订：attempt 与 turn 的关系（已确认，见 [data-model.md](data-model.md) §4）、`done` 与采集的顺序、验收的原子边界（后两项仍是 #7 建议）。
 
 ## 1. 角色
 
@@ -49,8 +49,9 @@ Lobotomy 离开 Angela 应当仍然可用：会非常难用，但控制流能完
 - 层级只有两层：目标（ledger 中的 `goal`）→ 任务。拆分粒度由 Manager 判断，标准是完成条件可验证、工作量以小时计而非以天计。
 - 每个 role 同一时间最多一个进行中的任务，其余排队。
 - **任务 ID 稳定**，跨 turn、会话更换和下线保持不变。
-- **执行轮（attempt）**：每次进入执行就开一个 attempt。一个 attempt 可以包含多个 turn；同一 attempt 内正常接续时，运行时只新建 turn，不新建 attempt（#7 建议）。重开任务建立新 attempt，并保留已关闭的历史。旧 attempt 迟到的 `done` 不能完成新 attempt。
-- **完成条件版本化**：条件被修改后，旧证据只对旧版本有效。代码任务与研究任务采用各自相应的证据；没有代码不等于自动免审。
+- **执行轮（attempt）**：每次进入执行就开一个 attempt，包括任务开始、验证失败、退回、重开。一个 attempt 可以包含多个 turn；同一 attempt 内接续时，运行时只新建 turn，不新建 attempt。重开任务建立新 attempt，并保留已关闭的历史。旧 attempt 迟到的 `done` 不能完成新 attempt。见 [data-model.md](data-model.md) §4.1。
+- **完成条件版本化**：条件被修改后，旧证据只对旧版本有效。代码任务与研究任务采用各自相应的证据；没有代码不等于自动免审。修改的处理与证据的作废条件见 data-model.md §4.4、§4.5。
+- **离开执行阶段后，发给执行者的消息排队**，任务回到执行或关闭时再投递（data-model.md §4.2）。
 
 ### 2.2 生命周期
 

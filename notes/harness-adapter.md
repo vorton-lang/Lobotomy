@@ -61,7 +61,7 @@ Codex（消息经 stdin，位置参数为 -）
    - CLI 未退出或执行状态不明时，该 turn 保持"待对账"。运行时保留占用，不重放，也不为同一 native session 或执行现场启动替代执行（[#2](https://github.com/vorton-lang/Lobotomy/issues/2)）。
    - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"只核对 CLI 是否已经退出，见 [data-model.md](data-model.md) §3.3。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
-8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。turn_id 与按 turn 发放的 MCP token 已确认（[data-model.md](data-model.md) §3）。"同一 attempt 内正常接续时，运行时只新建 turn，不新建 attempt"仍是 #7 建议，待 M1 任务流讨论（data-model.md §4）。
+8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。同一 attempt 内接续时，运行时只新建 turn，不新建 attempt（[data-model.md](data-model.md) §3.1、§4.1）。
 
 ### 1.4 实测结果（Windows）
 
@@ -154,9 +154,10 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
 - **位置在仓库外**，位于 Lobotomy 的数据目录中，避免被 ripgrep、IDE 索引和测试运行器扫描。
 - **槽位固定、复用**，磁盘占用有结构性上限。被忽略的依赖与构建缓存在重新物化时保留。
 - **物化**：每个槽位是一份独立的 git clone，对象经 alternates 与私有存储共享，HEAD 设为本轮基线，使 agent 的 `git status` / `git diff` / `git log` 正好反映本轮工作。不用 linked worktree：它与主库共享 ref，agent 的 `git branch -D`、`git gc` 等操作可能删掉成果的保留 ref。agent 在 clone 中的提交只是草稿，不是同步单位。
-- **重新物化**只在两种情况下发生：
+- **重新物化**只在三种情况下发生：
   1. 槽位要交给另一份工作时。前提是上一份工作的现场已经采集完成。
   2. 运行时自己的 checkout 中断，或就绪状态不明时。运行时隔离旧现场，以新 generation 重新物化（#6 §2）。
+  3. 任务回到执行、候选成果在验证时已被 rebase 到新的集成版本时。槽位重新物化为 rebase 后的候选成果（[data-model.md](data-model.md) §4.3）。
 - **采集不触发重新物化。** "采集完成"只是复用槽位的前提。被中断 turn 的现场被采集后，目录保持原样，直到用户做出选择（用户确认，2026-10-03）：
 
   | 用户选择 | 槽位目录 |
@@ -228,7 +229,6 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。
 - 每个 turn 更换 MCP URL 后，跨进程 prompt cache 是否仍命中。预期命中，尚未实测。
 - 平台启动适配（1.8）的实现与验证：Linux 的设置竞态与启动线程，Windows 的进程创建与加入 Job 的顺序。
-- 退回或冲突交还时，执行者的槽位是否重新物化，以哪个提交为基线（例如 rebase 到新集成版本后的候选成果）。
 - Linux 上重跑实测：[spikes/harness-cli/spike.mjs](../spikes/harness-cli/spike.mjs) 为 Node 脚本，可直接移植。
 - 接入方式与条款的调研依据见 [research/harness-interfaces.md](research/harness-interfaces.md)。
 - Claude `--append-system-prompt-file`：帮助文本中出现过，尚未实测。
