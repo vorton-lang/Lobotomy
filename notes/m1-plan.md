@@ -1,0 +1,42 @@
+# M1 实现计划
+
+> Status: 计划 v0.1（2026-10-04）
+> 依据：[roadmap.md](roadmap.md) M1、[data-model.md](data-model.md)、[harness-adapter.md](harness-adapter.md)、[frontend.md](frontend.md)。
+
+M1 的链路：用户建任务 → Malkuth 执行 → 采集并固定成果 → 验证 → 用户验收 → 发布 → 物化预览 → GUI 显示。
+
+## 1. 代码布局
+
+```text
+backend/                 Rust workspace（独立于 spikes/ 下的探针）
+  crates/core            业务对象、SQLite schema 与迁移、命令层（事务、幂等、事件序号）
+  crates/store           jj 存储的封装：接入、物化、采集、pin、rebase、预览（jj 类型不出这个 crate）
+  crates/harness         Codex adapter：启动、事件解析、中断；平台层（Windows Job、控制台、句柄白名单）
+  crates/lobotomyd       后端进程：项目实例、调度器、outbox 执行器、GUI WebSocket、MCP HTTP
+frontend/                Electron + React + TypeScript
+```
+
+## 2. 技术选择
+
+| 用途 | 选择 | 理由 |
+|---|---|---|
+| SQLite 访问 | rusqlite（bundled） | 命令层持有短事务并向下传递（#6 §1），同步的 `Transaction` 正好合适。单写者、本地进程，不需要 SQLx 的异步连接池和编译期查库 |
+| 写入方式 | 每个项目一个写连接，WAL 模式；命令在 `spawn_blocking` 中执行 | 单写者避免事务交错；读可以另开连接 |
+| jj | jj-lib，版本锁定为 `=0.45.1` | API 不稳定，锁定版本并封装在 `store` 中（harness-adapter.md §6） |
+| 异步与 HTTP | tokio、axum | GUI 的 WebSocket 与 MCP 的 HTTP 由同一个服务提供（frontend.md §1） |
+| MCP | 自写最小的 streamable HTTP JSON-RPC | spike 中已验证两家 CLI 都能用；按 turn 的 token 从 URL 取得 |
+| ID | 类型前缀加 ULID，例如 `task_01J…` | data-model.md §7.7 |
+| Windows 进程 | windows-sys | Job Object、`CREATE_NO_WINDOW`、`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`、Ctrl+C 辅助进程（harness-adapter.md §1.8） |
+| 前端构建 | Vite、npm | 本机没有 pnpm；渲染进程先能在浏览器中开发 |
+
+项目范围内的状态都挂在项目实例上，不使用全局单例；额度域等跨项目状态放在外层（data-model.md §10）。
+
+## 3. 增量
+
+每个增量结束时都能单独验证，并提交推送。
+
+1. **数据层与命令框架**：workspace、后端进程骨架、项目实例；M1 用到的表与迁移；命令框架（command_record、幂等键、事务、全局事件序号）；任务相关命令（建任务、修改完成条件、发消息、暂停与恢复、调整队列、放弃、重开、开始 attempt）。用单元测试覆盖唯一约束、幂等与前置条件。
+2. **Codex adapter 与调度**：登记 turn、启动 CLI（Windows 平台层）、事件解析为 item、turn 状态与对账；MCP 服务与 `org_report`；调度器（开始 attempt、绑定消息、登记 turn）；额度域。
+3. **成果与发布**：项目接入、槽位物化、每个 turn 的采集（范围规则、体积护栏）、pin；验证（rebase、验证现场、检查命令）；验收事务；预览物化。
+4. **GUI**：WebSocket 协议（快照加序号、增量、命令）；React 界面（建任务、Malkuth 的 Thread、候选成果的 diff、验收与退回、turn 与额度状态）；Electron 外壳。
+5. **端到端与性能基线**：用一个真实的小仓库走通 M1 链路；性能基线框架（frontend.md §5）。

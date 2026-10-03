@@ -293,7 +293,7 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 
 - jj-lib 的版本锁定与封装边界：jj-lib 的库 API 尚未稳定，需锁定版本，并封装在一个模块后面，不让 jj 的类型扩散到业务代码。
 - 原生中断与中断后的 resume：Codex 在 Windows 上已实测（§1.4）。Claude、以及 Linux 上的两家仍待实测。结果也决定 ideas.md 中的"中断并发送"能否加入。
-- 全局指令文件：role 是否应继承用户个人的 `~/.codex/AGENTS.md`（Claude 对应 `~/.claude/CLAUDE.md`）。实测 `--ignore-user-config` 不能排除它；已知的办法只有为 role 使用单独的 `CODEX_HOME`。待用户决定。单独的 home 需要在其中另行执行官方的 `codex login`，Lobotomy 不复制凭据；同一账户在两个 home 各登录一次是否互相影响，待实测。M4 之后的接管只能经 CLI 的 TUI（`codex resume`），桌面应用能否改读另一个 home 待实测。
+- 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，M4 之后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。Claude 的 `~/.claude/CLAUDE.md` 在 M3 时确认。
 - Codex 0.159.2 的 `codex queue`（向已有会话排队一条消息）能否在 `exec` 的 turn 运行中投递消息，待查。若可以，它可能替代 ideas.md 中的"中断并发送"。`codex delete --force <id>` 可以按 ID 删除会话，清理探针或临时会话时使用。
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。
 - `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。下次自然发生时记录。Codex 被拒的形式暂不处理。
