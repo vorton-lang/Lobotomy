@@ -59,7 +59,7 @@ Codex（消息经 stdin，位置参数为 -）
    - 收到立即中断请求后，运行时调用 harness 的原生中断路径，并等待 CLI 退出。
    - 子进程由 harness 自行清理。这是设计假设，未经验证；Lobotomy 不自建进程树管理。
    - CLI 未退出或执行状态不明时，该 turn 保持"待对账"。运行时保留占用，不重放，也不为同一 native session 或执行现场启动替代执行（[#2](https://github.com/vorton-lang/Lobotomy/issues/2)）。
-   - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"具体核对什么，待 #7 的 turn 契约确定（见 §6）。
+   - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"只核对 CLI 是否已经退出，见 [data-model.md](data-model.md) §3.3。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
 8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。turn_id 与按 turn 发放的 MCP token 已确认（[data-model.md](data-model.md) §3）。"同一 attempt 内正常接续时，运行时只新建 turn，不新建 attempt"仍是 #7 建议，待 M1 任务流讨论（data-model.md §4）。
 
@@ -225,7 +225,7 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 
 - jj-lib 的版本锁定与封装边界：jj-lib 的库 API 尚未稳定，需锁定版本，并封装在一个模块后面，不让 jj 的类型扩散到业务代码。
 - 跨平台的原生中断：per-turn 进程在 Windows 与 Linux 上如何一致地触发 harness 原生中断，被中断 turn 在两家会话记录中的状态。
-- "待对账"的具体内容：运行时核对哪些事实，何时结束待对账，结束后 turn 记为什么状态。待 #7 的 turn 契约确定。
+- 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。
 - 每个 turn 更换 MCP URL 后，跨进程 prompt cache 是否仍命中。预期命中，尚未实测。
 - 平台启动适配（1.8）的实现与验证：Linux 的设置竞态与启动线程，Windows 的进程创建与加入 Job 的顺序。
 - 退回或冲突交还时，执行者的槽位是否重新物化，以哪个提交为基线（例如 rebase 到新集成版本后的候选成果）。

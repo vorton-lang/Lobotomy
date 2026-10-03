@@ -36,7 +36,9 @@ v1 中 role 与槽位一一固定，因此任务层不会出现"取得了 role�
 - 每个 role 最多被一个任务占用。
 - 每个 native session 最多一个未结束的 turn。已登记、运行中、unknown 都算未结束。
 
-## 3. turn
+## 3. turn 与消息投递
+
+### 3.1 turn
 
 - 一个 turn 就是一次 CLI 进程运行（harness-adapter.md §1.1）。
 - 运行时在启动 CLI 前登记 turn，生成 turn_id（harness-adapter.md §1.3 第 8 条）。
@@ -47,13 +49,60 @@ v1 中 role 与槽位一一固定，因此任务层不会出现"取得了 role�
   - turn 结束后，如果旧进程仍用该 token 调用，后端把调用记为迟到。迟到的调用不能推进状态。
   - URL 不出现在 prompt 中，因此预期不影响 prompt cache。这一点尚未实测：现有的跨进程缓存实测使用的是固定 URL。
 
+### 3.2 turn 的状态
+
+| 状态 | 进入条件 |
+|---|---|
+| 已登记 | 运行时在同一个事务中写入 turn 记录、MCP token 和绑定的输入消息。CLI 尚未启动 |
+| 运行中 | CLI 已启动。运行时记下 pid 与进程启动时间，用于在 pid 被复用时区分进程 |
+| 已结束 · completed | 运行时收到 harness 的 turn 结束事件（Claude `result`，Codex `turn.completed`），且 CLI 已退出 |
+| 已结束 · failed | harness 报告错误，例如额度被拒、登录失效、参数错误。按系统故障通知（manager-actions.md §6） |
+| 已结束 · interrupted | CLI 已退出，但没有 turn 结束事件。原因包括停止或中断、CLI 崩溃，以及对账结果 |
+| unknown | 后端重启时，处于"已登记"或"运行中"的 turn 都改为 unknown |
+
+completed 只表示 turn 正常结束，不表示任务完成。任务完成取决于 `done` 与验收（harness-adapter.md §4.1）。
+
+### 3.3 对账
+
+"待对账"只核对一件事：CLI 进程是否已经退出。
+
+只核对这一件事的理由：
+
+- `done` 等业务命令在发生时已写入 SQLite；对话 item 在完成时已落库。
+- Lobotomy 不恢复执行现场（harness-adapter.md §1.7），因此不需要从 harness 的会话文件重建业务事实。
+
+核对方法：
+
+1. 运行时按记下的 pid 与进程启动时间检查进程。
+2. 如果后端在记下 pid 之前已崩溃，运行时按命令行中的 turn 标识查找进程。Codex 的 MCP URL 在命令行参数中；Claude 的 MCP 配置文件按 turn_id 命名。
+
+核对结果：
+
+- **CLI 已退出**：turn 记为 interrupted，运行时释放 native session 的运行权。
+  - 已有 `done` 的采集意图时，运行时照常采集（harness-adapter.md §4.1）。
+  - 没有采集意图时，槽位保持原样，等用户选择继续、新建 native session 或放弃（harness-adapter.md §3）。
+- **CLI 仍在运行**（例如 Linux 上 harness 没有响应 SIGTERM）：turn 保持 unknown，运行时定期检查进程是否退出。GUI 显示"上一个 turn 的进程仍在运行"，并提供"终止"。运行时不自动终止进程。
+
+### 3.4 消息投递
+
+| 状态 | 判断依据 |
+|---|---|
+| 排队 | 消息在 role 的收件箱中，尚未绑定到 turn |
+| 已绑定 | 与 turn 登记在同一个事务中写入 |
+| 已投递 | CLI 已启动，stdin 写入并关闭成功 |
+
+- 消息投递后，跟随所在 turn 的结果：completed、failed、interrupted 或 unknown。
+- "已处理"不作为机器状态。模型是否按消息行事属于语义判断；机器能确认的只有"投递它的 turn 是否正常结束"。
+- 输入是否已进入 harness 自己的会话记录，需要实测（harness-adapter.md §6）。
+- **所在 turn 未正常结束时，消息不自动重投。** resume 接续的是原来的 native session，其记录中可能已有这条消息；自动重投可能造成重复。GUI 把这些消息标为"所在 turn 未正常结束"，由用户决定继续还是重发。
+- 因额度失败的 turn 如何处理，见 §4 第 4 项。
+
 ## 4. 未定
 
 按讨论顺序：
 
-1. turn 的生命周期与对账：turn 的状态，"待对账"核对什么，消息的"已投递 / 已处理"如何区分。
-2. M1 的任务流：完成条件被修改，退回后的 attempt 与槽位基线，重开时继承什么，证据何时重新验证。
-3. 副作用与回执：启动 CLI、物化槽位、物化预览、通知。
-4. 对话记录模型：Thread 的单位、存储、序号、引用 ID。
-5. 额度在 M1 的最小行为（[#4](https://github.com/vorton-lang/Lobotomy/issues/4)）。
-6. M1 的对象集合与命令清单：以上各项定下后汇总。
+1. M1 的任务流：完成条件被修改，退回后的 attempt 与槽位基线，重开时继承什么，证据何时重新验证。
+2. 副作用与回执：启动 CLI、物化槽位、物化预览、通知。
+3. 对话记录模型：Thread 的单位、存储、序号、引用 ID。
+4. 额度在 M1 的最小行为（[#4](https://github.com/vorton-lang/Lobotomy/issues/4)）。
+5. M1 的对象集合与命令清单：以上各项定下后汇总。
