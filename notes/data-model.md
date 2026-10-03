@@ -1,7 +1,7 @@
 # 数据模型：业务对象、命令与对话记录
 
 > Status: 设计中（2026-10-03）
-> 按 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 逐项讨论；已确认的内容写入本文，未讨论的列在 §8。
+> 按 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 逐项讨论；已确认的内容写入本文，未讨论的列在 §9。
 > 依据：[#6](https://github.com/vorton-lang/Lobotomy/issues/6) §1（SQLite 是业务事实的唯一权威）、#7 及其[讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)、[harness-adapter.md](harness-adapter.md)、[roles-and-tasks.md](roles-and-tasks.md)、[frontend.md](frontend.md) §3。
 
 ## 1. 命令
@@ -15,7 +15,7 @@
   3. 同一事务内写入的内容；
   4. 幂等键；
   5. 经 outbox 执行的副作用。
-- 命令清单待定，见 §8。
+- 命令清单待定，见 §9。
 
 ## 2. 占用
 
@@ -94,9 +94,9 @@ completed 只表示 turn 正常结束，不表示任务完成。任务完成取�
 - 登记 turn 时，运行时按到达顺序绑定收件箱中全部排队的消息。
 - 消息投递后，跟随所在 turn 的结果：completed、failed、interrupted 或 unknown。
 - "已处理"不作为机器状态。模型是否按消息行事属于语义判断；机器能确认的只有"投递它的 turn 是否正常结束"。
-- 输入是否已进入 harness 自己的会话记录，需要实测（harness-adapter.md §6）。
+- 输入是否已进入 harness 自己的会话记录：Claude 额度被拒时，输入在报错前已写入（§8.3）；其他中断时刻仍需实测（harness-adapter.md §6）。
 - **所在 turn 未正常结束时，消息不自动重投。** resume 接续的是原来的 native session，其记录中可能已有这条消息；自动重投可能造成重复。GUI 把这些消息标为"所在 turn 未正常结束"，由用户决定继续还是重发。
-- 因额度失败的 turn 如何处理，见 §8 第 1 项。
+- 因额度失败的 turn 如何处理，见 §8.5。
 
 ## 4. 任务流（M1）
 
@@ -239,9 +239,63 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 - 引用不指向事件，也不指向 partial。
 - ID 全局唯一并带类型前缀。运行时校验 ID 是否存在、类型是否允许（manager-actions.md §2.1）。
 
-## 8. 未定
+## 8. 额度（M1 的最小行为）
 
-按讨论顺序：
+依据 [#4](https://github.com/vorton-lang/Lobotomy/issues/4)。
 
-1. 额度在 M1 的最小行为（[#4](https://github.com/vorton-lang/Lobotomy/issues/4)）。
-2. M1 的对象集合与命令清单：以上各项定下后汇总。
+### 8.1 额度域
+
+- 额度域按"harness × 登录账户"划分。v1 中每个 harness 只使用用户的一个登录，因此只有两个域：Claude 域（Angela、Binah）和 Codex 域（Malkuth、Yesod）。
+- v1 不支持多账户。
+
+### 8.2 观测
+
+- Claude：每个 turn 的 stdout 中有 `rate_limit_event`，包含 5 小时与 7 天窗口的利用率和重置时间（harness-adapter.md §1.3 第 5 条）。
+- Codex：`--json` 输出中没有额度信息。运行时尽力从 rollout 文件的 `rate_limits` 读取已用百分比、窗口长度和重置时间；读不到时不显示。
+- 每次观测都带时间，GUI 显示观测的新旧。
+- 观测只用于显示。只有真正被拒绝才阻塞调度，过期的观测不造成阻塞。v1 不按利用率提前限流。
+
+### 8.3 被拒绝时
+
+- 被拒的 turn 记为 failed（额度）。该额度域进入"受阻"：域内所有 role 都不再启动新 turn，运行时不按 role 各自重试。
+- 已在运行的 turn 不打断，由它们自行结束。
+- 另一个额度域照常工作。需要受阻域判断的环节停下等待。
+- 同一状态只通知一次，按系统故障通知（manager-actions.md §6）。
+- 识别不出原因的失败记为普通 failed，不阻塞额度域。
+
+实测记录（Claude Code 2.1.283，交互式 CLI，2026-10-01，一次）。被拒时，会话文件中写入一条合成的 assistant 消息：
+
+- `isApiErrorMessage: true`、`error: "rate_limit"`、`apiErrorStatus: 429`；
+- `quotaLimits` 中有 `status: "rejected"`、`rateLimitType: "five_hour"` 和 `resetsAt`（Unix 秒）；
+- 显示文本为 "You've hit your session limit · resets 12:20am (Asia/Tokyo)"；
+- 用户的输入在报错之前已写入会话文件。
+
+`-p` 的 stream-json 模式下被拒的形式尚未确认，预期是 `status` 为 `rejected` 的 `rate_limit_event`，字段与上面的 `quotaLimits` 相同。Codex 被拒时的形式未知，暂不处理。
+
+### 8.4 恢复检查
+
+- 有重置时间时，运行时到点后检查一次。
+- 到点仍被拒，或没有重置时间时，运行时按退避间隔检查：从 15 分钟开始，每次翻倍，最长 2 小时。数值可配置。
+- 检查使用一次最小的独立调用，带不保存会话的参数（Claude `--no-session-persistence`，Codex `exec --ephemeral`）。检查不经过任何 role 的 native session，也不在用户的会话历史中留下记录。
+- 用户随时可以手动重试。
+
+### 8.5 恢复后
+
+- 上一个 turn 因额度失败的 role，运行时自动开始一个继续 turn。输入是一段说明（上一个 turn 因额度不足失败，请检查 cwd 后继续），其后是排队的消息。
+- 这与 §3.3 中被中断的 turn 不同：额度失败由 CLI 明确报告，状态清楚；用户也没有叫停这份工作。
+- 失败 turn 的输入不重发（§3.4）。8.3 的实测中，Claude 在报错前已把输入写入会话文件，resume 后模型可以看到它。
+- 用户暂停仍然有效：额度恢复不解除用户暂停（roles-and-tasks.md §2.2）。
+
+### 8.6 不自动换用
+
+运行时不自动更换模型、harness 或账户，也不绕过额度限制。换用方案由用户决定。
+
+### 8.7 GUI
+
+- 受影响的 role 在 Workboard 上显示额度状态，例如"额度不足（Claude）· 预计 14:00 重置 · 下次检查 13:30"。
+- 额度状态与"等你决定"分开显示。
+- 确定性的 GUI 控制照常可用（roles-and-tasks.md §1.4）。
+
+## 9. 未定
+
+- M1 的对象集合与命令清单：由以上各节汇总成草案。

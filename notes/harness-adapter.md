@@ -54,7 +54,7 @@ Codex（消息经 stdin，位置参数为 -）
 2. **每轮都传角色指令与 MCP 配置。** MCP 配置与 1.6 的能力裁剪参数都是启动参数，不保存在 session 中；每个 turn 是新进程，所以每个 turn 都要传。Claude 在压缩后按当轮进程参数重新生成并固定 system prompt；压缩后首轮若未传 `--append-system-prompt`，角色指令会从 system prompt 中永久消失，之后再传也被忽略，直到下一次压缩。模型仍能从压缩摘要中说出角色名，所以问题不显眼。Codex 不需要重传，传了也无害。system prompt 固定后重复传参不影响缓存。
 3. **消息走 stdin，长配置走文件。** 命令行长度有平台上限（Windows 约 32K 字符）。Codex 在 stdin 非 TTY 时会读取 stdin 并追加为 `<stdin>` 块，必须显式提供或关闭 stdin。Claude 的 `--mcp-config` 接收多个值，会把其后的位置参数（提示词）当作配置文件路径吞掉（实测踩到）。
 4. **压缩：** Claude 从 stdout 的 `system/compact_boundary` 读取（含 trigger、压缩前后 token 数）。Codex 的压缩设计上不影响工作，不做追踪；可尽力读 rollout 文件中的 `compacted` 记录，仅用于 GUI 显示。
-5. **用量：** Claude 每轮 `result.usage`，另有 `rate_limit_event`（5 小时 / 7 天额度利用率与重置时间），用于运行时的并发控制和 GUI 显示。Codex 的 `turn.completed.usage` 实测为线程累计值，需与上一轮做差。额度作用域与降级见 [#4](https://github.com/vorton-lang/Lobotomy/issues/4)。
+5. **用量：** Claude 每轮 `result.usage`，另有 `rate_limit_event`（5 小时 / 7 天额度利用率与重置时间），用于 GUI 显示和识别额度被拒；v1 不按利用率提前限流。Codex 的 `turn.completed.usage` 实测为线程累计值，需与上一轮做差；额度信息不在 `--json` 输出中，只在 rollout 文件的 `rate_limits` 中。额度域、被拒与恢复见 [data-model.md](data-model.md) §8。
 6. **停止与中断（#6 §3）：**
    - 收到正常停止请求后，运行时等待当前 turn 结束和 CLI 退出。运行时不启动下一个 turn。
    - 收到立即中断请求后，运行时调用 harness 的原生中断路径，并等待 CLI 退出。
@@ -239,7 +239,8 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 
 - jj-lib 的版本锁定与封装边界：jj-lib 的库 API 尚未稳定，需锁定版本，并封装在一个模块后面，不让 jj 的类型扩散到业务代码。
 - 跨平台的原生中断：per-turn 进程在 Windows 与 Linux 上如何一致地触发 harness 原生中断，被中断 turn 在两家会话记录中的状态，以及工具调用中途被中断后 resume 能否正常接续。结果也决定 ideas.md 中的"中断并发送"能否加入。
-- 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。
+- 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。
+- `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。下次自然发生时记录。Codex 被拒的形式暂不处理。
 - 每个 turn 更换 MCP URL 后，跨进程 prompt cache 是否仍命中。预期命中，尚未实测。
 - 平台启动适配（1.8）的实现与验证：Linux 的设置竞态与启动线程，Windows 的进程创建与加入 Job 的顺序。
 - Linux 上重跑实测：[spikes/harness-cli/spike.mjs](../spikes/harness-cli/spike.mjs) 为 Node 脚本，可直接移植。
