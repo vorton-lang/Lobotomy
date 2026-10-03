@@ -1,7 +1,7 @@
 # 数据模型：业务对象、命令与对话记录
 
 > Status: 设计决定 v0.1（2026-10-04）；§9 的汇总是草案
-> 按 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 逐项讨论；§1–§8 是已确认的决定，§9 是 M1 的对象与命令汇总，未定事项列在 §10。
+> 按 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 逐项讨论；§1–§8 是已确认的决定，§9 是 M1 的对象与命令汇总，§10 是项目边界，未定事项列在 §11。
 > 依据：[#6](https://github.com/vorton-lang/Lobotomy/issues/6) §1（SQLite 是业务事实的唯一权威）、#7 及其[讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)、[harness-adapter.md](harness-adapter.md)、[roles-and-tasks.md](roles-and-tasks.md)、[frontend.md](frontend.md) §3。
 
 ## 1. 命令
@@ -246,6 +246,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 ### 8.1 额度域
 
 - 额度域按"harness × 登录账户"划分。v1 中每个 harness 只使用用户的一个登录，因此只有两个域：Claude 域（Angela、Binah）和 Codex 域（Malkuth、Yesod）。
+- 额度域属于项目外层，以后多个项目共用同一账户时共享额度状态（§10）。
 - v1 不支持多账户。
 
 ### 8.2 观测
@@ -306,6 +307,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 
 | 对象 | 稳定身份 | 主要内容 | 唯一约束与版本 |
 |---|---|---|---|
+| project | project_id | 主仓库路径、分支名、数据目录、上次预览到达的集成版本 | v1 每个实例一个（§10） |
 | task | task_id | 标题、用户原话、执行者 role、阶段、用户暂停、阻塞原因、当前完成条件版本 | revision：每次状态变化加 1 |
 | criteria_version | (task_id, version) | 文本、修改者、时间 | 只追加 |
 | attempt | attempt_id | task、序号、代码起点、结束原因 | 每个 task 最多一个未关闭的 attempt |
@@ -316,7 +318,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | message | message_id | 目标 role、来源、正文、到达顺序、状态、绑定的 turn | 每个 role 内按到达顺序排列 |
 | workspace | workspace_id | 种类（槽位、验证现场、审查现场、隔离）、路径、generation、目标提交、状态 | 每个路径同时最多一个就绪的 generation |
 | capture | capture_id | 种类（turn 结束采集、候选成果、中断现场）、turn、attempt、基线、采集范围、状态（意图、已 pin、未覆盖、被体积护栏挡下）、commit_id、未覆盖或超限的文件清单 | 每个 turn 最多一次采集 |
-| project_config | (project, version) | 检查命令（待定）、强制采集路径、排除路径、体积护栏阈值 | 只追加；检查结果引用所用的版本 |
+| project_config | (project, version) | 检查命令（含超时）、强制采集路径、排除路径、体积护栏阈值 | 只追加；检查结果引用所用的版本 |
 | verification | verification_id | 候选成果、集成版本头、rebase 后的提交、是否有冲突 | — |
 | check_run | check_id | verification、检查配置版本、结果、输出引用 | — |
 | decision | decision_id | 种类（验收、退回、放弃、重开、丢弃未覆盖内容、放行新增文件）、操作者、依据（候选成果、完成条件版本、预期集成版本头）、理由 | 只追加 |
@@ -340,6 +342,8 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 
 | 命令 | 前置条件 | 同一事务写入 | 副作用 |
 |---|---|---|---|
+| 接入项目 | 主仓库工作区干净，且检出在分支上 | project、第一个集成版本、project_config v1 | 建立私有存储（harness-adapter.md §4.3） |
+| 修改项目配置 | 预期版本等于当前版本 | project_config 新版本 | — |
 | 建任务 | — | task、完成条件 v1；任务排队 | — |
 | 修改完成条件 | 任务未关闭；预期版本等于当前版本 | 新版本；任务在执行阶段时，写入发给执行者的消息（§4.4） | — |
 | 发消息 | — | message（排队） | — |
@@ -355,6 +359,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | 丢弃未覆盖内容 | 采集状态为"未覆盖" | 决定；采集记为完成 | 之后槽位可以复用 |
 | 放行新增文件 | 采集被体积护栏挡下 | 决定 | 按原清单继续采集与 pin |
 | 额度重试 | 额度域受阻 | 检查意图；取消已计划的自动检查（§8.4） | 立即进行一次检查调用 |
+| 重试预览 | 预览物化已停止 | 物化意图 | 物化预览（先检查主仓库是否与上次预览一致） |
 
 **role（经 MCP，按 turn 的 token 识别）**
 
@@ -386,8 +391,21 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 - **M4**：Manager 作为调用者，与用户使用同一组命令，由权限区分；ledger、`ask_user`、`flag_mismatch`、通知策略。
 - 预计扩展时不需要改动的部分：命令的五项格式、两层占用、turn 与消息投递、副作用与回执、对话记录与回收规则。
 
-## 10. 未定
+## 10. 项目边界
+
+- v1 中一个实例只管理一个项目。每个项目有独立的数据目录：SQLite、jj 存储、文件库、槽位与验证现场。
+- 以后会扩展为多项目（多仓库）管理。项目内的管理方式不变，外面加一层多项目隔离（用户确认，2026-10-04）。
+- **后端实现约束：不使用全局单例。** 项目范围内的状态都挂在项目实例上，通过参数传递，不放进全局单例或进程级静态变量。这些状态包括数据库连接、调度器、MCP 路由、运行中的 turn、项目配置。以后在同一个后端进程中开多个项目实例时，不需要重写。
+- **跨项目共享的状态放在项目外层**，v1 也一样：
+  - 额度域：按"harness × 账户"划分，多个项目共用同一账户时额度是共享的（§8）；
+  - CLI 二进制的探测与版本记录；
+  - 系统通知的投递；
+  - 后端的监听端口与 GUI 连接。
+- 多项目时，role 与 Manager 是每个项目一套还是跨项目共享，待定。
+
+## 11. 未定
 
 - 字段名、类型与索引在实现时确定。
+- 多项目时 role 与 Manager 的归属（§10）。
 - "中断并发送"（ideas.md）等原生中断的实测结果。
 - Codex 额度被拒的形式（§8.3）。

@@ -22,4 +22,8 @@
 
 M1 开工前，先在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 定下数据地基：业务对象、命令入口与对话记录模型。
 
-M4 之后考虑用 Lobotomy 开发它自己。
+M4 之后考虑：
+
+- 用 Lobotomy 开发它自己；
+- 在官方应用中接管与交还 role 的会话（[#1](https://github.com/vorton-lang/Lobotomy/issues/1)）；
+- 多项目管理：项目内的管理方式不变，外面加一层多项目隔离（[data-model.md](data-model.md) §10）。

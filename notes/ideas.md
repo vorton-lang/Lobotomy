@@ -4,12 +4,9 @@
 
 ## 提交 trailer 标注来源
 
-role 的提交自动追加 `Lobotomy-Task: <id>`、`Lobotomy-Role: <name>`，让用户在自己的 `git log` / IDE 中直接看到每个提交来自哪个任务和角色。
+已采用，形式改变：运行时在发布时自己写最终提交，trailer 直接写进提交信息（[harness-adapter.md](harness-adapter.md) §4.3）。原先设想的 `core.hooksPath` 方案及其代价（仓库自己的 hook 失效）不再需要。
 
-- 实现：只对 role 进程经 `GIT_CONFIG_*` 注入 `core.hooksPath`，由 `prepare-commit-msg` hook 读取 adapter 每轮设置的环境变量并追加 trailer。不改仓库配置，不消耗 token。
-- 代价：`core.hooksPath` 会使仓库自己的 hook（husky、pre-commit 等）失效，Lobotomy 的 hook 必须负责转调它们。
-- v1 不做。提交与任务的归属由成果记录直接得出，不按时间段推断（见 [roles-and-tasks.md](roles-and-tasks.md) §2.3）。
-- 来源：2026-10-01 任务模型讨论。
+- 来源：2026-10-01 任务模型讨论；2026-10-04 采用。
 
 ## 中断并发送
 
