@@ -64,7 +64,7 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
 
 ## 3. 后端与前端的协议
 
-1. **数据模型参照 Codex 的 Thread → Turn → Item。** 完成的 item 是权威状态，流式增量只用于实时显示。
+1. **数据模型参照 Codex 的 Thread → Turn → Item。** 完成的 item 是权威状态，流式增量只用于实时显示。Turn 就是业务上的 turn（一次 CLI 进程运行），使用同一个 turn_id（[data-model.md](data-model.md) §3）。
 2. **增量在 Rust 中合并，永不落库（#7）。**
    - 流式 partial 只保存在后端内存中。后端崩溃时，partial 丢失。运行时不为未完成的展示输出做 checkpoint；这一条取代 v0.1 的"定期检查点"。
    - 每个 item 在自身完成时写入 SQLite，不等整个 turn 结束。
@@ -118,6 +118,6 @@ CI 中固定运行合成场景（参照 OpenHands 的 `BENCH_MESSAGES` 与 Goose
 
 ## 6. 未决
 
-- Thread / Turn / Item 与 task / attempt / native session 的对应关系、序号方案和 SQLite schema，在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论。Thread 与会议的关系留到 M3。
+- Thread 的单位、序号方案和 SQLite schema，在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论，结果写入 [data-model.md](data-model.md)。Thread 与会议的关系留到 M3。
 - 节流间隔、缓冲上限、分页大小、头尾预览行数等参数，待基线测量后确定。
 - 布局细节待原型验证。

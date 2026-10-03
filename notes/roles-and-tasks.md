@@ -119,4 +119,4 @@ Yesod    审查：实现 Codex adapter               进行中
 - Worker 跨任务是否换会话。v1 沿用手动轮换（见 organization-runtime.md §5）；任务边界是天然的轮换点。
 - 通知策略见 [manager-actions.md](manager-actions.md) §6。
 - #5 中列出的每类对象的完整契约（研究任务的交付证据、完成条件修改后在途工作的处理、多个旧基线成果的整合责任等）尚未逐项回答。
-- M1 的业务对象、身份与唯一约束、命令清单（调用者与权限、前置条件、原子写入、幂等键、outbox）在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论。#7 建议按具体领域展开命令，不把全部操作压进 `admit / claim / finish` 三个 API。
+- M1 的业务对象、身份与唯一约束、命令清单在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论，结果写入 [data-model.md](data-model.md)。已确认：命令按领域命名，占用分任务层与 turn 层。

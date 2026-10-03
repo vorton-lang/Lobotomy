@@ -50,7 +50,7 @@ Codex（消息经 stdin，位置参数为 -）
 ### 1.3 Adapter 规则
 
 1. **每轮都在 role 的执行现场启动进程。** 两家 resume 都不恢复 cwd，turn 在进程 cwd 中执行。
-2. **每轮都传角色指令与 MCP 配置。** Claude 在压缩后按当轮进程参数重新生成并固定 system prompt；压缩后首轮若未传 `--append-system-prompt`，角色指令会从 system prompt 中永久消失，之后再传也被忽略，直到下一次压缩。模型仍能从压缩摘要中说出角色名，所以问题不显眼。Codex 不需要重传，传了也无害。system prompt 固定后重复传参不影响缓存。
+2. **每轮都传角色指令与 MCP 配置。** MCP 配置与 1.6 的能力裁剪参数都是启动参数，不保存在 session 中；每个 turn 是新进程，所以每个 turn 都要传。Claude 在压缩后按当轮进程参数重新生成并固定 system prompt；压缩后首轮若未传 `--append-system-prompt`，角色指令会从 system prompt 中永久消失，之后再传也被忽略，直到下一次压缩。模型仍能从压缩摘要中说出角色名，所以问题不显眼。Codex 不需要重传，传了也无害。system prompt 固定后重复传参不影响缓存。
 3. **消息走 stdin，长配置走文件。** 命令行长度有平台上限（Windows 约 32K 字符）。Codex 在 stdin 非 TTY 时会读取 stdin 并追加为 `<stdin>` 块，必须显式提供或关闭 stdin。Claude 的 `--mcp-config` 接收多个值，会把其后的位置参数（提示词）当作配置文件路径吞掉（实测踩到）。
 4. **压缩：** Claude 从 stdout 的 `system/compact_boundary` 读取（含 trigger、压缩前后 token 数）。Codex 的压缩设计上不影响工作，不做追踪；可尽力读 rollout 文件中的 `compacted` 记录，仅用于 GUI 显示。
 5. **用量：** Claude 每轮 `result.usage`，另有 `rate_limit_event`（5 小时 / 7 天额度利用率与重置时间），用于运行时的并发控制和 GUI 显示。Codex 的 `turn.completed.usage` 实测为线程累计值，需与上一轮做差。额度作用域与降级见 [#4](https://github.com/vorton-lang/Lobotomy/issues/4)。
@@ -61,7 +61,7 @@ Codex（消息经 stdin，位置参数为 -）
    - CLI 未退出或执行状态不明时，该 turn 保持"待对账"。运行时保留占用，不重放，也不为同一 native session 或执行现场启动替代执行（[#2](https://github.com/vorton-lang/Lobotomy/issues/2)）。
    - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"具体核对什么，待 #7 的 turn 契约确定（见 §6）。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
-8. **启动前登记 turn（#7 建议）。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。同一 attempt 内正常接续时，运行时只新建 turn，不新建 attempt。
+8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。turn_id 与按 turn 发放的 MCP token 已确认（[data-model.md](data-model.md) §3）。"同一 attempt 内正常接续时，运行时只新建 turn，不新建 attempt"仍是 #7 建议，待 M1 任务流讨论（data-model.md §4）。
 
 ### 1.4 实测结果（Windows）
 
@@ -136,7 +136,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 后端在 localhost 提供 streamable HTTP MCP。运行时每轮把带 token 的 URL 传给 CLI（1.3 第 2 条），由 URL 识别调用者；每轮不需要额外启动子进程。工具集见 [manager-actions.md](manager-actions.md) 与 [roles-and-tasks.md](roles-and-tasks.md)。
 
-**语义更新（#7 建议）：** `done` 等 MCP 调用要绑定发出它的 turn 的实际启动上下文（1.3 第 8 条），不能按"角色当前任务"反查归属。v0.2 写的是"每个 role 分配一个 URL"，只能识别到 role。token 按 role 还是按 turn 发放，待设计。
+**语义更新：** v0.2 写的是"每个 role 分配一个 URL"，只能识别到 role。现改为按 turn 发放 token：`done` 等 MCP 调用绑定到发出它的 turn，不按"角色当前任务"反查归属（[data-model.md](data-model.md) §3）。
 
 ## 3. 执行现场
 
@@ -226,7 +226,7 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 - jj-lib 的版本锁定与封装边界：jj-lib 的库 API 尚未稳定，需锁定版本，并封装在一个模块后面，不让 jj 的类型扩散到业务代码。
 - 跨平台的原生中断：per-turn 进程在 Windows 与 Linux 上如何一致地触发 harness 原生中断，被中断 turn 在两家会话记录中的状态。
 - "待对账"的具体内容：运行时核对哪些事实，何时结束待对账，结束后 turn 记为什么状态。待 #7 的 turn 契约确定。
-- MCP token 按 role 还是按 turn 发放（见 §2）。
+- 每个 turn 更换 MCP URL 后，跨进程 prompt cache 是否仍命中。预期命中，尚未实测。
 - 平台启动适配（1.8）的实现与验证：Linux 的设置竞态与启动线程，Windows 的进程创建与加入 Job 的顺序。
 - 退回或冲突交还时，执行者的槽位是否重新物化，以哪个提交为基线（例如 rebase 到新集成版本后的候选成果）。
 - Linux 上重跑实测：[spikes/harness-cli/spike.mjs](../spikes/harness-cli/spike.mjs) 为 Node 脚本，可直接移植。
