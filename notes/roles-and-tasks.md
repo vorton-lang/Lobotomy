@@ -3,7 +3,7 @@
 > Status: 设计决定 v0.3（2026-10-03）
 > 前置：[harness-adapter.md](harness-adapter.md)、[manager-actions.md](manager-actions.md)
 > v0.2 按 [#5](https://github.com/vorton-lang/Lobotomy/issues/5) 已确认的"持久工单 + 受控状态机"方向修订：执行轮（attempt）、完成条件版本化、证据绑定具体成果。
-> v0.3 按 [#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)修订：attempt 与 turn 的关系（已确认，见 [data-model.md](data-model.md) §4）、`done` 与采集的顺序、验收的原子边界（后两项仍是 #7 建议）。
+> v0.3 按 [#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)修订：attempt 与 turn 的关系、`done` 与采集的顺序、验收的原子边界。三项均已确认，见 [data-model.md](data-model.md) §4、§5。
 
 ## 1. 角色
 
@@ -72,11 +72,11 @@ v1 优先稳定而不是吞吐：任务真正完成前，所有参与者都不�
 | 新建 | Manager `assign`，或用户在 GUI 中直接建（任务说明只有用户原话，没有 Manager 解读） |
 | 排队 → 执行 | 运行时：执行者空闲时，把队首任务的说明发给它 |
 | 执行 ⇄ 阻塞 | 执行者 `org_report(status: blocked, blocked_on)`；卡在等用户时自动挂到"等你决定" |
-| 执行 → 验证 | 执行者 `org_report(status: done)`。`done` 可能早于 CLI 退出：运行时先保存采集意图并保持占用，CLI 退出后再采集并固定成果，作为候选成果（#7 建议，harness-adapter.md §4.1） |
-| 验证 | 运行时：采集范围完整、集成无未处理冲突、检查命令通过。未通过则把原因直接发回执行者，不经 Manager |
+| 执行 → 验证 | 执行者 `org_report(status: done)`。`done` 可能早于 CLI 退出：运行时先保存采集意图并保持占用，CLI 退出后再采集并固定成果，作为候选成果（harness-adapter.md §4.1） |
+| 验证 | 运行时：采集范围完整、集成无未处理冲突、检查命令通过。检查在固定的验证现场运行（data-model.md §5）。未通过则把原因直接发回执行者，不经 Manager |
 | 验证 → 审查 | 运行时：把候选成果交给 Reviewer |
 | 审查 → 验收 / 退回 | Reviewer 给出结论。通过则进入验收；要求修改时由 Manager 判断哪些现在改、哪些暂缓（可转为 issue），退回时按 ID 引用 Reviewer 意见原文。暂缓意见、风险豁免与最终验收分别留痕，"暂缓了全部意见"不能记作"审查通过" |
-| 验收 → 完成 / 退回 | Manager 判断是否满足完成条件；例外验收如实留痕。验收即发布：运行时以 CAS 把成果发布进集成版本，集成版本已前进时先重新验证。验收决定、CAS 与任务关闭在同一个 SQLite 事务中提交；CAS 失败时任务不关闭（#7 建议，harness-adapter.md §4.2） |
+| 验收 → 完成 / 退回 | Manager 判断是否满足完成条件；例外验收如实留痕。验收即发布：运行时以 CAS 把成果发布进集成版本，集成版本已前进时先重新验证。验收决定、CAS 与任务关闭在同一个 SQLite 事务中提交；CAS 失败时任务不关闭（harness-adapter.md §4.2） |
 | 放弃 | Manager 或用户。关闭本轮及后续调度，保留成果与证据。未验收的成果从不进入集成版本，放弃不涉及撤销代码 |
 
 - **参与者 = 执行者 + Reviewer。** 从开始到完成或放弃，运行时不给参与者派别的任务。Manager 临时咨询 TL 不会使 TL 成为参与者。
