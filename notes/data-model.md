@@ -1,7 +1,7 @@
 # 数据模型：业务对象、命令与对话记录
 
-> Status: 设计中（2026-10-03）
-> 按 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 逐项讨论；已确认的内容写入本文，未讨论的列在 §9。
+> Status: 设计决定 v0.1（2026-10-04）；§9 的汇总是草案
+> 按 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 逐项讨论；§1–§8 是已确认的决定，§9 是 M1 的对象与命令汇总，未定事项列在 §10。
 > 依据：[#6](https://github.com/vorton-lang/Lobotomy/issues/6) §1（SQLite 是业务事实的唯一权威）、#7 及其[讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)、[harness-adapter.md](harness-adapter.md)、[roles-and-tasks.md](roles-and-tasks.md)、[frontend.md](frontend.md) §3。
 
 ## 1. 命令
@@ -15,7 +15,7 @@
   3. 同一事务内写入的内容；
   4. 幂等键；
   5. 经 outbox 执行的副作用。
-- 命令清单待定，见 §9。
+- 命令清单见 §9.2（草案）。
 
 ## 2. 占用
 
@@ -296,6 +296,94 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 - 额度状态与"等你决定"分开显示。
 - 确定性的 GUI 控制照常可用（roles-and-tasks.md §1.4）。
 
-## 9. 未定
+## 9. M1 汇总（草案）
 
-- M1 的对象集合与命令清单：由以上各节汇总成草案。
+由 §1–§8 汇总。字段名、类型与索引在实现时确定。
+
+### 9.1 对象
+
+| 对象 | 稳定身份 | 主要内容 | 唯一约束与版本 |
+|---|---|---|---|
+| task | task_id | 标题、用户原话、执行者 role、阶段、用户暂停、阻塞原因、当前完成条件版本 | revision：每次状态变化加 1 |
+| criteria_version | (task_id, version) | 文本、修改者、时间 | 只追加 |
+| attempt | attempt_id | task、序号、代码起点、结束原因 | 每个 task 最多一个未关闭的 attempt |
+| role | 名字 | 类型、harness、模型、槽位 | v1 为静态配置 |
+| occupancy | role | 占用它的 task | 每个 role 最多被一个任务占用 |
+| native_session | session_id（运行时生成） | role、harness 原生 ID（可后补）、开始与结束时间 | — |
+| turn | turn_id | role、native session、task 与 attempt（可空）、现场 generation、MCP token、状态与结果、失败原因、pid 与进程启动时间、原始输出文件 | 每个 native session 最多一个未结束的 turn；token 唯一 |
+| message | message_id | 目标 role、来源、正文、到达顺序、状态、绑定的 turn | 每个 role 内按到达顺序排列 |
+| workspace | workspace_id | 种类（槽位、验证现场、审查现场、隔离）、路径、generation、目标提交、状态 | 每个路径同时最多一个就绪的 generation |
+| capture | capture_id | 种类（候选成果、中断现场）、turn、attempt、基线、采集范围、状态（意图、已 pin、未覆盖）、commit_id、未覆盖清单 | 每个 attempt 最多一个候选成果的采集意图 |
+| verification | verification_id | 候选成果、集成版本头、rebase 后的提交、是否有冲突 | — |
+| check_run | check_id | verification、检查配置版本、结果、输出引用 | — |
+| decision | decision_id | 种类（验收、退回、放弃、重开、丢弃未覆盖内容）、操作者、依据（候选成果、完成条件版本、预期集成版本头）、理由 | 只追加 |
+| integration | 单行 | 当前集成版本头、revision；发布记录 | 发布使用 CAS |
+| outbox | outbox_id | 种类、载荷、状态、回执 | 幂等键唯一 |
+| notification_intent | 状态键 | 内容引用、是否已显示 | 每个状态键一条 |
+| quota_domain | (harness, 账户) | 状态、重置时间、下次检查时间、最近观测及其时间 | — |
+| thread | thread_id | role | 每个 role 一个 |
+| item | item_id | thread、turn、Thread 序号、种类、小内容或文件引用、命令记录引用 | Thread 内序号唯一 |
+| command_record | command_id | 命令、调用者、幂等键、参数、结果、时间 | (调用者, 幂等键) 唯一 |
+| blob | 内容哈希 | 大小、头尾预览、稀疏行索引 | 哈希唯一 |
+| event | 全局序号 | 种类、对象引用 | 序号单调递增 |
+
+### 9.2 命令
+
+每条命令都写入 command_record。下表"写入"列只列出命令自身在同一事务中改变的业务对象。
+
+**用户（GUI）**
+
+没有 Angela 时，用户可以执行全部控制流命令（roles-and-tasks.md §1.4）。用户命令的幂等键都是 GUI 生成的请求 ID。
+
+| 命令 | 前置条件 | 同一事务写入 | 副作用 |
+|---|---|---|---|
+| 建任务 | — | task、完成条件 v1；任务排队 | — |
+| 修改完成条件 | 任务未关闭；预期版本等于当前版本 | 新版本；任务在执行阶段时，写入发给执行者的消息（§4.4） | — |
+| 发消息 | — | message（排队） | — |
+| 验收 | 阶段为验收；候选成果、完成条件版本、集成版本头都等于当前值 | 验收决定、集成版本头 CAS、任务关闭、释放占用、预览 outbox | 物化预览 |
+| 退回 | 阶段为验收 | 决定、新 attempt、发给执行者的消息（附理由） | 必要时物化槽位（§4.3） |
+| 放弃 | 任务未关闭 | 决定、关闭 attempt、任务关闭、释放占用 | — |
+| 重开 | 任务已关闭 | 决定、任务排队、新 attempt 的代码起点（§4.6） | — |
+| 暂停、恢复 | — | 暂停标记 | — |
+| 调整队列 | 任务在排队 | 队列顺序 | — |
+| 继续 | role 上一个 turn 为 interrupted | 登记 turn：继续说明加排队的消息 | 启动 CLI |
+| 新建 native session | role 没有未结束的 turn | native session 记录 | — |
+| 终止残留进程 | turn 为 unknown 且进程仍在运行 | 终止意图 | 终止进程，之后按 §3.3 对账 |
+| 丢弃未覆盖内容 | 采集状态为"未覆盖" | 决定；采集记为完成 | 之后槽位可以复用 |
+| 额度重试 | 额度域受阻 | 检查意图 | 一次检查调用 |
+
+**role（经 MCP，按 turn 的 token 识别）**
+
+| 命令 | 前置条件 | 同一事务写入 | 幂等 | 副作用 |
+|---|---|---|---|---|
+| `org_report(progress)` | turn 未结束 | 命令记录 | — | — |
+| `org_report(blocked)` | turn 未结束；任务在执行阶段 | 阻塞原因 | 同一原因重复报告不再写入 | 卡在等用户时进入"等你决定" |
+| `org_report(done)` | turn 未结束；任务在执行阶段 | 采集意图；保持占用 | 同一 attempt 已有采集意图时不再写入 | CLI 退出后采集 |
+
+**运行时**
+
+| 命令 | 前置条件 | 同一事务写入 | 幂等键 | 副作用 |
+|---|---|---|---|---|
+| 开始 attempt | 执行者没有被占用；队首任务未暂停；额度域未受阻 | 占用、attempt、需要时的物化意图 | (task, attempt 序号) | 物化槽位 |
+| 登记 turn | 有排队消息或待开始的执行；native session 没有未结束的 turn；额度域未受阻；未暂停；发给执行者的消息只在执行阶段投递（§4.2） | turn、token、绑定的消息 | turn_id | 启动 CLI |
+| 记录 turn 进展 | — | 状态、pid、native session ID、结果；额度失败时额度域受阻 | (turn_id, 状态) | 系统故障通知意图 |
+| 对账 | turn 为 unknown | turn 结果、释放运行权 | turn_id | 可能接着采集 |
+| 采集 | 有采集意图；CLI 已退出 | capture 状态、pin；任务进入验证 | capture_id | jj 采集与 pin（#6 §2） |
+| 验证 | 有候选成果 | verification、check_run；通过时进入验收；不通过时开新 attempt 并写入消息 | (候选成果, 集成版本头, 检查配置) | 物化验证现场、运行检查 |
+| 物化现场 | 旧内容已采集 | generation、就绪状态 | (workspace, generation) | 写目录；隔离并删除隔离目录 |
+| 物化预览 | 主仓库工作区等于上次物化的版本 | 回执：预览到达的版本 | 目标集成版本 | 写主仓库 |
+| 额度检查 | 额度域受阻且到检查时间 | 检查结果、下次检查时间；恢复时登记继续 turn | (额度域, 计划时间) | 一次最小检查调用 |
+| 清扫 | — | 回收记录 | — | 删除已满足回收条件的文件 |
+
+### 9.3 留到后续里程碑
+
+- **M2**：审查结论（绑定候选成果与完成条件版本）、审查现场（workspace 已预留种类）、审查轮数的计数；"退回"的前置条件扩展到审查阶段。
+- **M3**：Claude adapter、会议与 Thread 的关系、研究任务的证据。
+- **M4**：Manager 作为调用者，与用户使用同一组命令，由权限区分；ledger、`ask_user`、`flag_mismatch`、通知策略。
+- 预计扩展时不需要改动的部分：命令的五项格式、两层占用、turn 与消息投递、副作用与回执、对话记录与回收规则。
+
+## 10. 未定
+
+- 字段名、类型与索引在实现时确定。
+- "中断并发送"（ideas.md）等原生中断的实测结果。
+- Codex 额度被拒的形式（§8.3）。
