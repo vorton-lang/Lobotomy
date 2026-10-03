@@ -31,6 +31,7 @@
 ```text
 Claude（消息经 stdin）
   首轮：claude -p --session-id <uuid> --output-format stream-json --verbose
+          --include-partial-messages
           --dangerously-skip-permissions --model <m>
           --append-system-prompt(-file) <role>
           --strict-mcp-config --mcp-config <cfg>
@@ -74,6 +75,11 @@ Codex（消息经 stdin，位置参数为 -）
 | resume 时的 cwd | 不恢复 | 不恢复 |
 | 压缩事件 | stdout 有；`-p "/compact"` 可手动触发 | 压缩会发生，但 `--json` 输出无事件，仅 rollout 文件有 |
 | fork | 可用，返回新 id | 可用，返回新 id |
+| 模型文本流式 | 加 `--include-partial-messages` 后逐块到达（`stream_event` / `content_block_delta`） | 不流式：`agent_message` 完成后整条到达 |
+| 工具输出流式 | 不流式：命令结束后一次给出完整 `tool_result`；之前只有 `tool_use` 和不带输出的 `system/task_started` | 不流式：`item.started`（带命令，in_progress）之后，`item.completed` 一次给出完整 `aggregated_output` |
+| turn 结束事件到进程退出 | 约 0.5s | 约 4s |
+
+流式与退出间隔三行来自一次探针（[spikes/harness-cli/stream-probe.mjs](../spikes/harness-cli/stream-probe.mjs)，2026-10-04）：命令每秒打印一行，共 5 秒。两家的事件格式不在稳定承诺内，CLI 升级后需重测。
 
 ### 1.5 二进制定位
 
