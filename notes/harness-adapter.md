@@ -164,6 +164,15 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 - Rust 标准库的 `Command::spawn` 在 Windows 上会让子进程继承父进程所有可继承的句柄。实测中，一个子进程因此持有父进程的 stdout 管道，使调用方一直等到它退出。后端启动 harness 时，要用 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 限定可继承的句柄，避免后端的管道与 socket 泄漏给长期运行的 harness。
 - 原生中断：每个 harness 进程以 `CREATE_NO_WINDOW` 启动，拥有自己的控制台。中断时，由一个短命的辅助进程 attach 到目标控制台并发送 Ctrl+C。控制台是进程级状态，不在后端进程内 attach。
 
+**Windows 实现**（2026-10-04，[backend/crates/harness/src/process.rs](../backend/crates/harness/src/process.rs)）：
+
+- 每个 turn 一个 Job。进程以挂起方式创建（`CREATE_SUSPENDED | CREATE_NO_WINDOW`）。运行时把它加入 Job，在 SQLite 中记下 pid 与进程启动时间，然后才让它运行。
+- **语义更新：** CLI 退出后，运行时关闭该 turn 的 Job，CLI 留下的进程随之结束，然后才采集。这样采集时没有进程还在写槽位（§4.1 "确认写者已停止"）。代价是 agent 在 turn 中启动的后台进程（例如开发服务器）不会存活到 turn 之后。
+- 句柄继承：没有使用 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`，因为 Rust 稳定版的 `Command` 不能设置这个属性。改为后端启动时把自己的 stdin、stdout、stderr 设为不可继承。标准库打开的文件和 socket 本来就不可继承；标准库为子进程准备管道时持有锁，管道不会泄漏给同时启动的其他子进程。
+- Ctrl+C 辅助进程是后端程序自身：`lobotomyd ctrl-c <pid>`。
+- 已知缺口：后端如果恰好在创建进程与加入 Job 之间崩溃，会留下一个挂起、从未运行的进程。这个窗口极短，暂不处理。
+- 测试：[backend/crates/harness/tests/process.rs](../backend/crates/harness/tests/process.rs)（挂起、存活检查、关闭 Job 结束孙进程），[backend/crates/lobotomyd/tests/backend.rs](../backend/crates/lobotomyd/tests/backend.rs)（经辅助进程中断）。
+
 ## 2. MCP 服务
 
 后端在 localhost 提供 streamable HTTP MCP。运行时每轮把带 token 的 URL 传给 CLI（1.3 第 2 条），由 URL 识别调用者；每轮不需要额外启动子进程。工具集见 [manager-actions.md](manager-actions.md) 与 [roles-and-tasks.md](roles-and-tasks.md)。

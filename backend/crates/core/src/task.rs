@@ -109,6 +109,25 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<Task>> {
     .collect()
 }
 
+/// The first queued, unpaused task of the role: the next one to start (roles-and-tasks.md §2.2).
+pub fn next_queued_task(conn: &Connection, role: &str) -> Result<Option<Task>> {
+    let row = conn
+        .query_row(
+            &format!(
+                "SELECT {TASK_COLUMNS} FROM task WHERE executor = ?1 AND phase = 'queued' AND paused = 0
+                 ORDER BY queue_pos, id LIMIT 1"
+            ),
+            [role],
+            task_from_row,
+        )
+        .optional()?;
+    row.map(|(mut task, phase)| {
+        task.phase = Phase::parse(&phase)?;
+        Ok(task)
+    })
+    .transpose()
+}
+
 /// The task currently occupying a role, if any.
 pub fn occupant(conn: &Connection, role: &str) -> Result<Option<String>> {
     Ok(conn

@@ -8,6 +8,7 @@ pub mod error;
 pub mod id;
 pub mod item;
 pub mod report;
+pub mod role;
 pub mod task;
 pub mod turn;
 

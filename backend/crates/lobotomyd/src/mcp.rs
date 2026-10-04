@@ -13,14 +13,24 @@ use axum::{
     extract::{Path, Request},
     routing::any,
 };
+use lobotomy_core::Caller;
+use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
+use lobotomy_core::turn::turn_by_token;
 use rmcp::{
-    RoleServer, ServerHandler,
+    ErrorData, RoleServer, ServerHandler,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{CallToolResult, ContentBlock, ServerCapabilities, ServerConfig},
+    schemars::{self, JsonSchema},
     service::RequestContext,
+    tool, tool_handler, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
     },
 };
+use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
+
+use crate::project::Project;
 
 /// The per-turn token from the request URL. The router puts it into the HTTP request extensions
 /// before rmcp parses the request.
@@ -66,6 +76,104 @@ fn config(shutdown: CancellationToken) -> StreamableHttpServerConfig {
 pub fn turn_token(context: &RequestContext<RoleServer>) -> Option<&str> {
     let parts = context.extensions.get::<http::request::Parts>()?;
     parts.extensions.get::<TurnToken>().map(|token| token.0.as_str())
+}
+
+/// The MCP routes with the tools roles call.
+pub fn org_router(project: Arc<Project>, shutdown: CancellationToken) -> Router {
+    router(move || OrgTools::new(project.clone()), shutdown)
+}
+
+/// The tools of the executor (roles-and-tasks.md §4). Every call becomes a command of the turn
+/// that owns the token; the reply names the command record, so the transcript item can refer to
+/// it instead of repeating it (data-model.md §7.2).
+#[derive(Clone)]
+pub struct OrgTools {
+    project: Arc<Project>,
+    #[expect(dead_code, reason = "the tool_handler macro builds its own router")]
+    tool_router: ToolRouter<Self>,
+}
+
+impl OrgTools {
+    pub fn new(project: Arc<Project>) -> Self {
+        Self { project, tool_router: Self::tool_router() }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportStatusArg {
+    /// 阶段性进展
+    Progress,
+    /// 需要用户决定的问题，写在 blocked_on 中
+    Blocked,
+    /// 任务完成，提交候选成果
+    Done,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OrgReportArgs {
+    /// 一句话标题
+    pub title: String,
+    /// 详细内容。done 时说明做了什么、怎样验证的
+    pub body: String,
+    pub status: ReportStatusArg,
+    /// status 为 blocked 时，需要用户决定的问题
+    pub blocked_on: Option<String>,
+}
+
+#[tool_router]
+impl OrgTools {
+    #[tool(description = "向 Lobotomy 组织汇报：阶段性进展（progress）、需要用户决定的问题（blocked）或任务完成（done）。")]
+    async fn org_report(
+        &self,
+        Parameters(args): Parameters<OrgReportArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let token = turn_token(&context).map(str::to_owned);
+        let project = self.project.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let token = token.ok_or_else(|| lobotomy_core::Error::rejected("no_token", "the URL carries no turn token"))?;
+            let turn = project
+                .db
+                .read(|c| turn_by_token(c, &token))?
+                .ok_or_else(|| lobotomy_core::Error::rejected("unknown_token", "no turn has this token"))?;
+            let caller = Caller::Role { role: turn.role, turn_id: turn.id };
+            let status = match args.status {
+                ReportStatusArg::Progress => ReportStatus::Progress,
+                ReportStatusArg::Blocked => ReportStatus::Blocked,
+                ReportStatusArg::Done => ReportStatus::Done,
+            };
+            let report = OrgReport { title: args.title, body: args.body, status, blocked_on: args.blocked_on };
+            project.db.execute_recorded(&caller, &report)
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        let text = match outcome {
+            Ok((ReportEffect::Recorded, id)) => format!("已记录（{id}）。"),
+            Ok((ReportEffect::Unchanged, id)) => format!("与之前的汇报相同，没有重复记录（{id}）。"),
+            Ok((ReportEffect::Late, id)) => format!("这次汇报没有生效：所在的 turn 或执行轮已经结束（{id}）。"),
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(format!("汇报被拒绝：{e}"))])),
+        };
+        self.project.wake.notify_one();
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for OrgTools {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("Lobotomy 组织运行时。用 org_report 汇报工作状态。")
+    }
+}
+
+/// The command record named in a Lobotomy tool's reply, such as `cmd_01J…`.
+pub fn command_id_in(text: &str) -> Option<&str> {
+    let start = text.find("cmd_")?;
+    let id = &text[start..];
+    let end = id.find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(id.len());
+    (end == 4 + 26).then(|| &id[..end])
 }
 
 #[cfg(test)]

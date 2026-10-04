@@ -74,7 +74,9 @@ completed 只表示 turn 正常结束，不表示任务完成。任务完成取�
 核对方法：
 
 1. 运行时按记下的 pid 与进程启动时间检查进程。
-2. 如果后端在记下 pid 之前已崩溃，运行时按命令行中的 turn 标识查找进程。Codex 的 MCP URL 在命令行参数中；Claude 的 MCP 配置文件按 turn_id 命名。
+2. 如果后端在记下 pid 之前已崩溃：
+   - Windows：进程以挂起方式创建，记下 pid 之后才运行（harness-adapter.md §1.8）。没有 pid 就表示 CLI 从未运行，turn 记为 interrupted（**语义更新**，2026-10-04）。
+   - Linux：运行时按命令行中的 turn 标识查找进程。Codex 的 MCP URL 在命令行参数中；Claude 的 MCP 配置文件按 turn_id 命名。尚未实现，Linux 适配时补上。
 
 核对结果：
 

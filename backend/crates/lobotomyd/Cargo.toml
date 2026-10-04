@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 lobotomy-core.workspace = true
+lobotomy-harness.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 http.workspace = true
@@ -19,4 +20,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
+tempfile.workspace = true
 tower.workspace = true
