@@ -1,5 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
@@ -32,8 +33,32 @@ pub struct Project {
     /// The verification site is one directory: a verification holds this from writing it until
     /// the processes of its last check have ended (#12).
     pub verify_site: tokio::sync::Mutex<()>,
+    /// Items of running turns that have started and not completed, for live display. Kept in
+    /// memory only; a backend crash loses them (frontend.md §3).
+    pub live: Mutex<HashMap<String, LiveTurn>>,
+    /// Bumped on every change to `live`, so the GUI service knows when to push it.
+    pub live_version: AtomicU64,
     /// Wakes the scheduler after a change.
     pub wake: Notify,
+    /// The GUI asked the backend to stop (frontend.md §1).
+    pub shutdown_requested: Notify,
+    /// What connected GUIs are told (see `gui`), as JSON text.
+    pub gui_push: tokio::sync::broadcast::Sender<Arc<str>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct LiveTurn {
+    pub role: String,
+    pub started_at: i64,
+    /// By the harness's item id.
+    pub items: BTreeMap<String, LiveItem>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct LiveItem {
+    pub kind: String,
+    pub content: serde_json::Value,
+    pub started_at: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -59,8 +84,18 @@ impl Project {
             jobs: Mutex::new(HashSet::new()),
             failed: Mutex::new(HashMap::new()),
             verify_site: tokio::sync::Mutex::new(()),
+            live: Mutex::new(HashMap::new()),
+            live_version: AtomicU64::new(0),
             wake: Notify::new(),
+            shutdown_requested: Notify::new(),
+            gui_push: tokio::sync::broadcast::channel(crate::gui::PUSH_BUFFER).0,
         })
+    }
+
+    /// Changes the live view of running turns.
+    pub fn update_live(&self, change: impl FnOnce(&mut HashMap<String, LiveTurn>)) {
+        change(&mut self.live.lock().unwrap());
+        self.live_version.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A slot's directory: fixed per slot, outside the user's repository (harness-adapter.md §3).

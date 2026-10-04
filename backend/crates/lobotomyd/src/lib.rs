@@ -1,6 +1,8 @@
-//! The Lobotomy backend: project instances and the services roles and the GUI call.
+//! The Lobotomy backend: project instances and the services roles and the GUI call: MCP at
+//! `/mcp/{token}`, the GUI at `/gui`.
 
 pub mod capability;
+pub mod gui;
 pub mod host;
 pub mod mcp;
 pub mod onboard;
@@ -38,7 +40,8 @@ impl Backend {
         scheduler::recover(&project).await?;
 
         let serving = CancellationToken::new();
-        let app = mcp::org_router(project.clone(), serving.clone());
+        let app = mcp::org_router(project.clone(), serving.clone()).merge(gui::gui_router(project.clone()));
+        tokio::spawn(gui::watch(project.clone(), serving.clone()));
         let stop = serving.clone();
         let server = tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(stop.cancelled_owned()).await {

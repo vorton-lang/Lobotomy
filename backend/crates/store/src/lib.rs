@@ -13,5 +13,5 @@ mod store;
 mod workspace;
 
 pub use error::{Error, Result};
-pub use store::{Composed, Identity, Store};
+pub use store::{Composed, Content, FileChange, Identity, Store};
 pub use workspace::{Captured, Guard, Leave, NewFile, Scope, Uncovered, Workspace};

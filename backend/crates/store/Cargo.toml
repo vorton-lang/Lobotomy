@@ -11,7 +11,7 @@ publish.workspace = true
 jj-lib = { version = "=0.45.1", default-features = false, features = ["git"] }
 # Only for the object hash kind that jj-lib's git backend takes; the version follows jj-lib's.
 gix = { version = "0.87.1", default-features = false, features = ["sha1"] }
-futures = "0.3"
+futures.workspace = true
 pollster = "1"
 serde.workspace = true
 thiserror.workspace = true

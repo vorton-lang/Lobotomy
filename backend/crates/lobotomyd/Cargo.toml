@@ -11,6 +11,7 @@ lobotomy-harness.workspace = true
 lobotomy-store.workspace = true
 anyhow.workspace = true
 axum.workspace = true
+futures.workspace = true
 http.workspace = true
 rmcp.workspace = true
 serde.workspace = true
@@ -20,7 +21,9 @@ tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-[dev-dependencies]
 rusqlite.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite = "0.29"
 tempfile.workspace = true
 tower.workspace = true

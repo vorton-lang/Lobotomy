@@ -19,7 +19,16 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
 
 - 渲染进程直接用 WebSocket 连接后端；这个服务也为 role 提供 MCP。Electron 主进程不转发业务数据，保持空闲。浏览器同样可以连接，方便开发调试。
 - 关闭窗口不退出，托盘常驻。关闭 GUI 不改变组织的运行意愿（#5）。
-- **通知**：后端按 [manager-actions.md](manager-actions.md) §6 的规则判定，并持久保存通知意图；Electron 主进程用跨平台的 Notification API 投递。GUI 进程不在时意图保留，下次打开时在界面内显示，不补发系统通知。
+- **后端的启动与停止**（用户确认，2026-10-04）：
+  1. Electron 启动时，如果项目的后端没在运行，就启动它。后端与 Electron 分离，Electron 崩溃不带走后端。
+  2. 后端监听后，在项目数据目录写入 `backend.json`（端口与 pid），正常停止时删除。Electron 据此找到正在运行的后端。
+  3. 关闭窗口时，窗口退到托盘，组织照常运行。
+  4. 托盘菜单"退出 Lobotomy"按正常停止进行（harness-adapter.md §1.8）：中断正在运行的 turn，等它们退出，然后后端退出。退出 GUI 就是停止组织。
+- **GUI 接口的访问控制**（用户确认，2026-10-04）：
+  - 后端只监听 `127.0.0.1`。每个 GUI 连接都要带 token。token 在第一次启动时生成，存放在 host 目录（`%LOCALAPPDATA%\Lobotomy\gui-token`），Electron 从那里读取；它不进入 role 与检查命令的环境。
+  - 后端校验 `Host` 与 `Origin`，挡住网页的连接。允许的 Origin：没有 Origin、`file://`、本机地址（开发时的 Vite）。
+  - 边界：这能挡住网页和误调用，挡不住存心读取 token 文件的 agent。同一 OS 用户下做不到真正的隔离（#6）。不把 token 只放在内存里，是因为那样 GUI 进程重启后连不回仍在运行的后端。
+- **通知**：后端按 [manager-actions.md](manager-actions.md) §6 的规则判定，并持久保存通知意图；Electron 主进程用跨平台的 Notification API 投递。GUI 进程不在时意图保留，下次打开时在界面内显示，不补发系统通知。M1 不做系统通知，只在窗口标题与托盘上显示"等你决定"的条数（用户确认，2026-10-04）。
 - 先例：Codex 桌面应用就是 Electron 前端加独立的 Rust app-server（JSON-RPC）。
 
 ## 2. 布局
@@ -61,6 +70,12 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
 
   Angela 的 Inspector 多一项"推测"。
 - **role play 只在展示层**：名字，以及每个角色一个标识色或头像。
+
+**M1 的布局**（用户确认，2026-10-04；做出来后按实际效果迭代）：M1 没有 Angela，只有 Malkuth。
+- 主区是 Malkuth 的 Thread：用户的消息、它的回复与工具调用、汇报、运行时的消息（例如验证失败）。输入框直接发给 Malkuth。
+- 右侧栏照上面的设计：等你决定、Workboard。
+- 点开任务，看候选成果的 diff，在那里验收或退回。
+- M4 有了 Angela 以后，主区换成与她的对话，Malkuth 的 Thread 移进 Inspector。
 
 ## 3. 后端与前端的协议
 

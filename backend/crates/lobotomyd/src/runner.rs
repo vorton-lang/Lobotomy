@@ -21,7 +21,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::capability;
 use crate::mcp::command_id_in;
-use crate::project::{Project, RunningTurn};
+use crate::project::{LiveItem, LiveTurn, Project, RunningTurn};
 
 const WORKER_INSTRUCTIONS: &str = include_str!("prompts/worker.md");
 
@@ -159,7 +159,14 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
         let _ = spawned.child.start_kill();
         return Err(e);
     }
+    let live = LiveTurn { role: turn.role.clone(), started_at: now_ms(), items: Default::default() };
+    project.update_live(|turns| {
+        turns.insert(turn_id.to_owned(), live);
+    });
     let outcome = drive(project, &turn, &mut spawned).await;
+    project.update_live(|turns| {
+        turns.remove(turn_id);
+    });
     // Whatever happened, the CLI is gone or must go before the turn ends.
     let _ = spawned.child.start_kill();
     let _ = spawned.child.wait().await;
@@ -246,7 +253,14 @@ async fn observe(project: &Arc<Project>, turn: &Turn, event: Event, seen: &mut O
                 runtime(project, SessionIdentified { turn_id: turn.id.clone(), native_id }).await?;
             }
         }
-        Event::ItemCompleted(item) => store_harness_item(project, turn, item).await?,
+        Event::ItemCompleted(item) => {
+            project.update_live(|turns| {
+                if let Some(live) = turns.get_mut(&turn.id) {
+                    live.items.remove(&item.native_id);
+                }
+            });
+            store_harness_item(project, turn, item).await?
+        }
         Event::TurnCompleted { .. } => seen.completed = true,
         Event::TurnFailed { message } => seen.failed = Some(message),
         Event::Error { message } => {
@@ -254,8 +268,15 @@ async fn observe(project: &Arc<Project>, turn: &Turn, event: Event, seen: &mut O
             seen.last_error = Some(message);
         }
         Event::Unknown(_) | Event::Unparsed(_) => seen.unparsed = true,
-        // Live progress goes to the GUI with increment 4.
-        Event::TurnStarted | Event::ItemStarted(_) | Event::ItemUpdated(_) => {}
+        // An item in progress is shown live and never stored (frontend.md §3).
+        Event::ItemStarted(item) | Event::ItemUpdated(item) => project.update_live(|turns| {
+            if let Some(live) = turns.get_mut(&turn.id) {
+                let started_at = live.items.get(&item.native_id).map_or_else(now_ms, |i| i.started_at);
+                let entry = LiveItem { kind: item.kind.as_str().to_owned(), content: item.content, started_at };
+                live.items.insert(item.native_id, entry);
+            }
+        }),
+        Event::TurnStarted => {}
     }
     Ok(())
 }

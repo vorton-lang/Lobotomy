@@ -301,6 +301,51 @@ pub fn compose_input(messages: &[Message]) -> String {
         .join("\n\n")
 }
 
+/// Why a role waits for the user. The same rules hold the role in [`register`].
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Hold {
+    /// The last turn of the current attempt was interrupted or failed (harness-adapter.md §1.7).
+    Abnormal { turn: Box<Turn> },
+    /// The runtime stopped the latest capture (harness-adapter.md §4.1).
+    CaptureStopped { capture: Box<crate::capture::Capture> },
+    /// A completed turn left no harness session id; only a new native session helps (#10).
+    SessionUnidentified { session_id: String },
+}
+
+pub fn hold(conn: &Connection, role: &str) -> Result<Option<Hold>> {
+    // Until the last turn is captured the role waits for the runtime, not for the user.
+    if crate::capture::require_no_pending_capture(conn, role).is_err() {
+        return Ok(None);
+    }
+    if let Some(capture) = crate::capture::stopped_capture(conn, role)? {
+        return Ok(Some(Hold::CaptureStopped { capture: Box::new(capture) }));
+    }
+    let (task, attempt) = current_work(conn, role)?;
+    let Some(session) = current_session(conn, role, task.as_ref().map(|t| t.id.as_str()))? else {
+        return Ok(None);
+    };
+    if let Some(last) = last_turn_in(conn, &session.id)?
+        && is_abnormal(&last)
+        && last.attempt_id == attempt.map(|a| a.id)
+    {
+        return Ok(Some(Hold::Abnormal { turn: Box::new(last) }));
+    }
+    if session.native_id.is_none() {
+        let completed = conn
+            .query_row(
+                "SELECT 1 FROM turn WHERE native_session_id = ?1 AND outcome = 'completed' LIMIT 1",
+                [&session.id],
+                |_| Ok(()),
+            )
+            .optional()?;
+        if completed.is_some() {
+            return Ok(Some(Hold::SessionUnidentified { session_id: session.id }));
+        }
+    }
+    Ok(None)
+}
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct TurnRegistered {
     pub turn_id: String,

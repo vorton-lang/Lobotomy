@@ -13,7 +13,8 @@ lobotomy-harness = { path = "crates/harness" }
 lobotomy-store = { path = "crates/store" }
 anyhow = "1"
 libc = "0.2"
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws", "query"] }
+futures = "0.3"
 http = "1"
 rmcp = { version = "3.5", features = ["transport-streamable-http-server"] }
 rusqlite = { version = "0.40", features = ["bundled"] }

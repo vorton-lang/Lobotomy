@@ -19,6 +19,9 @@ pub struct Host {
     pub dir: PathBuf,
     pub db: HostDb,
     pub harness: HarnessConfig,
+    /// What a GUI connection must present (frontend.md §1). Generated once, kept in
+    /// `<dir>/gui-token`; never put into the environment of roles or checks.
+    pub gui_token: String,
     /// Domains with a check in progress: at most one check per domain (data-model.md §8.4).
     checking: Mutex<HashSet<String>>,
 }
@@ -73,7 +76,8 @@ impl Host {
     pub fn open(dir: &Path, harness: HarnessConfig) -> anyhow::Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let db = HostDb::open(&dir.join("host.db")).context("opening the host database")?;
-        Ok(Self { dir: dir.to_path_buf(), db, harness, checking: Mutex::new(HashSet::new()) })
+        let gui_token = gui_token(&dir.join("gui-token"))?;
+        Ok(Self { dir: dir.to_path_buf(), db, harness, gui_token, checking: Mutex::new(HashSet::new()) })
     }
 
     /// `%LOCALAPPDATA%\Lobotomy` on Windows; `$XDG_STATE_HOME/lobotomy` or
@@ -154,6 +158,23 @@ impl Host {
         // (data-model.md §8.3).
         Ok(if completed { CheckOutcome::Passed } else { CheckOutcome::Rejected { resets_at: None } })
     }
+}
+
+/// The GUI token, created on first use: two ULIDs give 160 random bits.
+fn gui_token(path: &Path) -> anyhow::Result<String> {
+    if let Ok(token) = std::fs::read_to_string(path)
+        && !token.trim().is_empty()
+    {
+        return Ok(token.trim().to_owned());
+    }
+    let token = format!("{}{}", ulid_part(), ulid_part());
+    std::fs::write(path, &token).with_context(|| format!("writing {}", path.display()))?;
+    Ok(token)
+}
+
+fn ulid_part() -> String {
+    let id = lobotomy_core::id::new_id("t");
+    id.trim_start_matches("t_").to_lowercase()
 }
 
 /// Reads a stream to its end and keeps the last `keep` bytes.

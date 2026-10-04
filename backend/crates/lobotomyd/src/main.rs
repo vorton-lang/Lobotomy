@@ -78,11 +78,19 @@ async fn serve(Options { data_dir, repo, host_dir, port }: Options) -> anyhow::R
         ),
         (Some(_), None) => {}
     }
-    let backend = Backend::start(project, port).await?;
+    let backend = Backend::start(project.clone(), port).await?;
     tracing::info!(data_dir = %data_dir.display(), addr = %backend.addr, "backend running");
-    tokio::signal::ctrl_c().await?;
+    // How the GUI finds a running backend (frontend.md §1).
+    let info = data_dir.join("backend.json");
+    let contents = serde_json::json!({ "pid": std::process::id(), "port": backend.addr.port() });
+    std::fs::write(&info, contents.to_string()).with_context(|| format!("writing {}", info.display()))?;
+    tokio::select! {
+        signal = tokio::signal::ctrl_c() => signal?,
+        _ = project.shutdown_requested.notified() => {}
+    }
     tracing::info!("shutting down");
     backend.shutdown(SHUTDOWN_GRACE).await;
+    let _ = std::fs::remove_file(&info);
     Ok(())
 }
 

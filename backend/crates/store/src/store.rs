@@ -206,6 +206,84 @@ impl Store {
     }
 }
 
+/// One side of a changed file, for display.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Content {
+    Text { text: String },
+    Binary { size: u64 },
+    TooLarge { size: u64 },
+    Symlink { target: String },
+    /// jj recorded a conflict at this path.
+    Conflict,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct FileChange {
+    pub path: String,
+    /// `None`: the file did not exist on that side.
+    pub old: Option<Content>,
+    pub new: Option<Content>,
+}
+
+/// Files larger than this are listed without their content.
+const DIFF_CONTENT_LIMIT: u64 = 2 * 1024 * 1024;
+
+impl Store {
+    /// The files that differ between two commits, with both sides' content.
+    pub fn diff(&self, from: &str, to: &str) -> Result<Vec<FileChange>> {
+        use futures::StreamExt as _;
+        let (from, to) = (self.commit(from)?.tree(), self.commit(to)?.tree());
+        async {
+            let mut changes = Vec::new();
+            let mut stream = from.diff_stream(&to, &jj_lib::matchers::EverythingMatcher);
+            while let Some(entry) = stream.next().await {
+                let values = entry.values.map_err(Error::jj)?;
+                let old = self.content(&entry.path, &values.before).await?;
+                let new = self.content(&entry.path, &values.after).await?;
+                changes.push(FileChange { path: entry.path.as_internal_file_string().to_owned(), old, new });
+            }
+            Ok(changes)
+        }
+        .block_on()
+    }
+
+    async fn content(
+        &self,
+        path: &jj_lib::repo_path::RepoPath,
+        value: &jj_lib::backend::MergedTreeValue,
+    ) -> Result<Option<Content>> {
+        use futures::io::AsyncReadExt as _;
+        use jj_lib::backend::TreeValue;
+        let Some(value) = value.as_resolved() else {
+            return Ok(Some(Content::Conflict));
+        };
+        Ok(match value {
+            None => None,
+            Some(TreeValue::File { id, .. }) => {
+                let mut reader = self.inner.read_file(path, id).await.map_err(Error::jj)?;
+                let mut bytes = Vec::new();
+                (&mut reader).take(DIFF_CONTENT_LIMIT + 1).read_to_end(&mut bytes).await.map_err(Error::io(path.as_internal_file_string()))?;
+                let size = bytes.len() as u64;
+                if size > DIFF_CONTENT_LIMIT {
+                    Some(Content::TooLarge { size })
+                } else if bytes.contains(&0) {
+                    Some(Content::Binary { size })
+                } else {
+                    match String::from_utf8(bytes) {
+                        Ok(text) => Some(Content::Text { text }),
+                        Err(_) => Some(Content::Binary { size }),
+                    }
+                }
+            }
+            Some(TreeValue::Symlink(id)) => {
+                Some(Content::Symlink { target: self.inner.read_symlink(path, id).await.map_err(Error::jj)? })
+            }
+            Some(_) => None,
+        })
+    }
+}
+
 fn conflicts(tree: &MergedTree) -> Vec<String> {
     tree.conflicts().map(|(path, _)| path.as_internal_file_string().to_owned()).collect()
 }
