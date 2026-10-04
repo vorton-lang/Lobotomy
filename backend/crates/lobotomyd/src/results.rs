@@ -20,17 +20,13 @@ use lobotomy_core::verify::{
 };
 use lobotomy_core::workspace::{ReplaceWorkspace, Workspace, WorkspaceReady, current_workspace, load_workspace};
 use lobotomy_harness::process::{self, Spec};
-use lobotomy_store::{Captured, Guard, Identity, Scope, repo};
+use lobotomy_store::{Captured, Guard, Identity, Leave, Scope, repo};
 use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::capability;
 use crate::project::Project;
 use crate::runner::{db, runtime};
-
-/// A failed job waits this long before the scheduler may start it again. Store work is
-/// deterministic; a cause that persists should not fill the log.
-const RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// How much of a check's stdout and stderr is kept, each. The end is kept: that is where test
 /// runners print the failures and the summary.
@@ -39,23 +35,41 @@ const OUTPUT_CAP: usize = 4 * 1024 * 1024;
 /// Lines of check output quoted back to the executor.
 const TAIL_LINES: usize = 40;
 
-/// Starts a job unless one with the same key is running.
+/// Starts a job unless one with the same key is running or has failed.
+///
+/// A failed job stops with its reason and is not started again until the user retries
+/// ([`retry_failed`]); a backend restart runs it once more (data-model.md §5).
 pub fn spawn_job<F>(project: &Arc<Project>, key: String, job: F)
 where
     F: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
-    if !project.jobs.lock().unwrap().insert(key.clone()) {
+    if project.failed.lock().unwrap().contains_key(&key) || !project.jobs.lock().unwrap().insert(key.clone()) {
         return;
     }
     let project = project.clone();
     tokio::spawn(async move {
         if let Err(e) = job.await {
-            tracing::error!(key, error = format!("{e:#}"), "store job failed; retrying in a minute");
-            tokio::time::sleep(RETRY_AFTER).await;
+            let reason = format!("{e:#}");
+            tracing::error!(key, error = reason, "store job failed; waiting for the user to retry");
+            project.failed.lock().unwrap().insert(key.clone(), reason);
         }
         project.jobs.lock().unwrap().remove(&key);
         project.wake.notify_one();
     });
+}
+
+/// Jobs that failed and why, by key: `slot:<name>`, `capture:<id>`, `verify:<id>`, `preview`.
+pub fn failures(project: &Project) -> Vec<(String, String)> {
+    let mut failed: Vec<_> = project.failed.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    failed.sort();
+    failed
+}
+
+/// The user's retry: failed jobs may run again. Returns how many there were.
+pub fn retry_failed(project: &Project) -> usize {
+    let count = std::mem::take(&mut *project.failed.lock().unwrap()).len();
+    project.wake.notify_one();
+    count
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> anyhow::Result<T> {
@@ -120,12 +134,12 @@ pub async fn capture(project: Arc<Project>, capture: Capture) -> anyhow::Result<
     .await?;
     let guard = (!capture.options.ignore_guard)
         .then_some(Guard { max_new_files: config.max_new_files, max_new_bytes: config.max_new_bytes });
+    let leave = Leave { new_files: capture.options.leave_new_files, uncovered: capture.options.leave_uncovered };
     let p = project.clone();
     let c = capture.clone();
-    let captured = blocking(move || {
-        workspace(&p, &ws).capture(&p.store, &c.base, &scope(&config), guard.as_ref(), c.options.discard_uncovered, &c.id)
-    })
-    .await??;
+    let captured =
+        blocking(move || workspace(&p, &ws).capture(&p.store, &c.base, &scope(&config), guard.as_ref(), leave, &c.id))
+            .await??;
     let result = match captured {
         Captured::Pinned { commit } => CaptureResult::Pinned { commit },
         Captured::Oversized { files, total_bytes } => {

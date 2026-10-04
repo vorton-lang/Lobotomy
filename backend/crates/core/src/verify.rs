@@ -340,7 +340,7 @@ fn reenter(cx: &mut Cx<'_>, task: &Task, slot: Option<(String, String)>, body: &
     if let Some((target, head)) = &slot
         && let Some(name) = role_slot(cx.tx, &task.executor)?
     {
-        plan(cx, &name, target, head)?;
+        plan(cx, &name, target, head, Some(&task.id))?;
     }
     queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), body)?;
     cx.emit("attempt.started", &task.id, json!({ "attempt_id": attempt_id, "seq": seq }))?;

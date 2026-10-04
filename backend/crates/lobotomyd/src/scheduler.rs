@@ -15,7 +15,7 @@ use lobotomy_core::turn::{EndTurn, MarkUnfinishedUnknown, Outcome, RegisterTurn,
 use lobotomy_core::verify::{
     Reverify, StartVerification, evidence_is_stale, latest_verification, next_preview, running_verifications, tasks_in_phase,
 };
-use lobotomy_core::workspace::{PrepareSlot, current_workspace, materializing};
+use lobotomy_core::workspace::{AlignIdleSlot, materializing};
 use lobotomy_harness::process;
 use tokio_util::sync::CancellationToken;
 
@@ -74,11 +74,9 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
             let code_start = results::code_start(project, &task.id).await?;
             ignore_rejection(runtime(project, StartAttempt { task_id: task.id, code_start }).await)?;
         }
-        if let Some(slot) = &role.slot {
-            let slot = slot.clone();
-            if db(project, move |db| db.read(|c| current_workspace(c, &slot))).await?.is_none() {
-                ignore_rejection(runtime(project, PrepareSlot { role: role.name.clone() }).await)?;
-            }
+        // Without a task the slot follows the integration version (harness-adapter.md §3).
+        if role.slot.is_some() {
+            ignore_rejection(runtime(project, AlignIdleSlot { role: role.name.clone() }).await)?;
         }
         if let Some(turn) = ignore_rejection(runtime(project, RegisterTurn { role: role.name.clone() }).await)? {
             launch(project, turn.turn_id);

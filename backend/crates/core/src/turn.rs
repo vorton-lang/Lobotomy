@@ -315,8 +315,14 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
         return Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", running.id)));
     }
     // The last turn's scene is captured before the next turn touches the slot, and turns only run
-    // in a slot that holds its target (harness-adapter.md §3, §4.1).
+    // in a slot that holds its target (harness-adapter.md §3, §4.1). A capture the runtime
+    // stopped stops the role until the user decides; continuing is one of the choices.
     crate::capture::require_no_pending_capture(cx.tx, role)?;
+    if continue_note.is_none()
+        && let Some(stopped) = crate::capture::stopped_capture(cx.tx, role)?
+    {
+        return Err(Error::rejected("capture_stopped", format!("capture {} of {role} was stopped", stopped.id)));
+    }
     let workspace_id = match crate::workspace::role_slot(cx.tx, role)? {
         Some(slot) => match crate::workspace::current_workspace(cx.tx, &slot)? {
             Some(ws) if ws.state == crate::workspace::WorkspaceState::Ready => Some(ws.id),
@@ -333,12 +339,8 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
         if task.paused {
             return Err(Error::rejected("paused", format!("task {} is paused", task.id)));
         }
-        let attempt = attempt
-            .as_ref()
-            .ok_or_else(|| Error::rejected("no_attempt", format!("task {} has no open attempt", task.id)))?;
-        // After `done` the work waits for its capture (harness-adapter.md §4.1).
-        if let Some(done) = &attempt.done_turn_id {
-            return Err(Error::rejected("awaiting_capture", format!("turn {done} reported done")));
+        if attempt.is_none() {
+            return Err(Error::rejected("no_attempt", format!("task {} has no open attempt", task.id)));
         }
     }
     let task_id = task.map(|t| t.id);
@@ -564,10 +566,10 @@ impl Command for MarkUnfinishedUnknown {
 
 // ---- user commands ----
 
-/// Starts a turn after one of the current attempt that did not end normally. The input starts
-/// with a note, followed by the queued messages (data-model.md §9.2 "继续"; harness-adapter.md
-/// §1.7). Only the user issues it; the runtime never continues on its own, quota failures
-/// included (data-model.md §8.5).
+/// Starts a turn after one of the current attempt that did not end normally, or after a capture
+/// the runtime stopped. The input starts with a note, followed by the queued messages
+/// (data-model.md §9.2 "继续"; harness-adapter.md §1.7, §4.1). Only the user issues it; the
+/// runtime never continues on its own, quota failures included (data-model.md §8.5).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Continue {
     pub request_id: String,
@@ -587,19 +589,36 @@ impl Command for Continue {
         // Only an abnormal turn of the current work can be continued (#11).
         let (task, attempt) = current_work(cx.tx, &self.role)?;
         let session = current_session(cx.tx, &self.role, task.as_ref().map(|t| t.id.as_str()))?;
+        let attempt_id = attempt.map(|a| a.id);
         let last = match &session {
             Some(session) => last_turn_in(cx.tx, &session.id)?,
             None => None,
         }
-        .filter(|last| is_abnormal(last) && last.attempt_id == attempt.map(|a| a.id))
-        .ok_or_else(|| Error::rejected("nothing_to_continue", format!("{} has no turn to continue", self.role)))?;
-        let why = match last.failure.as_ref().map(|f| f.kind) {
-            _ if last.outcome == Some(Outcome::Interrupted) => "被中断",
-            Some(FailureKind::Quota) => "因额度不足而失败",
-            _ => "失败",
-        };
-        let note = format!("上一个 turn {why}。请先检查当前工作目录的状态，再继续工作。");
-        register(cx, &self.role, Some(&note))
+        .filter(|last| is_abnormal(last) && last.attempt_id == attempt_id);
+        let stopped = crate::capture::stopped_capture(cx.tx, &self.role)?;
+        if last.is_none() && stopped.is_none() {
+            return Err(Error::rejected("nothing_to_continue", format!("{} has no turn to continue", self.role)));
+        }
+        let mut notes = Vec::new();
+        if let Some(last) = &last {
+            let why = match last.failure.as_ref().map(|f| f.kind) {
+                _ if last.outcome == Some(Outcome::Interrupted) => "被中断",
+                Some(FailureKind::Quota) => "因额度不足而失败",
+                _ => "失败",
+            };
+            notes.push(format!("上一个 turn {why}。请先检查当前工作目录的状态，再继续工作。"));
+        }
+        if let Some(stopped) = &stopped {
+            notes.push(crate::capture::stopped_note(stopped));
+            // The executor deals with the list, so the stopped done no longer counts.
+            if let Some(attempt_id) = &attempt_id {
+                cx.tx.execute(
+                    "UPDATE attempt SET done_turn_id = NULL WHERE id = ?1 AND done_turn_id = ?2",
+                    params![attempt_id, stopped.turn_id],
+                )?;
+            }
+        }
+        register(cx, &self.role, Some(&notes.join("\n\n")))
     }
 }
 

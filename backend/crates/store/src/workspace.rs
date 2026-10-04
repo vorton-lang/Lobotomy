@@ -57,6 +57,16 @@ pub enum Uncovered {
     InvalidName(String),
 }
 
+/// What a capture may leave out, by the user's decision on a capture that was stopped
+/// (harness-adapter.md §4.1). Left-out content stays on disk until the slot is materialized again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Leave {
+    /// Files not tracked yet. Changes to tracked files are still captured.
+    pub new_files: bool,
+    /// Nested repositories, special files and invalid names.
+    pub uncovered: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Captured {
     /// The directory's content as a commit on the baseline, pinned.
@@ -164,15 +174,15 @@ impl Workspace {
     /// §4.1). The writer must have stopped. With an existing pin, returns the pinned commit
     /// without looking at the directory again (#6 §2).
     ///
-    /// `discard_uncovered` captures what can be captured and leaves the rest out; it is the
-    /// user's decision, never a default.
+    /// `leave` captures what can be captured and leaves the rest out; it is the user's decision,
+    /// never a default.
     pub fn capture(
         &self,
         store: &Store,
         base: &str,
         scope: &Scope,
         guard: Option<&Guard>,
-        discard_uncovered: bool,
+        leave: Leave,
         pin: &str,
     ) -> Result<Captured> {
         if let Some(commit) = store.pinned(pin)? {
@@ -183,25 +193,31 @@ impl Workspace {
 
         let mut scan = Scan::default();
         scan.walk(RepoPath::root(), &self.path, matchers.ignores.clone(), &matchers, &tree_state)?;
-        if !scan.uncovered.is_empty() && !discard_uncovered {
+        if !scan.uncovered.is_empty() && !leave.uncovered {
             return Ok(Captured::Uncovered { paths: scan.uncovered });
         }
-        if let Some(guard) = guard {
+        if let Some(guard) = guard
+            && !leave.new_files
+        {
             let total_bytes: u64 = scan.new_files.iter().map(|f| f.size).sum();
             if scan.new_files.len() > guard.max_new_files || total_bytes > guard.max_new_bytes {
                 return Ok(Captured::Oversized { files: scan.new_files, total_bytes });
             }
         }
 
+        // Leaving new files out means tracking nothing new: changes to tracked files are kept.
+        let start_tracking: &dyn Matcher = if leave.new_files { &NothingMatcher } else { &EverythingMatcher };
         let options = SnapshotOptions {
             base_ignores: matchers.ignores.clone(),
             progress: None,
-            start_tracking_matcher: &EverythingMatcher,
+            start_tracking_matcher: start_tracking,
             force_tracking_matcher: &matchers.force,
             max_new_file_size: u64::MAX,
         };
         let (_, stats) = tree_state.snapshot(&options).block_on().map_err(Error::jj)?;
-        if let Some((path, reason)) = stats.untracked_paths.iter().next() {
+        if !leave.new_files
+            && let Some((path, reason)) = stats.untracked_paths.iter().next()
+        {
             // Everything matches the start-tracking matcher and there is no size limit, so jj
             // leaves nothing new untracked.
             let reason = match reason {
@@ -210,7 +226,7 @@ impl Workspace {
             };
             return Err(Error::Invalid(format!("{} stayed untracked: {reason}", path.as_internal_file_string())));
         }
-        if !stats.invalid_utf8_paths.is_empty() && !discard_uncovered {
+        if !stats.invalid_utf8_paths.is_empty() && !leave.uncovered {
             let paths = stats
                 .invalid_utf8_paths
                 .iter()

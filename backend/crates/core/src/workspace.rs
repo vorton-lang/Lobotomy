@@ -31,10 +31,12 @@ pub struct Workspace {
     pub target: String,
     /// git's HEAD in the directory: the baseline.
     pub head: String,
+    /// The task the slot was written for; `None` for a role without a task.
+    pub task_id: Option<String>,
     pub state: WorkspaceState,
 }
 
-const SELECT: &str = "SELECT id, name, generation, target, head, state FROM workspace";
+const SELECT: &str = "SELECT id, name, generation, target, head, task_id, state FROM workspace";
 
 fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Workspace, String)> {
     Ok((
@@ -44,9 +46,10 @@ fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Workspace, String)> {
             generation: r.get(2)?,
             target: r.get(3)?,
             head: r.get(4)?,
+            task_id: r.get(5)?,
             state: WorkspaceState::Ready,
         },
-        r.get(5)?,
+        r.get(6)?,
     ))
 }
 
@@ -86,51 +89,67 @@ pub fn role_slot(conn: &Connection, role: &str) -> Result<Option<String>> {
         .ok_or_else(|| Error::rejected("unknown_role", format!("no role {role}")))
 }
 
-/// Records that the slot must hold `target` with git's HEAD at `head`. The caller has made sure
-/// the slot's current content was captured (harness-adapter.md §3).
-pub(crate) fn plan(cx: &mut Cx<'_>, name: &str, target: &str, head: &str) -> Result<String> {
+/// Records that the slot must hold `target` with git's HEAD at `head`, for the work of `task_id`
+/// (`None`: a role without a task). The caller has made sure the slot's current content was
+/// captured (harness-adapter.md §3).
+pub(crate) fn plan(cx: &mut Cx<'_>, name: &str, target: &str, head: &str, task_id: Option<&str>) -> Result<String> {
     let id = match current_workspace(cx.tx, name)? {
         Some(ws) => {
             cx.tx.execute(
-                "UPDATE workspace SET target = ?2, head = ?3, state = 'materializing', ready_at = NULL WHERE id = ?1",
-                params![ws.id, target, head],
+                "UPDATE workspace SET target = ?2, head = ?3, task_id = ?4, state = 'materializing', ready_at = NULL
+                 WHERE id = ?1",
+                params![ws.id, target, head, task_id],
             )?;
             ws.id
         }
         None => {
             let id = new_id("ws");
             cx.tx.execute(
-                "INSERT INTO workspace (id, name, generation, target, head, state, created_at)
-                 VALUES (?1, ?2, 1, ?3, ?4, 'materializing', ?5)",
-                params![id, name, target, head, cx.now],
+                "INSERT INTO workspace (id, name, generation, target, head, task_id, state, created_at)
+                 VALUES (?1, ?2, 1, ?3, ?4, ?5, 'materializing', ?6)",
+                params![id, name, target, head, task_id, cx.now],
             )?;
             id
         }
     };
-    cx.emit("workspace.materializing", &id, json!({ "name": name, "target": target, "head": head }))?;
+    cx.emit("workspace.materializing", &id, json!({ "name": name, "target": target, "head": head, "task_id": task_id }))?;
     Ok(id)
 }
 
-/// Materializes a role's slot at the integration version when it has none, so that a role
-/// without a task can still take a turn.
+/// The slot follows the role's work: with a task it holds the attempt's code start, without one
+/// the integration version. When the role has no task and its slot holds something else (it was
+/// never written, or the last task was accepted or abandoned), the slot is planned at the
+/// integration version, once its content is captured (harness-adapter.md §3).
+///
+/// Changes made in turns without a task are captured but belong to no result; the next
+/// materialization drops them from the slot.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PrepareSlot {
+pub struct AlignIdleSlot {
     pub role: String,
 }
 
-impl Command for PrepareSlot {
-    const NAME: &'static str = "prepare_slot";
+impl Command for AlignIdleSlot {
+    const NAME: &'static str = "align_idle_slot";
     type Output = ();
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
         caller.require_runtime()?;
         let slot = role_slot(cx.tx, &self.role)?
             .ok_or_else(|| Error::rejected("no_slot", format!("{} has no slot", self.role)))?;
-        if current_workspace(cx.tx, &slot)?.is_some() {
-            return Err(Error::rejected("slot_exists", format!("slot {slot} exists")));
+        if let Some(task) = crate::task::occupant(cx.tx, &self.role)? {
+            return Err(Error::rejected("role_busy", format!("{} works on {task}", self.role)));
         }
         let project = require_project(cx.tx)?;
-        plan(cx, &slot, &project.integration, &project.integration)?;
+        if let Some(ws) = current_workspace(cx.tx, &slot)? {
+            if ws.task_id.is_none() && ws.target == project.integration && ws.head == project.integration {
+                return Err(Error::rejected("slot_aligned", format!("slot {slot} is at the integration version")));
+            }
+            if let Some(turn) = crate::turn::unfinished_turn(cx.tx, &self.role)? {
+                return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", self.role, turn.id)));
+            }
+            crate::capture::require_captured(cx.tx, &self.role)?;
+        }
+        plan(cx, &slot, &project.integration, &project.integration, None)?;
         Ok(())
     }
 }
@@ -181,9 +200,9 @@ impl Command for ReplaceWorkspace {
         cx.tx.execute("UPDATE workspace SET state = 'retired' WHERE id = ?1", [&old.id])?;
         let new = Workspace { id: new_id("ws"), generation: old.generation + 1, state: WorkspaceState::Materializing, ..old };
         cx.tx.execute(
-            "INSERT INTO workspace (id, name, generation, target, head, state, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'materializing', ?6)",
-            params![new.id, new.name, new.generation, new.target, new.head, cx.now],
+            "INSERT INTO workspace (id, name, generation, target, head, task_id, state, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'materializing', ?7)",
+            params![new.id, new.name, new.generation, new.target, new.head, new.task_id, cx.now],
         )?;
         cx.emit(
             "workspace.replaced",

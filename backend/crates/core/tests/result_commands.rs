@@ -2,8 +2,8 @@
 //! §5, §9.2).
 
 use lobotomy_core::capture::{
-    ApproveNewFiles, CaptureResult, CaptureState, DiscardUncovered, FinishCapture, NewFile, UncoveredPath, latest_capture,
-    pending_captures,
+    ApproveNewFiles, CaptureResult, CaptureState, DiscardUncaptured, FinishCapture, NewFile, UncoveredPath,
+    latest_capture, pending_captures,
 };
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, load_project};
 use lobotomy_core::report::{OrgReport, ReportStatus};
@@ -11,12 +11,14 @@ use lobotomy_core::task::{
     Abandon, CodeStart, CreateTask, Phase, Reopen, SendMessage, StartAttempt, load_task, occupant, open_attempt,
     queued_messages,
 };
-use lobotomy_core::turn::{EndTurn, Outcome, RegisterTurn, SessionIdentified, TurnRegistered, current_session};
+use lobotomy_core::turn::{
+    Continue, EndTurn, Outcome, RegisterTurn, SessionIdentified, TurnRegistered, current_session,
+};
 use lobotomy_core::verify::{
     Accept, CheckOutcome, FinishPreview, FinishVerification, PreviewResult, Reverify, RetryPreview, SendBack,
     StartVerification, VerificationState, latest_verification, next_preview, preview_stopped,
 };
-use lobotomy_core::workspace::{PrepareSlot, WorkspaceState, current_workspace};
+use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceState, current_workspace};
 use lobotomy_core::{Caller, Db};
 use serde_json::json;
 
@@ -242,25 +244,32 @@ fn a_late_verification_advances_nothing() {
     assert_eq!(db.read(|c| latest_verification(c, &task)).unwrap().unwrap().id, v);
 }
 
-#[test]
-fn an_oversized_done_goes_back_to_the_executor_and_the_attempt_goes_on() {
-    let db = db();
-    let task = create(&db, "c1");
-    start(&db, &task);
-    let t = register(&db);
-    report_done(&db, &t.turn_id);
-    end_turn(&db, &t.turn_id);
-    let capture = pending(&db);
+/// A done turn whose capture went over the guardrail.
+fn stopped_done(db: &Db) -> (String, String) {
+    let task = create(db, "c1");
+    start(db, &task);
+    let t = register(db);
+    report_done(db, &t.turn_id);
+    end_turn(db, &t.turn_id);
+    let capture = pending(db);
     let files = vec![NewFile { path: "venv/lib.py".into(), size: 10 }, NewFile { path: "venv/x.py".into(), size: 20 }];
-    finish_capture(&db, &capture, CaptureResult::Oversized { files, total_bytes: 30 });
+    finish_capture(db, &capture, CaptureResult::Oversized { files, total_bytes: 30 });
+    (task, capture)
+}
 
+#[test]
+fn a_stopped_capture_stops_the_role_until_the_user_decides() {
+    let db = db();
+    let (task, capture) = stopped_done(&db);
+    // Nothing goes back to the executor on its own, and no turn starts, whatever arrives.
+    assert!(db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty());
+    db.execute(&Caller::User, &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "在吗".into() })
+        .unwrap();
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() })), "capture_stopped");
     assert_eq!(phase(&db, &task), Phase::Executing);
-    let attempt = db.read(|c| open_attempt(c, &task)).unwrap().unwrap();
-    assert_eq!((attempt.seq, attempt.done_turn_id), (1, None));
-    let body = db.read(|c| queued_messages(c, ROLE)).unwrap().pop().unwrap().body;
-    assert!(body.contains("venv/lib.py") && body.contains(".gitignore"), "{body}");
 
-    // The user may keep the files while nothing has touched the slot since.
+    // The user keeps the files: the slot is captured again without the guardrail, and the done
+    // counts.
     db.execute(&Caller::User, &ApproveNewFiles { request_id: "k1".into(), capture_id: capture.clone() }).unwrap();
     let retried = db.read(|c| latest_capture(c, ROLE)).unwrap().unwrap();
     assert_eq!((retried.state, retried.options.ignore_guard), (CaptureState::Intent, true));
@@ -269,7 +278,34 @@ fn an_oversized_done_goes_back_to_the_executor_and_the_attempt_goes_on() {
 }
 
 #[test]
-fn approving_needs_the_latest_capture() {
+fn continuing_past_a_stopped_done_hands_the_list_to_the_executor() {
+    let db = db();
+    let (task, _) = stopped_done(&db);
+    let next = db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: ROLE.into() }).unwrap();
+    let input = db.read(|c| lobotomy_core::turn::load_turn(c, &next.turn_id)).unwrap().input;
+    assert!(input.contains("venv/lib.py") && input.contains("done 因此没有生效"), "{input}");
+    assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap().unwrap().done_turn_id, None, "the stopped done is void");
+
+    // The executor cleans up and reports done again.
+    report_done(&db, &next.turn_id);
+    end_turn(&db, &next.turn_id);
+    pin_captures(&db);
+    assert_eq!(phase(&db, &task), Phase::Verifying);
+}
+
+#[test]
+fn discarding_leaves_out_what_stopped_the_capture() {
+    let db = db();
+    let (task, capture) = stopped_done(&db);
+    db.execute(&Caller::User, &DiscardUncaptured { request_id: "d1".into(), capture_id: capture.clone() }).unwrap();
+    let retried = db.read(|c| latest_capture(c, ROLE)).unwrap().unwrap();
+    assert!(retried.options.leave_new_files && !retried.options.ignore_guard);
+    finish_capture(&db, &capture, CaptureResult::Pinned { commit: "without-venv".into() });
+    assert_eq!(phase(&db, &task), Phase::Verifying);
+}
+
+#[test]
+fn deciding_needs_the_latest_capture_and_no_running_turn() {
     let db = db();
     let task = create(&db, "c1");
     start(&db, &task);
@@ -277,14 +313,16 @@ fn approving_needs_the_latest_capture() {
     end_turn(&db, &t.turn_id);
     let first = pending(&db);
     finish_capture(&db, &first, CaptureResult::Oversized { files: vec![], total_bytes: 1 << 40 });
-    db.execute(&Caller::User, &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "继续".into() })
-        .unwrap();
-    let t2 = register(&db);
-    let approve = ApproveNewFiles { request_id: "k1".into(), capture_id: first.clone() };
+    let t2 = db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: ROLE.into() }).unwrap();
+    let approve = ApproveNewFiles { request_id: "a1".into(), capture_id: first.clone() };
     assert_eq!(rejection(db.execute(&Caller::User, &approve)), "turn_unfinished");
     end_turn(&db, &t2.turn_id);
     pin_captures(&db);
     assert_eq!(rejection(db.execute(&Caller::User, &approve)), "not_latest");
+    // The role runs normally again once its latest capture is pinned.
+    db.execute(&Caller::User, &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "好".into() })
+        .unwrap();
+    register(&db);
 }
 
 #[test]
@@ -303,10 +341,10 @@ fn a_slot_whose_last_capture_was_stopped_does_not_go_to_the_next_task() {
     let start_b = StartAttempt { task_id: b.clone(), code_start: None };
     assert_eq!(rejection(db.execute(&Caller::Runtime, &start_b)), "slot_uncaptured");
     // The user decides to leave the nested repository out; the slot is captured again.
-    db.execute(&Caller::User, &DiscardUncovered { request_id: "d1".into(), capture_id: capture.clone() }).unwrap();
+    db.execute(&Caller::User, &DiscardUncaptured { request_id: "d1".into(), capture_id: capture.clone() }).unwrap();
     assert_eq!(rejection(db.execute(&Caller::Runtime, &start_b)), "capture_pending");
     let retried = db.read(|c| latest_capture(c, ROLE)).unwrap().unwrap();
-    assert!(retried.options.discard_uncovered);
+    assert!(retried.options.leave_uncovered);
     finish_capture(&db, &capture, CaptureResult::Pinned { commit: "without-vendor".into() });
     start(&db, &b);
 }
@@ -327,17 +365,51 @@ fn a_reopened_task_starts_from_its_last_candidate_rebased() {
     assert!(brief.contains("冲突") && brief.contains("a.txt"), "{brief}");
 }
 
+fn align(db: &Db) -> lobotomy_core::Result<()> {
+    db.execute(&Caller::Runtime, &AlignIdleSlot { role: ROLE.into() })
+}
+
 #[test]
 fn a_role_without_a_task_gets_a_slot_at_the_integration_version() {
     let db = db();
     db.execute(&Caller::User, &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "在吗".into() })
         .unwrap();
     assert_eq!(rejection(db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() })), "slot_not_ready");
-    db.execute(&Caller::Runtime, &PrepareSlot { role: ROLE.into() }).unwrap();
+    align(&db).unwrap();
     let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
     assert_eq!((ws.target.as_str(), ws.head.as_str()), (BASE, BASE));
     ready_slot(&db);
+    assert_eq!(rejection(align(&db)), "slot_aligned");
     register(&db);
+}
+
+#[test]
+fn after_acceptance_the_idle_slot_follows_the_new_integration_version() {
+    let db = db();
+    let (task, _) = candidate(&db);
+    // While the task is open the slot belongs to it.
+    assert_eq!(rejection(align(&db)), "role_busy");
+    let v = verify(&db, &task, "published", vec![], vec![]);
+    accept(&db, "a1", &task, &v, BASE).unwrap();
+    align(&db).unwrap();
+    let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
+    assert_eq!((ws.state, ws.target.as_str(), ws.head.as_str()), (WorkspaceState::Materializing, "published", "published"));
+}
+
+#[test]
+fn after_abandoning_the_slot_is_reset_once_its_last_turn_is_captured() {
+    let db = db();
+    let task = create(&db, "c1");
+    start(&db, &task);
+    let t = register(&db);
+    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: task, reason: String::new() }).unwrap();
+    assert_eq!(rejection(align(&db)), "turn_unfinished");
+    end_turn(&db, &t.turn_id);
+    assert_eq!(rejection(align(&db)), "capture_pending");
+    pin_captures(&db);
+    align(&db).unwrap();
+    let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
+    assert_eq!((ws.target.as_str(), ws.head.as_str()), (BASE, BASE));
 }
 
 #[test]

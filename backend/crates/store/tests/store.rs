@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use lobotomy_store::repo::{self, Diverged};
-use lobotomy_store::{Captured, Guard, Identity, Scope, Store, Uncovered, Workspace};
+use lobotomy_store::{Captured, Guard, Identity, Leave, Scope, Store, Uncovered, Workspace};
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
@@ -56,7 +56,7 @@ fn scope() -> Scope {
 const GUARD: Guard = Guard { max_new_files: 100, max_new_bytes: 1 << 20 };
 
 fn capture(f: &Fixture, ws: &Workspace, base: &str, pin: &str) -> String {
-    match ws.capture(&f.store, base, &scope(), Some(&GUARD), false, pin).unwrap() {
+    match ws.capture(&f.store, base, &scope(), Some(&GUARD), Leave::default(), pin).unwrap() {
         Captured::Pinned { commit } => commit,
         other => panic!("not captured: {other:?}"),
     }
@@ -134,7 +134,7 @@ fn forced_paths_are_captured_despite_ignore_rules() {
     fs::write(slot.path.join(".gitignore"), "*\n").unwrap();
     fs::write(slot.path.join("src/new.rs"), "forced\n").unwrap();
     let forced = Scope { excluded: vec![], force_tracked: vec!["src".into()] };
-    let Captured::Pinned { commit } = slot.capture(&f.store, &f.head, &forced, Some(&GUARD), false, "cap_1").unwrap() else {
+    let Captured::Pinned { commit } = slot.capture(&f.store, &f.head, &forced, Some(&GUARD), Leave::default(), "cap_1").unwrap() else {
         panic!("not captured");
     };
     let check = f.workspace("verify");
@@ -151,7 +151,7 @@ fn the_guardrail_stops_before_anything_is_written() {
         fs::write(slot.path.join(format!("gen{i}.txt")), "x".repeat(10)).unwrap();
     }
     let guard = Guard { max_new_files: 2, max_new_bytes: 1 << 20 };
-    match slot.capture(&f.store, &f.head, &scope(), Some(&guard), false, "cap_1").unwrap() {
+    match slot.capture(&f.store, &f.head, &scope(), Some(&guard), Leave::default(), "cap_1").unwrap() {
         Captured::Oversized { files, total_bytes } => {
             assert_eq!(files.len(), 3);
             assert_eq!(total_bytes, 30);
@@ -159,6 +159,17 @@ fn the_guardrail_stops_before_anything_is_written() {
         other => panic!("expected oversized, got {other:?}"),
     }
     assert_eq!(f.store.pinned("cap_1").unwrap(), None);
+
+    // The user may leave the new files out: changes to tracked files are still captured.
+    fs::write(slot.path.join("a.txt"), "changed\n").unwrap();
+    let leave = Leave { new_files: true, ..Leave::default() };
+    let Captured::Pinned { commit } = slot.capture(&f.store, &f.head, &scope(), Some(&guard), leave, "cap_left").unwrap() else {
+        panic!("not captured");
+    };
+    let check = f.workspace("left");
+    check.materialize(&f.store, &commit, &f.head, "main", &scope()).unwrap();
+    assert_eq!(fs::read_to_string(check.path.join("a.txt")).unwrap(), "changed\n");
+    assert!(!check.path.join("gen0.txt").exists());
 
     // Once the files are ignored the next capture passes and leaves them out.
     fs::write(slot.path.join(".gitignore"), "target/\ngen*.txt\n").unwrap();
@@ -177,7 +188,7 @@ fn a_nested_repository_fails_closed() {
     fs::write(slot.path.join("vendor/lib/x.txt"), "x").unwrap();
     git(&slot.path.join("vendor/lib"), &["init", "--quiet"]);
 
-    match slot.capture(&f.store, &f.head, &scope(), Some(&GUARD), false, "cap_1").unwrap() {
+    match slot.capture(&f.store, &f.head, &scope(), Some(&GUARD), Leave::default(), "cap_1").unwrap() {
         Captured::Uncovered { paths } => assert_eq!(paths, vec![Uncovered::NestedRepo("vendor/lib".into())]),
         other => panic!("expected uncovered, got {other:?}"),
     }
@@ -196,7 +207,7 @@ fn the_user_may_discard_what_cannot_be_captured() {
     fs::create_dir_all(slot.path.join("vendor/lib")).unwrap();
     git(&slot.path.join("vendor/lib"), &["init", "--quiet"]);
     fs::write(slot.path.join("kept.txt"), "kept\n").unwrap();
-    let Captured::Pinned { commit } = slot.capture(&f.store, &f.head, &scope(), Some(&GUARD), true, "cap_1").unwrap() else {
+    let Captured::Pinned { commit } = slot.capture(&f.store, &f.head, &scope(), Some(&GUARD), Leave { uncovered: true, ..Leave::default() }, "cap_1").unwrap() else {
         panic!("not captured");
     };
     let check = f.workspace("verify");

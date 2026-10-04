@@ -617,7 +617,7 @@ impl Command for StartAttempt {
         cx.tx.execute("UPDATE task SET phase = 'executing', queue_pos = NULL WHERE id = ?1", [&task.id])?;
         bump_revision(cx, &task.id)?;
         if let Some(slot) = crate::workspace::role_slot(cx.tx, &task.executor)? {
-            crate::workspace::plan(cx, &slot, &start.commit, &start.base)?;
+            crate::workspace::plan(cx, &slot, &start.commit, &start.base, Some(&task.id))?;
         }
         let mut brief = brief(cx.tx, &task, seq)?;
         if !start.conflicts.is_empty() {

@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::*;
+use lobotomy_core::capture::stopped_capture;
 use lobotomy_core::id::now_ms;
+use lobotomyd::results::{failures, retry_failed};
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, current_config, load_project};
 use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, load_task, open_attempt};
 use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, TurnState};
@@ -94,10 +96,13 @@ async fn a_task_runs_from_done_to_the_users_repository() {
     })
     .await;
 
-    // The task closed; the queued message now reaches the idle role.
+    // The task closed; the queued message now reaches the idle role, whose slot followed the new
+    // integration version.
     phase(&db, &task, Phase::Done).await;
     let next = wait_for("the next turn", || last(&db).filter(|t| t.id != turn.id && t.state == TurnState::Ended)).await;
     assert_eq!(next.task_id, None);
+    assert_eq!(git(&slot(dir.path()), &["rev-parse", "HEAD"]), published);
+    assert_eq!(git(&slot(dir.path()), &["status", "--porcelain"]), "");
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
@@ -164,24 +169,50 @@ async fn a_check_that_runs_too_long_times_out() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
-/// A done whose capture is over the guardrail goes back to the executor with the list; nothing
-/// was captured and the attempt goes on (harness-adapter.md §4.1).
+/// A done whose capture is over the guardrail stops the role: nothing goes back to the executor
+/// on its own. The user continues, and the executor gets the list (harness-adapter.md §4.1).
 #[tokio::test]
-async fn an_oversized_done_goes_back_to_the_executor() {
+async fn an_oversized_done_stops_the_role_until_the_user_decides() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
     set_config(&db, |config| config.max_new_files = 0);
     let task = create_task(&db, "FAKE:done");
     let first = ended_turn(&db).await;
-    let next = wait_for("the turn with the notice", || {
-        last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)
-    })
-    .await;
+    wait_for("the capture to stop", || db.read(|c| stopped_capture(c, "Malkuth")).unwrap()).await;
+    settle(&backend).await;
+    assert_eq!(last(&db).unwrap().id, first.id, "no turn until the user decides");
+    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, Phase::Executing);
+
+    db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
+    backend.project.wake.notify_one();
+    let next = wait_for("the continued turn", || last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)).await;
     assert!(next.input.contains("work.txt") && next.input.contains("超过了项目设定的上限"), "{}", next.input);
-    let task_now = db.read(|c| load_task(c, &task)).unwrap();
-    assert_eq!(task_now.phase, Phase::Executing);
-    assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap().unwrap().seq, 1);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// Store work that fails stops with its reason and runs again only when the user retries
+/// (data-model.md §5).
+#[tokio::test]
+async fn a_failed_store_job_waits_for_the_users_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    // A file where the slot directory should be: writing the slot fails.
+    let slot_path = slot(dir.path());
+    std::fs::create_dir_all(slot_path.parent().unwrap()).unwrap();
+    std::fs::write(&slot_path, "in the way").unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    create_task(&db, "FAKE:done");
+    let failed = wait_for("the failure", || failures(&backend.project).into_iter().next()).await;
+    assert_eq!(failed.0, "slot:worker");
+
+    // The cause goes away; nothing happens until the user retries.
+    std::fs::remove_file(&slot_path).unwrap();
+    settle(&backend).await;
+    assert!(last(&db).is_none());
+    assert_eq!(retry_failed(&backend.project), 1);
+    let turn = ended_turn(&db).await;
+    assert_eq!(turn.outcome, Some(Outcome::Completed));
     backend.shutdown(Duration::from_secs(5)).await;
 }
 

@@ -27,6 +27,8 @@ pub struct Project {
     /// Store work in progress (materializing, capturing, verifying, previewing), by key, so the
     /// scheduler starts each job once.
     pub jobs: Mutex<HashSet<String>>,
+    /// Store work that failed, by key, with the reason. It waits for the user's retry.
+    pub failed: Mutex<HashMap<String, String>>,
     /// Wakes the scheduler after a change.
     pub wake: Notify,
 }
@@ -52,6 +54,7 @@ impl Project {
             mcp_base: Mutex::new(String::new()),
             running: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashSet::new()),
+            failed: Mutex::new(HashMap::new()),
             wake: Notify::new(),
         })
     }
