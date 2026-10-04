@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Context;
-use lobotomy_core::quota::{CheckOutcome, Domain, HostDb};
-use lobotomy_harness::codex;
+use anyhow::{Context, bail};
+use lobotomy_core::host::HostDb;
+use lobotomy_core::quota::{CheckOutcome, Domain};
 use lobotomy_harness::event::Event;
 use lobotomy_harness::process::{self, Spec};
+use lobotomy_harness::{HARNESSES, Permission, codex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use crate::capability;
@@ -104,6 +105,27 @@ impl Host {
         Ok(self.db.domain(harness)?.is_blocked())
     }
 
+    /// The harness's permission mode (harness-adapter.md §1.9): full access until the user
+    /// changes it. Each turn reads it, so a change applies from the next turn on.
+    pub fn permission(&self, harness: &str) -> anyhow::Result<Permission> {
+        match self.db.permission(harness)? {
+            None => Ok(Permission::default()),
+            Some(value) => Permission::parse(&value)
+                .with_context(|| format!("unknown permission mode {value:?} for {harness} in the host database")),
+        }
+    }
+
+    /// The user's choice; only the GUI makes it.
+    pub fn set_permission(&self, harness: &str, permission: &str) -> anyhow::Result<Permission> {
+        if !HARNESSES.contains(&harness) {
+            bail!("unknown harness {harness}");
+        }
+        let Some(parsed) = Permission::parse(permission) else { bail!("unknown permission mode {permission}") };
+        self.db.set_permission(harness, parsed.as_str(), lobotomy_core::id::now_ms())?;
+        tracing::info!(harness, permission, "permission mode changed");
+        Ok(parsed)
+    }
+
     /// The user's retry: one quota check for the domain, with the result recorded
     /// (data-model.md §8.4). The only way a blocked domain opens again. A check already in
     /// progress is not repeated; the current state is returned instead.
@@ -122,7 +144,7 @@ impl Host {
     async fn probe(&self, harness: &str) -> anyhow::Result<CheckOutcome> {
         anyhow::ensure!(harness == "codex", "no quota check for {harness} yet (Claude arrives with M3)");
         let (program, prefix) = self.harness.codex.split_first().context("no Codex program configured")?;
-        let args: Vec<String> = prefix.iter().cloned().chain(codex::probe_args()).collect();
+        let args: Vec<String> = prefix.iter().cloned().chain(codex::probe_args(self.permission(harness)?)).collect();
         let cwd = self.dir.join("probe");
         let gh = self.dir.join("gh-empty");
         for dir in [&cwd, &gh] {

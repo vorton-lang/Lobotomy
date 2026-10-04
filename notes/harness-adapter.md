@@ -10,7 +10,7 @@
 - **机械操作归运行时，判断归 Manager。** Manager 是 agent，会犯错；能用确定性规则完成的事不经过它，它只收到事件用于知情。
 - **只按正常方式调用官方 CLI。** 不依赖 Claude Agent SDK、Codex SDK / app-server 或 ACP adapter。订阅绑定官方入口，正常调用 CLI 与用户手动使用一致。CLI 做不到的，由 Lobotomy 的 MCP 服务提供。
 - **不依赖平台特有行为。** 能力取 Windows 与 Linux 的交集。先在 Windows 上开发运行，正式发版前集中修 Linux 问题。下文标为"Windows 实测"的细节属于平台适配层，不是设计依赖。
-- **不依赖 harness 的权限系统。** 所有 role 关闭审批。安全靠结构：成果采集可恢复、后端与开发副本分离、对外能力裁剪。
+- **不依赖 harness 的权限系统。** 默认关闭审批与沙箱。管理员不允许时，用户可以把这个 harness 改为自动审批。没有人工审批（1.9，**语义更新**）。安全靠结构：成果采集可恢复、后端与开发副本分离、对外能力裁剪。
 - **harness 自己的日志和会话文件不管理。**
 
 ## 1. Adapter
@@ -32,7 +32,7 @@
 Claude（消息经 stdin）
   首轮：claude -p --session-id <uuid> --output-format stream-json --verbose
           --include-partial-messages
-          --dangerously-skip-permissions --model <m>
+          <权限参数，见 1.9> --model <m>
           --append-system-prompt(-file) <role>
           --strict-mcp-config --mcp-config <cfg>
           --disallowed-tools <见 1.6>
@@ -40,9 +40,10 @@ Claude（消息经 stdin）
   fork：claude -p --resume <uuid> --fork-session ...
 
 Codex（消息经 stdin，位置参数为 -）
-  首轮：codex exec --json --dangerously-bypass-approvals-and-sandbox --ignore-rules
+  首轮：codex exec --json <权限参数，见 1.9> --ignore-rules
           --ignore-user-config --disable apps --disable computer_use --disable browser_use
-          -m <m> -c developer_instructions=... -c mcp_servers.lobotomy.url=... -
+          -m <m> -c developer_instructions=... -c mcp_servers.lobotomy.url=...
+          -c mcp_servers.lobotomy.default_tools_approval_mode="approve" -
           （session id 取自 thread.started 事件）
   续用：codex exec resume <id> --json ...（参数同上）
   fork：codex exec fork <id> ...
@@ -173,6 +174,41 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 - Ctrl+C 辅助进程是后端程序自身：`lobotomyd ctrl-c <pid>`。
 - 已知缺口：后端如果恰好在创建进程与加入 Job 之间崩溃，会留下一个挂起、从未运行的进程。这个窗口极短，暂不处理。
 - 测试：[backend/crates/harness/tests/process.rs](../backend/crates/harness/tests/process.rs)（挂起、存活检查、关闭 Job 结束孙进程），[backend/crates/lobotomyd/tests/backend.rs](../backend/crates/lobotomyd/tests/backend.rs)（经辅助进程中断）。
+
+### 1.9 权限模式
+
+**语义更新**（用户确认，2026-10-04）：原来所有 role 固定关闭审批与沙箱。#13 的测试环境中，管理员通过 Codex 的 requirements 不允许完全放开，Codex 一启动就退出。现在每个 harness 有一项权限设置。设置属于本机（data-model.md §10），所有项目共用。Codex 与 Claude 分开设置：同一个环境可能允许一个完全放开，而不允许另一个。
+
+| 模式 | 什么时候用 | Codex | Claude（M3，未实测） |
+|---|---|---|---|
+| 完全放开（默认） | 不审批，不用沙箱 | `--dangerously-bypass-approvals-and-sandbox` | `--dangerously-skip-permissions` |
+| 自动审批 | 管理员不允许完全放开 | `-c approval_policy="on-request" -c approvals_reviewer="auto_review" -c sandbox_mode="workspace-write"` | `--permission-mode auto --permission-prompts none` |
+
+- **没有人工审批。** Lobotomy 不把审批请求交给用户（hci-rationale.md）。`codex exec` 中没有人能回答审批请求，需要审批的操作当场被拒。turn 照常结束，但工作和报告都做不成（实测见下）。
+- **不继承用户自己的 Codex 配置。** `--ignore-user-config` 用于能力裁剪（1.6）。用户为交互使用设置的审批方式假定有人在场，不适用于 role。管理员的 requirements 不受 `--ignore-user-config` 影响，照常生效。
+- **Lobotomy 自己的 MCP 工具在任何模式下都免审批**：`-c mcp_servers.lobotomy.default_tools_approval_mode="approve"`。否则在完全放开以外的模式下，Codex 可能拒绝 `org_report`（#13 记录的 "MCP tool call requires approval, but approval policy is never"）。
+- **自动审批的代价**：沙箱默认断网，不能写工作目录以外的地方。超出沙箱的操作由 Codex 的自动审核决定，多花 token 和时间。
+- `--approve-for-me` 等于上表中的三项配置，但它只能放在 `exec` 之后、子命令之前；`codex exec resume` 不接受它（实测报 unexpected argument）。adapter 逐项传配置，首轮与续用的写法相同。
+- 每个 turn 启动时读取设置，改动从下一个 turn 生效。额度检查（data-model.md §8.4）用同一设置启动，环境拒绝 turn 时也同样拒绝检查。
+- **运行时不自动切换模式。** 被拒时：
+  - CLI 在 stdout 上没有任何输出就退出，在 stderr 写出原因。Codex 写的是："`approval_policy = "never"` cannot be used because requirements do not allow `sandbox_mode = "danger-full-access"`; …"。
+  - 运行时把这个 turn 记为 failed，失败种类为"权限模式不被允许"，并标明 harness 没有开始这个 turn。
+  - "等你决定"卡片说明原因，并提供「改用自动审批并继续」。用户点击后，运行时修改设置，然后继续。继续时原样重发那次的输入（data-model.md §3.4）。
+  - 在 ⚙ 设置中可以改回。
+
+**实测**（Codex CLI 0.159.2，Windows，2026-10-04）。每项一个一次性 turn（`--ephemeral`，不留会话），MCP 工具来自一个最小的本地服务：
+
+| 配置 | 操作 | 结果 |
+|---|---|---|
+| `on-request`，审核者为用户，只读沙箱 | 用命令写文件 | 命令被拒（"blocked by policy"），模型说明会话不允许提权。21 秒后 turn 正常结束，没有等待 |
+| `on-request`，审核者为用户，`workspace-write` | 调用 MCP 工具 | 被拒："MCP tool call requires approval, but approval policy is never"。加上 `default_tools_approval_mode="approve"` 后成功 |
+| `on-request`，`auto_review`，只读沙箱 | 用命令写文件 | 自动审核放行，文件写成，19 秒结束 |
+| `on-request`，`auto_review`，`workspace-write` | 调用 MCP 工具 | 成功，加不加 `approve` 都成功 |
+| 完全放开，加 `approve` | 调用 MCP 工具 | 成功 |
+
+受管环境本身没有在本机复现。被拒时的处理用假 CLI 验证，它输出上面那段 Codex 原文。
+
+**实现**：模式定义在 [harness/src/lib.rs](../backend/crates/harness/src/lib.rs)，Codex 的参数在 [codex.rs](../backend/crates/harness/src/codex.rs)，设置存在 `host.db` 的 `harness_setting` 表（[core/src/host.rs](../backend/crates/core/src/host.rs)）。
 
 ## 2. MCP 服务
 
@@ -403,3 +439,4 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 - Claude `--append-system-prompt-file`：帮助文本中出现过，尚未实测。
 - Codex 的长指令方案：`-p` profile 文件，还是 `model_instructions_file`。暂不需要：Windows 命令行上限约 32K 字符，role 指令预计远小于此，先用 `-c developer_instructions`；指令实际接近上限时再研究。
 - Codex `--thread-source` 的取值。
+- 权限模式（1.9）：自动审批在真实受管环境中的长期表现，例如联网安装依赖、写工作目录以外的缓存时自动审核的结果与开销；"没有任何输出就退出"能否作为"harness 没有开始这个 turn"的依据，Claude 与 Linux 上待确认；Claude 的 `--permission-mode auto` 与 `--permission-prompts none` 在 M3 实测。

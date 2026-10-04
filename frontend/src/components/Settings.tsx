@@ -1,10 +1,46 @@
-// Project configuration (data-model.md §9.1 project_config): check commands, capture scope and
-// the size guardrail. Each save is a new version; checks and captures name the version they used.
+// Settings: each harness's permission mode, a host setting that applies at once
+// (harness-adapter.md §1.9); then the project configuration (data-model.md §9.1 project_config):
+// check commands, capture scope and the size guardrail. Each save of the project configuration is
+// a new version; checks and captures name the version they used.
 
 import { useState } from 'react';
-import type { Check, ProjectConfig } from '../api/types';
-import { run, useStore } from '../store';
+import type { Check, HarnessView, Permission, ProjectConfig } from '../api/types';
+import { HARNESS_LABEL, PERMISSION_LABEL } from '../format';
+import { run, setPermission, useStore } from '../store';
 import { Modal } from './common';
+
+const permissionNote = (permission: Permission, harness: string) =>
+  permission === 'full'
+    ? '不审批，不用沙箱。默认。'
+    : `在沙箱里工作：默认不能联网，不能写工作目录以外的地方。超出沙箱的操作交给 ${harness} 的自动审核决定，多花一些 token 和时间。管理员不允许完全放开时用这一项。`;
+
+function Permissions({ harnesses }: { harnesses: HarnessView[] }) {
+  return (
+    <>
+      <h3>权限 · 本机所有项目共用</h3>
+      <p className="muted">
+        每个 harness 单独设置，下一个 turn 生效。没有人回答审批请求，所以没有"手动审批"这一项。
+      </p>
+      {harnesses.map((h) => {
+        const name = HARNESS_LABEL[h.harness] ?? h.harness;
+        return (
+          <fieldset key={h.harness} className="choices">
+            <legend>{name}</legend>
+            {(['full', 'auto_review'] as const).map((p) => (
+              <label key={p} className="choice">
+                <input type="radio" name={`permission-${h.harness}`} checked={h.permission === p} onChange={() => setPermission(h.harness, p)} />
+                <span>
+                  <strong>{PERMISSION_LABEL[p]}</strong>
+                  <span className="muted"> · {permissionNote(p, name)}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        );
+      })}
+    </>
+  );
+}
 
 const lines = (text: string) =>
   text
@@ -14,6 +50,7 @@ const lines = (text: string) =>
 
 export function Settings({ onClose }: { onClose: () => void }) {
   const current = useStore((s) => s.snapshot?.config);
+  const harnesses = useStore((s) => s.snapshot?.harnesses ?? []);
   const [checks, setChecks] = useState<Check[]>(current?.config.checks ?? []);
   const [excluded, setExcluded] = useState((current?.config.excluded ?? []).join('\n'));
   const [forced, setForced] = useState((current?.config.force_tracked ?? []).join('\n'));
@@ -35,7 +72,10 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const setCheck = (i: number, patch: Partial<Check>) => setChecks(checks.map((c, j) => (i === j ? { ...c, ...patch } : c)));
 
   return (
-    <Modal title={`项目设置 · 第 ${current.version} 版`} onClose={onClose} wide>
+    <Modal title="设置" onClose={onClose} wide>
+      <Permissions harnesses={harnesses} />
+
+      <h2 className="settings-group">项目设置 · 第 {current.version} 版</h2>
       <h3>检查命令</h3>
       <p className="muted">在验证现场按顺序运行，退出码为 0 算通过。第一条失败后不再运行其余的。</p>
       {checks.map((check, i) => (
@@ -80,7 +120,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
       <div className="actions">
         <button onClick={onClose}>取消</button>
         <button className="primary" onClick={save}>
-          保存为第 {current.version + 1} 版
+          保存项目设置为第 {current.version + 1} 版
         </button>
       </div>
     </Modal>

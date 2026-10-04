@@ -58,7 +58,7 @@ v1 中 role 与槽位一一固定，因此任务层不会出现"取得了 role�
 | 已登记 | 运行时在同一个事务中写入 turn 记录、MCP token 和绑定的输入消息。CLI 尚未启动 |
 | 运行中 | CLI 已启动。运行时记下 pid 与进程启动时间，用于在 pid 被复用时区分进程 |
 | 已结束 · completed | 运行时收到 harness 的 turn 结束事件（Claude `result`，Codex `turn.completed`），且 CLI 已退出 |
-| 已结束 · failed | harness 报告错误，例如额度被拒、登录失效、参数错误；或者 CLI 自行退出，没有 turn 结束事件，例如启动时拒绝参数、崩溃。失败信息取 harness 的错误事件；没有错误事件时，取退出状态与 stderr 的开头。按系统故障通知（manager-actions.md §6） |
+| 已结束 · failed | harness 报告错误，例如额度被拒、登录失效、参数错误；或者 CLI 自行退出，没有 turn 结束事件，例如启动时拒绝参数或权限模式、崩溃。失败信息取 harness 的错误事件；没有错误事件时，取退出状态与 stderr 的开头。环境不允许权限模式时，失败种类为"权限模式不被允许"（harness-adapter.md §1.9）。CLI 在 stdout 上没有任何输出时，记为"harness 没有开始这个 turn"（§3.4）。按系统故障通知（manager-actions.md §6） |
 | 已结束 · interrupted | CLI 已退出，没有 turn 结束事件，且是 Lobotomy 让它停下的：用户中断、停止组织，以及对账结果 |
 | unknown | 后端重启时，处于"已登记"或"运行中"的 turn 都改为 unknown |
 
@@ -102,6 +102,7 @@ CLI 自行退出原先记为 interrupted，现在记为 failed（**语义更新*
 - "已处理"不作为机器状态。模型是否按消息行事属于语义判断；机器能确认的只有"投递它的 turn 是否正常结束"。
 - 输入是否已进入 harness 自己的会话记录：Claude 额度被拒时，输入在报错前已写入（§8.3）；其他中断时刻仍需实测（harness-adapter.md §6）。
 - **所在 turn 未正常结束时，消息不自动重投。** resume 接续的是原来的 native session，其记录中可能已有这条消息；自动重投可能造成重复。GUI 把这些消息标为"所在 turn 未正常结束"，由用户决定继续还是重发。
+- **harness 没有开始的 turn，继续时原样重发**（**语义更新**，2026-10-04）。CLI 在 stdout 上没有任何输出就退出时，例如启动时拒绝参数或权限模式，输入没有进入任何会话。原来的"继续"只发一段"上一个 turn 失败"的说明，那次的输入因此丢失：受管环境中第一个 turn 被拒时，执行者从没见过任务说明。现在用户选择继续时，运行时把那次的输入原样作为新 turn 的输入，不加说明；绑定的消息改绑到新 turn，投递状态清空。这不会造成重复，因为 harness 从没收到过这些内容。
 - 因额度失败的 turn 如何处理，见 §8.5。
 
 ## 4. 任务流（M1）
@@ -387,7 +388,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | 重开 | 任务已关闭 | 决定、任务排队、新 attempt 的代码起点（§4.6） | — |
 | 暂停、恢复 | — | 暂停标记 | — |
 | 调整队列 | 任务在排队 | 队列顺序 | — |
-| 继续 | 当前 attempt 的最后一个 turn 为 interrupted 或 failed（§4.1），或 role 最近一次采集被挡下（harness-adapter.md §4.1） | 登记 turn：继续说明加排队的消息。采集被挡下时，说明中附上清单；被挡下的 `done` 作废 | 启动 CLI |
+| 继续 | 当前 attempt 的最后一个 turn 为 interrupted 或 failed（§4.1），或 role 最近一次采集被挡下（harness-adapter.md §4.1） | 登记 turn：继续说明加排队的消息。采集被挡下时，说明中附上清单；被挡下的 `done` 作废。上一个 turn 没有被 harness 开始时，不加说明，原样重发它的输入并改绑它的消息（§3.4） | 启动 CLI |
 | 新建 native session | role 没有未结束的 turn | native session 记录 | — |
 | 终止残留进程 | turn 为 unknown 且进程仍在运行 | 终止意图 | 终止进程，之后按 §3.3 对账 |
 | 丢弃未能采集的内容 | 采集被挡下（超过体积护栏或有未覆盖的内容）；是 role 最近一次采集；role 没有未结束的 turn | 决定；采集回到意图 | 重新采集：超过体积护栏时不要新增的文件，有未覆盖的内容时跳过它们，其余照常采集。之后槽位可以复用 |
@@ -444,10 +445,11 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 - **跨项目共享的状态放在项目外层**，v1 也一样：
   - 额度域：按"harness × 账户"划分，多个项目共用同一账户时额度是共享的（§8）；
   - CLI 二进制的探测与版本记录；
+  - 每个 harness 的权限模式：限制来自本机环境，不来自项目（harness-adapter.md §1.9）；
   - 系统通知的投递；
   - 后端的监听端口与 GUI 连接。
 - 多项目时，role（含 Manager）不跨项目共享，每个项目一套（用户确认，2026-10-04）。role 的 native session、Thread、槽位都属于项目实例。
-- **实现**（2026-10-04）：外层是 `Host` 对象，项目实例持有它的引用。外层状态存在独立的 `host.db` 中，目录默认为 `%LOCALAPPDATA%\Lobotomy`（Linux 为 `$XDG_STATE_HOME/lobotomy` 或 `~/.local/state/lobotomy`），可用 `--host-dir` 指定。目前存放额度域与 CLI 配置。"同一额度域同时最多一次检查"目前在进程内保证，多实例时再改为跨进程。
+- **实现**（2026-10-04）：外层是 `Host` 对象，项目实例持有它的引用。外层状态存在独立的 `host.db` 中，目录默认为 `%LOCALAPPDATA%\Lobotomy`（Linux 为 `$XDG_STATE_HOME/lobotomy` 或 `~/.local/state/lobotomy`），可用 `--host-dir` 指定。目前存放额度域、每个 harness 的权限模式（harness-adapter.md §1.9）与 CLI 配置。"同一额度域同时最多一次检查"目前在进程内保证，多实例时再改为跨进程。
 
 ## 11. 未定
 

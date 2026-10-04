@@ -4,8 +4,9 @@
 //!   `{id, error: {code, message}}`. Commands carry the GUI's request id as their idempotency
 //!   key, so a repeated request does nothing twice.
 //! - The server pushes what changed, not the content: `{type: "events", events}` with the global
-//!   event log, `{type: "live", live}` with items of running turns, `{type: "tick"}` every 15
-//!   seconds, and `{type: "resync"}` when the client fell behind and must take a new snapshot.
+//!   event log, `{type: "live", live}` with items of running turns, `{type: "host"}` when a host
+//!   setting changed, `{type: "tick"}` every 15 seconds, and `{type: "resync"}` when the client
+//!   fell behind and must take a new snapshot.
 //! - A connection needs the host's GUI token, and `Host` and `Origin` must be local.
 
 use std::collections::{BTreeSet, HashMap};
@@ -295,7 +296,15 @@ pub struct Snapshot {
     /// What waits for the user ("等你决定", frontend.md §2).
     attention: Vec<Attention>,
     quota: Vec<Domain>,
+    /// Host settings of each harness Lobotomy runs, shared by all projects.
+    harnesses: Vec<HarnessView>,
     live: HashMap<String, LiveTurn>,
+}
+
+#[derive(Serialize)]
+struct HarnessView {
+    harness: &'static str,
+    permission: &'static str,
 }
 
 #[derive(Serialize)]
@@ -552,6 +561,10 @@ pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
     if let Some(reason) = view.preview_stopped {
         attention.push(Attention::PreviewStopped { reason });
     }
+    let harnesses = lobotomy_harness::HARNESSES
+        .iter()
+        .map(|&harness| Ok(HarnessView { harness, permission: project.host.permission(harness)?.as_str() }))
+        .collect::<anyhow::Result<_>>()?;
     let live = project.live.lock().unwrap().clone();
     Ok(Snapshot {
         seq: view.seq,
@@ -561,6 +574,7 @@ pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
         tasks: view.tasks,
         attention,
         quota,
+        harnesses,
         live,
     })
 }
@@ -927,6 +941,12 @@ struct HarnessParams {
     harness: String,
 }
 
+#[derive(Deserialize)]
+struct PermissionParams {
+    harness: String,
+    permission: String,
+}
+
 /// The user's commands (data-model.md §9.2) and the runtime actions the GUI may trigger.
 async fn command(project: &Arc<Project>, name: &str, args: Value) -> anyhow::Result<Value> {
     macro_rules! user_commands {
@@ -977,6 +997,14 @@ async fn command(project: &Arc<Project>, name: &str, args: Value) -> anyhow::Res
         "quota_retry" => {
             let HarnessParams { harness } = serde_json::from_value(args)?;
             Ok(serde_json::to_value(project.host.retry(&harness).await?)?)
+        }
+        // A host setting, not a project command: it has no event, so the windows are told to
+        // take a new snapshot (harness-adapter.md §1.9).
+        "set_permission" => {
+            let PermissionParams { harness, permission } = serde_json::from_value(args)?;
+            let set = project.host.set_permission(&harness, &permission)?;
+            let _ = project.gui_push.send(json!({ "type": "host" }).to_string().into());
+            Ok(json!({ "harness": harness, "permission": set.as_str() }))
         }
         "retry_failed" => Ok(json!({ "retried": results::retry_failed(project) })),
         "shutdown" => {

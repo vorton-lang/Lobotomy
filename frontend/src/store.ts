@@ -4,7 +4,7 @@
 import { create } from 'zustand';
 import { Connection, RequestFailed, type Status } from './api/connection';
 import { findBackend } from './bridge';
-import type { CommandRow, Item, LiveTurn, Message, Push, SearchMatch, Snapshot, TaskDetail, ThreadPage, Turn } from './api/types';
+import type { CommandRow, Item, LiveTurn, Message, Permission, Push, SearchMatch, Snapshot, TaskDetail, ThreadPage, Turn } from './api/types';
 
 export interface ThreadState {
   role: string;
@@ -121,6 +121,14 @@ export async function act<T = unknown>(name: string, args: Record<string, unknow
     toast(e instanceof RequestFailed ? `${e.remote.message}` : String(e));
     return undefined;
   }
+}
+
+/**
+ * Changes one harness's permission mode, a host setting (harness-adapter.md §1.9). Every window
+ * takes a new snapshot when the backend says so.
+ */
+export function setPermission(harness: string, permission: Permission) {
+  return act('set_permission', { harness, permission });
 }
 
 async function reloadAll() {
@@ -288,6 +296,10 @@ function onPush(push: Push) {
       break;
     case 'live':
       useStore.setState({ live: push.live });
+      break;
+    // A host setting changed; it has no event of its own.
+    case 'host':
+      refreshSnapshot();
       break;
     case 'resync':
       void reloadAll();

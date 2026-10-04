@@ -5,6 +5,9 @@
 //   FAKE:done   writes work.txt, reports done, completes the turn; with FAKE:text=<word> the
 //               file holds that word instead of "hi"; with FAKE:nowrite it writes nothing
 //   FAKE:wait=<ms>  waits that long before anything else, so a message can arrive meanwhile
+//   FAKE:managed  acts as a Codex whose administrator does not allow full access: given
+//               --dangerously-bypass-approvals-and-sandbox, it exits at start with Codex's error
+//               on stderr and nothing on stdout; otherwise the other modes go on
 //   FAKE:longcmd  emits a command that writes a file with a heredoc of 405 lines (#14)
 //   FAKE:fail   reports a failed turn
 //   FAKE:sleep  starts a turn and waits; Ctrl+C ends it without a turn end event
@@ -46,6 +49,12 @@ if (flags.has('--fake-start-error')) {
 const emit = event => process.stdout.write(JSON.stringify(event) + '\n');
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
+
+if (input.includes('FAKE:managed') && args.includes('--dangerously-bypass-approvals-and-sandbox')) {
+  // Codex 0.159.2's words (#13).
+  process.stderr.write('Error: `approval_policy = "never"` cannot be used because requirements do not allow `sandbox_mode = "danger-full-access"`; Codex would fall back to read-only permissions with approvals disabled. Choose an `approval_policy` based on what you need, such as `on-request`, or choose an allowed sandbox mode.\n');
+  process.exit(1);
+}
 
 if (flags.has('--fake-stderr-flood')) await new Promise(r => process.stderr.write('x'.repeat(4 << 20), r));
 if (flags.has('--fake-hang')) await new Promise(r => setTimeout(r, 600_000));

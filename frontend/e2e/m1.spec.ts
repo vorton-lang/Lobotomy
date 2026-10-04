@@ -54,11 +54,11 @@ test('a task goes from creation to the user repository', async ({ page }) => {
 test('an open task panel follows the candidate through a send-back', async ({ page }) => {
   await open(page);
   // A slow check keeps each candidate in verification long enough to look at it there.
-  await page.getByRole('button', { name: '项目设置' }).click();
-  const settings = page.getByRole('dialog', { name: /项目设置/ });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
   await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
   await settings.getByLabel('检查命令').fill('node -e "setTimeout(() => {}, 6000)"');
-  await settings.getByRole('button', { name: /保存为/ }).click();
+  await settings.getByRole('button', { name: /保存项目设置为/ }).click();
   await expect(settings).toBeHidden();
 
   await createTask(page, '改 work.txt', 'FAKE:done FAKE:text=first');
@@ -103,6 +103,38 @@ test('a failed turn waits for the user to continue', async ({ page }) => {
   await expect(panel.locator('.now')).toHaveText('第 1 轮执行中，还没有交出候选成果。');
   await panel.getByRole('button', { name: '放弃' }).click();
   await expect(stalled).toBeHidden();
+});
+
+// A Codex whose administrator does not allow full access refuses to start. One click switches
+// Codex to auto review and sends the brief again; the setting stays until the user changes it
+// back (harness-adapter.md §1.9).
+test('a managed Codex goes on after switching to auto review', async ({ page }) => {
+  await open(page);
+  await createTask(page, '受管环境的任务', 'FAKE:managed FAKE:done');
+  const card = page.locator('.attention .card').filter({ hasText: '没能启动' });
+  await expect(card).toContainText('不允许 Codex 以「完全放开」运行');
+  await expect(card).toContainText('继续时会原样重新发送');
+  await expect(page.locator('.turn-divider').filter({ hasText: '没能启动：权限模式不被允许' })).toBeVisible();
+  await card.getByRole('button', { name: '改用自动审批并继续' }).click();
+  await expect(card).toBeHidden();
+
+  const accept = page.locator('.attention .card').filter({ hasText: '受管环境的任务' });
+  await expect(accept).toContainText('等你验收');
+  await expect(page.locator('.report.done').last()).toContainText('写了 work.txt');
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  const codex = settings.getByRole('group', { name: 'Codex' });
+  await expect(codex.getByRole('radio', { name: /^自动审批/ })).toBeChecked();
+  // The radio shows the backend's setting, which comes back with the next snapshot.
+  await codex.getByRole('radio', { name: /^完全放开/ }).click();
+  await expect(codex.getByRole('radio', { name: /^完全放开/ })).toBeChecked();
+  await settings.getByRole('button', { name: '关闭' }).click();
+
+  await accept.getByRole('button', { name: '查看并验收' }).click();
+  const panel = page.getByRole('dialog', { name: '受管环境的任务' });
+  await panel.getByRole('button', { name: '验收', exact: true }).click();
+  await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
 // A message sent while the executor's turn finishes the task never reaches the executor. It

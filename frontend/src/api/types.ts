@@ -28,9 +28,21 @@ export interface ProjectConfig {
 }
 
 export interface Failure {
-  kind: 'quota' | 'other';
+  /** `permission`: the environment does not allow the harness's permission mode. */
+  kind: 'quota' | 'permission' | 'other';
   message: string;
   resets_at: number | null;
+  /** The CLI wrote nothing on stdout: the turn never began, and continuing sends its input again. */
+  unstarted?: boolean;
+}
+
+/** What a role's CLI may do without asking; there is no mode that asks the user. */
+export type Permission = 'full' | 'auto_review';
+
+/** A harness's host settings, shared by all projects. */
+export interface HarnessView {
+  harness: string;
+  permission: Permission;
 }
 
 export interface Turn {
@@ -186,6 +198,7 @@ export interface Snapshot {
   tasks: Task[];
   attention: Attention[];
   quota: Domain[];
+  harnesses: HarnessView[];
   live: Record<string, LiveTurn>;
 }
 
@@ -295,5 +308,6 @@ export type Push =
   | { type: 'events'; events: { seq: number; kind: string; entity: string; payload: Record<string, unknown> }[] }
   | { type: 'live'; live: Record<string, LiveTurn> }
   | { type: 'thread'; role: string; seq: number }
+  | { type: 'host' }
   | { type: 'tick' }
   | { type: 'resync' };

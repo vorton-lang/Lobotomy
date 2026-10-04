@@ -80,12 +80,24 @@ pub struct Failure {
     pub message: String,
     /// When the quota resets, in Unix milliseconds, if the harness said so.
     pub resets_at: Option<i64>,
+    /// The CLI exited without writing anything on stdout: the harness never began the turn, and
+    /// its input reached no session. Continuing sends the input again (data-model.md §3.4).
+    #[serde(default)]
+    pub unstarted: bool,
+}
+
+impl Failure {
+    pub fn new(kind: FailureKind, message: impl Into<String>) -> Self {
+        Self { kind, message: message.into(), resets_at: None, unstarted: false }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
     Quota,
+    /// The environment does not allow the harness's permission mode (harness-adapter.md §1.9).
+    Permission,
     Other,
 }
 
@@ -352,10 +364,19 @@ pub struct TurnRegistered {
     pub token: String,
 }
 
+/// What the continue command adds to the turn it registers (data-model.md §9.2 "继续").
+struct Continuation<'a> {
+    /// Opens the input.
+    note: Option<String>,
+    /// A failed turn the harness never began: its input goes again, after the note, and its
+    /// messages move to the new turn (data-model.md §3.4).
+    resend: Option<&'a Turn>,
+}
+
 /// Registers a turn for the role and binds all its queued messages (data-model.md §3.4,
-/// §9.2 "登记 turn"). `continue_note` comes from the continue command, which may follow a turn
-/// that did not end normally; the note opens the input, before the queued messages.
-fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<TurnRegistered> {
+/// §9.2 "登记 turn"). `continuation` comes from the continue command, which may follow a turn
+/// that did not end normally; what it adds comes before the queued messages.
+fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>) -> Result<TurnRegistered> {
     if let Some(running) = unfinished_turn(cx.tx, role)? {
         return Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", running.id)));
     }
@@ -363,7 +384,7 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
     // in a slot that holds its target (harness-adapter.md §3, §4.1). A capture the runtime
     // stopped stops the role until the user decides; continuing is one of the choices.
     crate::capture::require_no_pending_capture(cx.tx, role)?;
-    if continue_note.is_none()
+    if continuation.is_none()
         && let Some(stopped) = crate::capture::stopped_capture(cx.tx, role)?
     {
         return Err(Error::rejected("capture_stopped", format!("capture {} of {role} was stopped", stopped.id)));
@@ -399,7 +420,7 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
     // (harness-adapter.md §1.7). A turn of an attempt that has ended does not hold: the capture or
     // the user has already moved the work on (#11).
     if let Some(last) = last_turn_in(cx.tx, &session.id)?
-        && continue_note.is_none()
+        && continuation.is_none()
         && is_abnormal(&last)
         && last.attempt_id == attempt_id
     {
@@ -423,14 +444,21 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
     }
 
     let messages = queued_messages(cx.tx, role)?;
-    let input = match (continue_note, messages.is_empty()) {
-        (None, true) => {
-            return Err(Error::rejected("nothing_to_deliver", format!("{role} has no queued messages")));
-        }
-        (None, false) => compose_input(&messages),
-        (Some(note), true) => format!("【来自 Lobotomy】\n{note}"),
-        (Some(note), false) => format!("【来自 Lobotomy】\n{note}\n\n{}", compose_input(&messages)),
-    };
+    let (note, resend) = continuation.map_or((None, None), |c| (c.note, c.resend));
+    let mut parts = Vec::new();
+    if let Some(note) = note {
+        parts.push(format!("【来自 Lobotomy】\n{note}"));
+    }
+    if let Some(turn) = resend {
+        parts.push(turn.input.clone());
+    }
+    if !messages.is_empty() {
+        parts.push(compose_input(&messages));
+    }
+    if parts.is_empty() {
+        return Err(Error::rejected("nothing_to_deliver", format!("{role} has no queued messages")));
+    }
+    let input = parts.join("\n\n");
     let turn_id = new_id("turn");
     let token = new_id("tok");
     cx.tx.execute(
@@ -439,11 +467,25 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'registered', ?8, ?9)",
         params![turn_id, role, session.id, task_id, attempt_id, token, input, cx.now, workspace_id],
     )?;
+    let mut ids: Vec<String> = Vec::new();
+    if let Some(turn) = resend {
+        let mut stmt = cx.tx.prepare("SELECT id FROM message WHERE turn_id = ?1 ORDER BY seq")?;
+        ids = stmt.query_map([&turn.id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        cx.tx.execute(
+            "UPDATE message SET turn_id = ?2, delivered_at = NULL WHERE turn_id = ?1",
+            params![turn.id, turn_id],
+        )?;
+    }
     for m in &messages {
         cx.tx.execute("UPDATE message SET state = 'bound', turn_id = ?2 WHERE id = ?1", params![m.id, turn_id])?;
     }
-    let ids: Vec<&str> = messages.iter().map(|m| m.id.as_str()).collect();
-    cx.emit("turn.registered", &turn_id, json!({ "role": role, "task_id": task_id, "messages": ids }))?;
+    ids.extend(messages.iter().map(|m| m.id.clone()));
+    let resent = resend.map(|t| t.id.as_str());
+    cx.emit(
+        "turn.registered",
+        &turn_id,
+        json!({ "role": role, "task_id": task_id, "messages": ids, "resent": resent }),
+    )?;
     Ok(TurnRegistered { turn_id, token })
 }
 
@@ -613,8 +655,9 @@ impl Command for MarkUnfinishedUnknown {
 
 /// Starts a turn after one of the current attempt that did not end normally, or after a capture
 /// the runtime stopped. The input starts with a note, followed by the queued messages
-/// (data-model.md §9.2 "继续"; harness-adapter.md §1.7, §4.1). Only the user issues it; the
-/// runtime never continues on its own, quota failures included (data-model.md §8.5).
+/// (data-model.md §9.2 "继续"; harness-adapter.md §1.7, §4.1). After a turn the harness never
+/// began, its input goes again instead of the note (data-model.md §3.4). Only the user issues it;
+/// the runtime never continues on its own, quota failures included (data-model.md §8.5).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Continue {
     pub request_id: String,
@@ -644,8 +687,13 @@ impl Command for Continue {
         if last.is_none() && stopped.is_none() {
             return Err(Error::rejected("nothing_to_continue", format!("{} has no turn to continue", self.role)));
         }
+        // A turn the harness never began changed nothing and told the role nothing: its input
+        // goes again as it was, with no note about it.
+        let resend = last.as_ref().filter(|last| last.failure.as_ref().is_some_and(|f| f.unstarted));
         let mut notes = Vec::new();
-        if let Some(last) = &last {
+        if let Some(last) = &last
+            && resend.is_none()
+        {
             let why = match last.failure.as_ref().map(|f| f.kind) {
                 _ if last.outcome == Some(Outcome::Interrupted) => "被中断",
                 Some(FailureKind::Quota) => "因额度不足而失败",
@@ -663,7 +711,8 @@ impl Command for Continue {
                 )?;
             }
         }
-        register(cx, &self.role, Some(&notes.join("\n\n")))
+        let note = (!notes.is_empty()).then(|| notes.join("\n\n"));
+        register(cx, &self.role, Some(Continuation { note, resend }))
     }
 }
 

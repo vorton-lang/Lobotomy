@@ -204,6 +204,30 @@ async fn a_failed_turn_waits_in_attention_until_the_user_continues() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// Each harness's permission mode is a host setting the GUI shows and changes; there is no mode
+/// that asks the user (harness-adapter.md §1.9).
+#[tokio::test]
+async fn the_gui_sets_each_harness_permission_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let mut gui = Client::connect(&backend).await;
+    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
+    assert_eq!(snapshot["harnesses"], json!([{ "harness": "codex", "permission": "full" }]));
+
+    let set = json!({ "harness": "codex", "permission": "auto_review" });
+    assert_eq!(gui.command("set_permission", set.clone()).await.unwrap(), set);
+    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
+    assert_eq!(snapshot["harnesses"][0]["permission"], "auto_review");
+    assert_eq!(backend.project.host.permission("codex").unwrap(), lobotomy_harness::Permission::AutoReview);
+
+    for wrong in
+        [json!({ "harness": "codex", "permission": "manual" }), json!({ "harness": "nope", "permission": "full" })]
+    {
+        assert!(gui.command("set_permission", wrong.clone()).await.is_err(), "{wrong}");
+    }
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// A turn that ends without done or a question leaves the task to the user, with the refused
 /// report as the reason when there is one (#13).
 #[tokio::test]

@@ -1,6 +1,6 @@
 // Labels and pure transformations for display.
 
-import type { BlobRef, Item, LiveItem, LiveTurn, Message, Phase, TaskDetail, Turn } from './api/types';
+import type { BlobRef, Item, LiveItem, LiveTurn, Message, Permission, Phase, TaskDetail, Turn } from './api/types';
 import type { ThreadState } from './store';
 
 export const PHASE_LABEL: Record<Phase, string> = {
@@ -77,8 +77,14 @@ export function turnOutcome(turn: Turn): string {
   if (turn.state === 'unknown') return '状态未知';
   if (turn.outcome === 'completed') return 'turn 正常结束';
   if (turn.outcome === 'interrupted') return '被中断';
-  return turn.failure?.kind === 'quota' ? '额度不足' : '失败';
+  if (turn.failure?.kind === 'quota') return '额度不足';
+  if (turn.failure?.kind === 'permission') return '没能启动：权限模式不被允许';
+  return turn.failure?.unstarted ? '没能启动' : '失败';
 }
+
+export const HARNESS_LABEL: Record<string, string> = { codex: 'Codex', claude: 'Claude' };
+
+export const PERMISSION_LABEL: Record<Permission, string> = { full: '完全放开', auto_review: '自动审批' };
 
 /**
  * The note a continue put in front of the turn's input, without the queued messages after it;

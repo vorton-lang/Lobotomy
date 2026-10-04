@@ -61,11 +61,7 @@ pub fn launch(project: &Arc<Project>, turn_id: String) {
             let end = EndTurn {
                 turn_id: turn_id.clone(),
                 outcome: Outcome::Failed,
-                failure: Some(Failure {
-                    kind: FailureKind::Other,
-                    message: format!("运行时出错：{e:#}"),
-                    resets_at: None,
-                }),
+                failure: Some(Failure::new(FailureKind::Other, format!("运行时出错：{e:#}"))),
             };
             if let Err(e) = runtime(&project, end).await {
                 tracing::error!(turn_id, error = format!("{e:#}"), "could not end the turn");
@@ -96,19 +92,20 @@ fn instructions(role: &Role) -> String {
 /// What the runner saw in the CLI's output.
 #[derive(Default)]
 struct Observed {
+    /// Any line on stdout. Codex writes `thread.started` first, before it takes the input.
+    output: bool,
     completed: bool,
     failed: Option<String>,
     last_error: Option<String>,
     unparsed: bool,
 }
 
-async fn end(
-    project: &Arc<Project>,
-    turn_id: &str,
-    outcome: Outcome,
-    failure: Option<(FailureKind, String)>,
-) -> anyhow::Result<()> {
-    let failure = failure.map(|(kind, message)| Failure { kind, message, resets_at: None });
+/// A failure before the CLI wrote anything: its input reached no session.
+fn unstarted(kind: FailureKind, message: String) -> Option<Failure> {
+    Some(Failure { unstarted: true, ..Failure::new(kind, message) })
+}
+
+async fn end(project: &Arc<Project>, turn_id: &str, outcome: Outcome, failure: Option<Failure>) -> anyhow::Result<()> {
     let quota = failure.clone().filter(|f| f.kind == FailureKind::Quota);
     runtime(project, EndTurn { turn_id: turn_id.to_owned(), outcome, failure }).await?;
     // A quota rejection blocks the whole domain, not just this role (data-model.md §8.3).
@@ -129,7 +126,7 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let role = db(project, move |db| db.read(|c| load_role(c, &role_name))).await?;
     if role.harness != "codex" {
         let message = format!("{} 使用 {}，M1 只支持 Codex", role.name, role.harness);
-        return end(project, turn_id, Outcome::Failed, Some((FailureKind::Other, message))).await;
+        return end(project, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
     }
 
     // The slot was ready when the turn was registered (harness-adapter.md §3).
@@ -144,6 +141,7 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
         resume: turn.native_id.clone(),
         model: role.model.clone(),
         reasoning_effort: project.host.harness.codex_reasoning_effort.clone(),
+        permission: project.host.permission("codex")?,
         developer_instructions: instructions(&role),
         mcp_url: project.mcp_url(&turn.token),
     };
@@ -156,7 +154,7 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
         Ok(spawned) => spawned,
         Err(e) => {
             let message = format!("无法启动 Codex（{program}）：{e}");
-            return end(project, turn_id, Outcome::Failed, Some((FailureKind::Other, message))).await;
+            return end(project, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
         }
     };
     if let Some(running) = project.running.lock().unwrap().get_mut(turn_id) {
@@ -198,7 +196,7 @@ async fn drive(
     project: &Arc<Project>,
     turn: &Turn,
     spawned: &mut Spawned,
-) -> anyhow::Result<(Outcome, Option<(FailureKind, String)>, bool)> {
+) -> anyhow::Result<(Outcome, Option<Failure>, bool)> {
     spawned.resume()?;
     let mut stdin = spawned.child.stdin.take().context("no stdin")?;
     let written = async {
@@ -230,6 +228,7 @@ async fn drive(
     while let Some(line) = lines.next_line().await? {
         raw.write_all(line.as_bytes()).await?;
         raw.write_all(b"\n").await?;
+        seen.output = true;
         let Some(event) = codex::parse_line(&line) else { continue };
         if let Err(e) = observe(project, turn, event, &mut seen).await {
             tracing::warn!(turn_id = turn.id, error = format!("{e:#}"), "could not record an event");
@@ -245,11 +244,11 @@ async fn drive(
     } else if let Some(message) = seen.failed {
         // Codex's quota rejections are not known yet; they count as ordinary failures
         // (data-model.md §8.3).
-        (Outcome::Failed, Some((FailureKind::Other, message)))
+        (Outcome::Failed, Some(Failure::new(FailureKind::Other, message)))
     } else if interrupted {
         (Outcome::Interrupted, None)
     } else if let Some(message) = seen.last_error {
-        (Outcome::Failed, Some((FailureKind::Other, message)))
+        (Outcome::Failed, Some(Failure::new(FailureKind::Other, message)))
     } else {
         // The CLI stopped on its own without saying why on stdout, as when it rejects its
         // arguments at start (data-model.md §3.2, #13).
@@ -259,14 +258,18 @@ async fn drive(
         };
         let path = project.raw_output_path(&turn.id, "stderr");
         let mut message = format!("Codex 自行退出（{status}），没有报告 turn 结束。");
+        let mut kind = FailureKind::Other;
         match stderr_excerpt(&path, &turn.token).await {
             Ok(excerpt) if !excerpt.is_empty() => {
+                if codex::permission_refused(&excerpt) {
+                    kind = FailureKind::Permission;
+                }
                 message.push_str(&format!("\nstderr 开头：\n{excerpt}\n完整内容见 {}", path.display()))
             }
             Ok(_) => message.push_str("stderr 为空。"),
             Err(e) => message.push_str(&format!("读不到 stderr（{}）：{e}", path.display())),
         }
-        (Outcome::Failed, Some((FailureKind::Other, message)))
+        (Outcome::Failed, Some(Failure { unstarted: !seen.output, ..Failure::new(kind, message) }))
     };
     let clean = result.0 == Outcome::Completed && !seen.unparsed;
     Ok((result.0, result.1, clean))

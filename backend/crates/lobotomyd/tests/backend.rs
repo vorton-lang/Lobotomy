@@ -11,7 +11,7 @@ use lobotomy_core::capture::stopped_capture;
 use lobotomy_core::id::now_ms;
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, current_config, load_project};
 use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, load_task, open_attempt};
-use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, TurnState};
+use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, TurnState, hold};
 use lobotomy_core::verify::{Accept, RetryPreview, VerificationState, latest_verification, preview_stopped};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::host::Host;
@@ -316,6 +316,54 @@ async fn a_cli_that_exits_with_only_stderr_fails_with_its_error() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// A Codex whose administrator does not allow full access refuses to start. The failure says the
+/// permission mode was refused; after the user switches Codex to auto review, continuing sends
+/// the brief that never arrived, and the task goes on (harness-adapter.md §1.9, data-model.md
+/// §3.4).
+#[tokio::test]
+async fn a_managed_codex_runs_the_task_after_switching_to_auto_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    let task = create_task(&db, "FAKE:managed FAKE:done");
+
+    let refused = ended_turn(&db).await;
+    let failure = refused.failure.clone().unwrap();
+    assert_eq!(refused.outcome, Some(Outcome::Failed));
+    assert_eq!((failure.kind, failure.unstarted), (FailureKind::Permission, true), "{failure:?}");
+    let bound = |turn: &str| -> Vec<(String, Option<i64>)> {
+        db.read(|c| {
+            let mut stmt = c.prepare("SELECT id, delivered_at FROM message WHERE turn_id = ?1 ORDER BY seq")?;
+            Ok(stmt.query_map([turn], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap()
+    };
+    let brief = bound(&refused.id);
+    assert_eq!(brief.len(), 1, "the brief was bound to the refused turn");
+
+    backend.project.host.set_permission("codex", "auto_review").unwrap();
+    // The GUI offers continuing once the role holds, after the capture of the failed turn.
+    wait_for("the role to hold", || db.read(|c| hold(c, "Malkuth")).unwrap()).await;
+    db.execute(&Caller::User, &Continue { request_id: "c1".into(), role: "Malkuth".into() }).unwrap();
+    let next = wait_for("the continued turn to end", || {
+        last(&db).filter(|t| t.id != refused.id && t.state == TurnState::Ended)
+    })
+    .await;
+    assert_eq!(next.outcome, Some(Outcome::Completed), "{:?}", next.failure);
+    assert!(next.done_at.is_some(), "org_report(done) went through");
+    assert_eq!(next.input, refused.input, "the input goes again as it was, with no note about the refusal");
+    let moved = bound(&next.id);
+    assert_eq!(moved.iter().map(|m| &m.0).collect::<Vec<_>>(), [&brief[0].0], "the brief moved to the new turn");
+    assert!(moved[0].1.is_some(), "and was delivered there");
+    assert!(bound(&refused.id).is_empty());
+
+    let args = std::fs::read_to_string(diag(&slot(dir.path())).join("last-args.json")).unwrap();
+    assert!(args.contains(r#"approvals_reviewer=\"auto_review\""#), "{args}");
+    assert!(!args.contains("--dangerously-bypass-approvals-and-sandbox"), "{args}");
+    phase(&db, &task, Phase::Accepting).await;
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn interrupting_a_turn_ends_it_as_interrupted() {
@@ -460,7 +508,7 @@ async fn after_recovery_a_quota_failed_role_waits_for_the_user() {
         let task = create_task(&project.db, "FAKE:done");
         start_attempt(&project, &task).await;
         let turn = project.db.execute(&Caller::Runtime, &RegisterTurn { role: "Malkuth".into() }).unwrap();
-        let failure = Failure { kind: FailureKind::Quota, message: "limit".into(), resets_at: None };
+        let failure = Failure::new(FailureKind::Quota, "limit");
         let end = EndTurn { turn_id: turn.turn_id, outcome: Outcome::Failed, failure: Some(failure) };
         project.db.execute(&Caller::Runtime, &end).unwrap();
         project.host.db.block("codex", None, "limit", now_ms()).unwrap();

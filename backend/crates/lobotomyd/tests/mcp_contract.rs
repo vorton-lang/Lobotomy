@@ -287,6 +287,8 @@ async fn codex() {
         "model_reasoning_effort=\"low\"",
         "-c",
         &format!("mcp_servers.lobotomy.url=\"{}\"", service.url),
+        "-c",
+        "mcp_servers.lobotomy.default_tools_approval_mode=\"approve\"",
         "-",
     ]
     .map(str::to_owned)

@@ -620,6 +620,33 @@ pre {
   font-size: 13px;
   margin: 16px 0 4px;
 }
+.modal-body h2.settings-group {
+  font-size: 14px;
+  margin: 24px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.choices {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin: 8px 0;
+  padding: 4px 10px;
+}
+.choices legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+label.choice {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 6px 0;
+  color: var(--text);
+}
+label.choice input {
+  width: auto;
+  margin: 3px 0 0;
+}
 .check-row {
   display: flex;
   gap: 6px;

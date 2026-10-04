@@ -1,17 +1,51 @@
 // Not a test: captures the main states for review. Run with `npx playwright test screenshots`.
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import { infoFile } from './setup';
 
 const out = process.env.SCREENSHOT_DIR ?? 'test-results/screenshots';
 
-test('screenshots', async ({ page }) => {
-  test.skip(!process.env.SCREENSHOT_DIR, 'review only');
+async function open(page: Page) {
   const { port, token } = JSON.parse(fs.readFileSync(infoFile, 'utf8'));
   await page.setViewportSize({ width: 1400, height: 860 });
   await page.goto(`http://127.0.0.1:5173/?backend=${encodeURIComponent(`ws://127.0.0.1:${port}/gui`)}&token=${encodeURIComponent(token)}`);
   await expect(page.getByText('已连接')).toBeVisible();
+}
+
+// A Codex that does not allow full access, and the settings (harness-adapter.md §1.9). The task is
+// accepted at the end, so the next screenshots start with Malkuth free.
+test('screenshots of a managed Codex', async ({ page }) => {
+  test.skip(!process.env.SCREENSHOT_DIR, 'review only');
+  await open(page);
+  await page.getByRole('button', { name: '+ 新任务' }).click();
+  const dialog = page.getByRole('dialog', { name: '新任务' });
+  await dialog.getByLabel('标题').fill('受管环境的任务');
+  // No file: the later screenshots expect the repository as it started.
+  await dialog.getByLabel('你的原话').fill('FAKE:managed FAKE:done FAKE:nowrite');
+  await dialog.getByRole('button', { name: '交给 Malkuth' }).click();
+  const card = page.locator('.attention .card').filter({ hasText: '没能启动' });
+  await expect(card).toBeVisible();
+  await page.screenshot({ path: `${out}/9-permission-refused.png` });
+  await card.getByRole('button', { name: '改用自动审批并继续' }).click();
+  const accept = page.locator('.attention .card').filter({ hasText: '等你验收' });
+  await expect(accept).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await expect(settings.getByRole('radio', { name: /^自动审批/ })).toBeChecked();
+  await page.screenshot({ path: `${out}/10-settings.png` });
+  await settings.getByRole('radio', { name: /^完全放开/ }).click();
+  await expect(settings.getByRole('radio', { name: /^完全放开/ })).toBeChecked();
+  await settings.getByRole('button', { name: '关闭' }).click();
+  await accept.getByRole('button', { name: '查看并验收' }).click();
+  const panel = page.getByRole('dialog', { name: '受管环境的任务' });
+  await panel.getByRole('button', { name: '验收', exact: true }).click();
+  await expect(panel.locator('.phase')).toHaveText('已完成');
+});
+
+test('screenshots', async ({ page }) => {
+  test.skip(!process.env.SCREENSHOT_DIR, 'review only');
+  await open(page);
   for (const [title, body] of [
     ['写 work.txt', 'FAKE:done'],
     ['会失败的任务', 'FAKE:fail'],

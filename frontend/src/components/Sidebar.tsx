@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import type { Attention, Capture, Hold, RoleView, Task } from '../api/types';
-import { bytes, clock, elapsed, PHASE_LABEL } from '../format';
-import { act, MAIN_ROLE, run, selectTask, toast, useStore } from '../store';
+import { bytes, clock, elapsed, HARNESS_LABEL, PERMISSION_LABEL, PHASE_LABEL } from '../format';
+import { act, MAIN_ROLE, run, selectTask, setPermission, toast, useStore } from '../store';
 import { Modal, useNow } from './common';
 import { DiffPool, DiffView } from './DiffView';
 
@@ -96,20 +96,55 @@ function AttentionCard({ attention: a }: { attention: Attention }) {
 
 function HoldCard({ role, hold }: { role: string; hold: Hold }) {
   const roleView = useStore((s) => s.snapshot?.roles.find((r) => r.name === role));
+  const harness = useStore((s) => s.snapshot?.harnesses.find((h) => h.harness === roleView?.harness));
   const taskId = roleView?.task_id;
   const proceed = () => run('continue', { role });
   const newSession = () => run('new_native_session', { role });
   const abandon = taskId ? () => run('abandon', { task_id: taskId, reason: '用户在异常后放弃' }) : undefined;
   if (hold.kind === 'abnormal') {
-    const why = hold.turn.outcome === 'interrupted' ? '被中断' : hold.turn.failure?.kind === 'quota' ? '因额度不足而失败' : '失败';
+    const failure = hold.turn.failure;
+    const why =
+      hold.turn.outcome === 'interrupted'
+        ? '被中断'
+        : failure?.unstarted
+          ? '没能启动'
+          : failure?.kind === 'quota'
+            ? '因额度不足而失败'
+            : '失败';
+    const harnessName = HARNESS_LABEL[roleView?.harness ?? ''] ?? roleView?.harness;
+    // The environment refused full access: the one-step way on is auto review (harness-adapter.md §1.9).
+    const switchable = failure?.kind === 'permission' && harness?.permission === 'full';
+    const switchAndProceed = async () => {
+      if (!harness || (await setPermission(harness.harness, 'auto_review')) === undefined) return;
+      await proceed();
+    };
     return (
       <div className="card warn">
         <p>
           {role} 的上一个 turn {why}，它停下等你决定。
         </p>
-        {hold.turn.failure && <p className="muted failure">{hold.turn.failure.message}</p>}
+        {failure?.kind === 'permission' && harness && (
+          <p>
+            这个环境的管理设置不允许 {harnessName} 以「{PERMISSION_LABEL[harness.permission]}」运行。
+            {switchable ? '可以改用自动审批：在沙箱里工作，超出沙箱的操作由自动审核决定。' : '可以在 ⚙ 设置里换一种权限模式，或请管理员调整。'}
+          </p>
+        )}
+        {failure?.unstarted && <p className="muted">{harnessName} 没有收到那次的内容；继续时会原样重新发送。</p>}
+        {failure?.kind === 'permission' ? (
+          <details>
+            <summary className="muted">原始错误</summary>
+            <p className="muted failure">{failure.message}</p>
+          </details>
+        ) : (
+          failure && <p className="muted failure">{failure.message}</p>
+        )}
         <div className="actions">
-          <button className="primary" onClick={proceed}>
+          {switchable && (
+            <button className="primary" onClick={switchAndProceed}>
+              改用自动审批并继续
+            </button>
+          )}
+          <button className={switchable ? '' : 'primary'} onClick={proceed}>
             继续
           </button>
           <button onClick={newSession}>新会话</button>

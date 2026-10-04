@@ -121,7 +121,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               {verification.state !== 'running' &&
                 !verification.conflicts?.length &&
                 !loaded.checks.some((c) => c.verification_id === verification.id) && (
-                  <p className="muted">没有设置检查命令，验证只确认采集完整、没有冲突。可以在 ⚙ 项目设置里添加。</p>
+                  <p className="muted">没有设置检查命令，验证只确认采集完整、没有冲突。可以在 ⚙ 设置里添加。</p>
                 )}
             </section>
           )}

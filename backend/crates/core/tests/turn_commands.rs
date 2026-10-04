@@ -151,7 +151,7 @@ fn a_quota_failure_is_named_in_the_continue_note() {
     let db = db();
     started_task(&db);
     let t = register(&db).unwrap();
-    let failure = Failure { kind: FailureKind::Quota, message: "limit".into(), resets_at: Some(1) };
+    let failure = Failure { resets_at: Some(1), ..Failure::new(FailureKind::Quota, "limit") };
     db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id, outcome: Outcome::Failed, failure: Some(failure) })
         .unwrap();
     pin_captures(&db);

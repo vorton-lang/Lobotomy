@@ -1,25 +1,22 @@
 //! Quota domains (data-model.md §8).
 //!
 //! A domain is a harness and a login account. Domains belong to the host, outside any project:
-//! projects on the same account share the quota (data-model.md §10). They live in their own
-//! small database, not in a project's.
+//! projects on the same account share the quota (data-model.md §10). They live in the host
+//! database, not in a project's.
 //!
 //! Recovery is the user's: a rejection blocks the domain, and only the user's retry checks it
 //! again. The runtime plans no checks and continues no role on its own.
-
-use std::path::Path;
-use std::sync::Mutex;
-use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::error::Result;
+use crate::host::HostDb;
 
 /// v1 uses one login per harness (data-model.md §8.1).
 pub const DEFAULT_ACCOUNT: &str = "default";
 
-const SCHEMA: &str = "
+pub(crate) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS quota_domain (
   harness    TEXT NOT NULL,
   account    TEXT NOT NULL,
@@ -64,37 +61,15 @@ pub enum CheckOutcome {
     Rejected { resets_at: Option<i64> },
 }
 
-/// The host database: state shared by all projects of this user.
-pub struct HostDb {
-    conn: Mutex<Connection>,
-}
-
 impl HostDb {
-    pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path)?;
-        conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
-        Self::init(conn)
-    }
-
-    pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
-    }
-
-    fn init(conn: Connection) -> Result<Self> {
-        conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
-    }
-
     pub fn domain(&self, harness: &str) -> Result<Domain> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        load(&conn, harness)
+        load(&self.conn(), harness)
     }
 
     /// A turn was rejected for quota: block the whole domain (data-model.md §8.3). Returns
     /// whether the domain was open before, so the caller notifies once per block.
     pub fn block(&self, harness: &str, resets_at: Option<i64>, message: &str, now: i64) -> Result<bool> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn();
         let was_open = !load(&conn, harness)?.is_blocked();
         conn.execute(
             "INSERT INTO quota_domain (harness, account, blocked_at, resets_at, message) VALUES (?1, ?2, ?3, ?4, ?5)
@@ -109,7 +84,7 @@ impl HostDb {
     /// Records the user's check. Passing opens the domain; a rejection keeps it blocked with the
     /// newly reported reset time.
     pub fn record_check(&self, harness: &str, outcome: &CheckOutcome) -> Result<Domain> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = self.conn();
         match outcome {
             CheckOutcome::Passed => {
                 conn.execute(

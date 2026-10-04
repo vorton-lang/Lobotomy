@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
+use crate::Permission;
 use crate::event::{Event, Item, ItemKind};
 
 /// Finds the Codex binary. `CODEX_BIN` wins. The desktop app ships the CLI under
@@ -35,6 +36,7 @@ pub struct TurnArgs {
     pub resume: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub permission: Permission,
     /// The role instructions. Codex keeps them across resume and compaction, and passing them
     /// again does no harm (harness-adapter.md §1.4).
     pub developer_instructions: String,
@@ -47,16 +49,39 @@ fn toml_string(s: &str) -> String {
     serde_json::to_string(s).expect("strings serialize")
 }
 
+/// The arguments of a permission mode (harness-adapter.md §1.9). Auto review is what
+/// `--approve-for-me` sets; that flag exists only before `exec`'s subcommands, so the settings
+/// are passed one by one, the same for a first turn and a resumed one.
+fn permission_args(permission: Permission) -> Vec<String> {
+    match permission {
+        Permission::Full => vec!["--dangerously-bypass-approvals-and-sandbox".into()],
+        Permission::AutoReview => {
+            ["approval_policy=\"on-request\"", "approvals_reviewer=\"auto_review\"", "sandbox_mode=\"workspace-write\""]
+                .into_iter()
+                .flat_map(|setting| ["-c".to_owned(), setting.to_owned()])
+                .collect()
+        }
+    }
+}
+
+/// Whether the CLI's stderr says the administrator's requirements do not allow the permission
+/// mode it was given. Codex 0.159.2 writes, and exits before any output on stdout:
+/// "Error: `approval_policy = "never"` cannot be used because requirements do not allow
+/// `sandbox_mode = "danger-full-access"`; …" (#13).
+pub fn permission_refused(stderr: &str) -> bool {
+    stderr.contains("because requirements do not allow")
+}
+
 impl TurnArgs {
     pub fn to_args(&self) -> Vec<String> {
         let mut args: Vec<String> = vec!["exec".into()];
         if let Some(id) = &self.resume {
             args.extend(["resume".into(), id.clone()]);
         }
+        args.push("--json".into());
+        args.extend(permission_args(self.permission));
         args.extend(
             [
-                "--json",
-                "--dangerously-bypass-approvals-and-sandbox",
                 "--skip-git-repo-check",
                 // Capability trimming: no user rules, config, connectors or desktop control
                 // (harness-adapter.md §1.6).
@@ -82,6 +107,11 @@ impl TurnArgs {
             format!("developer_instructions={}", toml_string(&self.developer_instructions)),
             "-c".into(),
             format!("mcp_servers.lobotomy.url={}", toml_string(&self.mcp_url)),
+            // Lobotomy's own tools never wait for an approval. Outside full access, Codex would
+            // otherwise refuse org_report: "MCP tool call requires approval, but approval policy
+            // is never" (#13).
+            "-c".into(),
+            "mcp_servers.lobotomy.default_tools_approval_mode=\"approve\"".into(),
             // The message comes from stdin.
             "-".into(),
         ]);
@@ -90,27 +120,30 @@ impl TurnArgs {
 }
 
 /// A minimal call that only tells whether the quota admits a turn (data-model.md §8.4). It runs
-/// outside every role's session, and `--ephemeral` keeps it out of the user's history.
-pub fn probe_args() -> Vec<String> {
-    [
-        "exec",
-        "--json",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--ignore-rules",
-        "--ignore-user-config",
-        "--disable",
-        "apps",
-        "--disable",
-        "computer_use",
-        "--disable",
-        "browser_use",
-        "-c",
-        "model_reasoning_effort=\"low\"",
-        "-",
-    ]
-    .map(String::from)
-    .to_vec()
+/// outside every role's session, and `--ephemeral` keeps it out of the user's history. It uses
+/// the roles' permission mode, so an environment that refuses one refuses both alike.
+pub fn probe_args(permission: Permission) -> Vec<String> {
+    let mut args: Vec<String> = ["exec", "--json"].map(String::from).to_vec();
+    args.extend(permission_args(permission));
+    args.extend(
+        [
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--ignore-rules",
+            "--ignore-user-config",
+            "--disable",
+            "apps",
+            "--disable",
+            "computer_use",
+            "--disable",
+            "browser_use",
+            "-c",
+            "model_reasoning_effort=\"low\"",
+            "-",
+        ]
+        .map(String::from),
+    );
+    args
 }
 
 /// The input of [`probe_args`].
@@ -244,20 +277,55 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resume_puts_the_session_id_after_exec_resume_and_reads_stdin() {
-        let args = TurnArgs {
-            resume: Some("thread-1".into()),
+    fn turn(resume: Option<&str>, permission: Permission) -> Vec<String> {
+        TurnArgs {
+            resume: resume.map(str::to_owned),
             model: None,
             reasoning_effort: Some("low".into()),
+            permission,
             developer_instructions: "你是 Malkuth。\n用 \"org_report\" 汇报。".into(),
             mcp_url: "http://127.0.0.1:1/mcp/tok_1".into(),
         }
-        .to_args();
+        .to_args()
+    }
+
+    #[test]
+    fn resume_puts_the_session_id_after_exec_resume_and_reads_stdin() {
+        let args = turn(Some("thread-1"), Permission::Full);
         assert_eq!(&args[..3], ["exec", "resume", "thread-1"]);
         assert_eq!(args.last().map(String::as_str), Some("-"));
         assert!(args.contains(&r#"developer_instructions="你是 Malkuth。\n用 \"org_report\" 汇报。""#.to_owned()));
         assert!(args.contains(&r#"mcp_servers.lobotomy.url="http://127.0.0.1:1/mcp/tok_1""#.to_owned()));
         assert!(args.contains(&r#"model_reasoning_effort="low""#.to_owned()));
+        assert!(args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_owned()));
+    }
+
+    /// `--approve-for-me` is refused after `exec resume`; the settings it stands for are not.
+    #[test]
+    fn auto_review_passes_settings_that_work_for_first_and_resumed_turns() {
+        for resume in [None, Some("thread-1")] {
+            let args = turn(resume, Permission::AutoReview);
+            let pairs: Vec<String> = args.windows(2).filter(|w| w[0] == "-c").map(|w| w[1].clone()).collect();
+            for setting in [
+                r#"approval_policy="on-request""#,
+                r#"approvals_reviewer="auto_review""#,
+                r#"sandbox_mode="workspace-write""#,
+                r#"mcp_servers.lobotomy.default_tools_approval_mode="approve""#,
+            ] {
+                assert!(pairs.contains(&setting.to_owned()), "{setting} missing from {args:?}");
+            }
+            assert!(!args.iter().any(|a| a.starts_with("--dangerously") || a == "--approve-for-me"), "{args:?}");
+        }
+        let probe = probe_args(Permission::AutoReview);
+        assert!(probe.contains(&r#"approvals_reviewer="auto_review""#.to_owned()));
+        assert!(!probe.contains(&"--dangerously-bypass-approvals-and-sandbox".to_owned()));
+    }
+
+    #[test]
+    fn a_requirements_refusal_is_recognized() {
+        let stderr = "Error: `approval_policy = \"never\"` cannot be used because requirements do not allow \
+                      `sandbox_mode = \"danger-full-access\"`; Codex would fall back to read-only permissions";
+        assert!(permission_refused(stderr));
+        assert!(!permission_refused("Error: mcp_servers.lobotomy.url = x is not allowed here"));
     }
 }
