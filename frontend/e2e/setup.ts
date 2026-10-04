@@ -42,5 +42,8 @@ export default async function setup() {
 
   return async () => {
     child.kill();
+    await new Promise((resolve) => (child.exitCode !== null ? resolve(null) : child.once('exit', resolve)));
+    // The retries wait for Windows to let go of the backend's files.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   };
 }

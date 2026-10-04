@@ -142,5 +142,7 @@ export default async function setup() {
     } catch {
       // Already gone.
     }
+    // The retries wait for Windows to let go of the killed backend's files.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   };
 }

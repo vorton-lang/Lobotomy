@@ -15,12 +15,24 @@ import { fileURLToPath } from 'node:url';
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const backendExe = path.join(app, '..', 'backend', 'target', 'debug', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
 
+/** A host directory of the test's own, removed after the test. */
+const hosts: string[] = [];
+function tempHost() {
+  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'lobotomy-electron-'));
+  hosts.push(host);
+  return host;
+}
+test.afterEach(() => {
+  // The retries wait for Windows to let go of a stopped backend's files.
+  for (const host of hosts.splice(0)) fs.rmSync(host, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+});
+
 async function launch(host: string) {
   return electron.launch({ args: [app], cwd: app, env: { ...process.env, LOBOTOMY_HOST_DIR: host } });
 }
 
 test('without a project the app asks for a repository', async () => {
-  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'lobotomy-electron-'));
+  const host = tempHost();
   const electronApp = await launch(host);
   const window = await electronApp.firstWindow();
   await expect(window.getByRole('button', { name: '选择仓库文件夹' })).toBeVisible();
@@ -28,7 +40,7 @@ test('without a project the app asks for a repository', async () => {
 });
 
 test('quitting the app stops the organization', async () => {
-  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'lobotomy-electron-'));
+  const host = tempHost();
   const project = path.join(host, 'projects', 'p');
   fs.mkdirSync(project, { recursive: true });
   fs.writeFileSync(path.join(host, 'gui.json'), JSON.stringify({ project }));
@@ -52,7 +64,7 @@ test('quitting the app stops the organization', async () => {
 });
 
 test('after the backend restarts on another port the window reconnects', async () => {
-  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'lobotomy-electron-'));
+  const host = tempHost();
   const project = path.join(host, 'projects', 'p');
   const repo = path.join(host, 'repo');
   fs.mkdirSync(project, { recursive: true });
@@ -86,7 +98,7 @@ test('after the backend restarts on another port the window reconnects', async (
 });
 
 test('with a project the app starts its backend and connects', async () => {
-  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'lobotomy-electron-'));
+  const host = tempHost();
   const project = path.join(host, 'projects', 'p');
   fs.mkdirSync(project, { recursive: true });
   fs.writeFileSync(path.join(host, 'gui.json'), JSON.stringify({ project }));
