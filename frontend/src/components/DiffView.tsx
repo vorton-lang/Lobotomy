@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { MultiFileDiff, WorkerPoolContextProvider } from '@pierre/diffs/react';
 import type { Content, FileChange } from '../api/types';
 import { bytes } from '../format';
-import { call, toast } from '../store';
+import { call } from '../store';
 
 const theme = { dark: 'pierre-dark', light: 'pierre-light' } as const;
 const poolOptions = {
@@ -38,18 +38,24 @@ function describe(content: Content | null): string | null {
 
 const text = (content: Content | null) => (content?.kind === 'text' ? content.text : '');
 
+type Loaded = { from: string; to: string } & ({ changes: FileChange[] } | { error: string });
+
 export function DiffView({ from, to }: { from: string; to: string }) {
-  const [changes, setChanges] = useState<FileChange[] | null>(null);
+  // The result keeps the range it was computed for. Until the current range's result arrives,
+  // nothing is shown: an earlier candidate's diff must not pass for this one's (#13).
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
   useEffect(() => {
     let current = true;
     call<FileChange[]>('diff', { from, to })
-      .then((c) => current && setChanges(c))
-      .catch((e) => toast(String(e)));
+      .then((changes) => current && setLoaded({ from, to, changes }))
+      .catch((e) => current && setLoaded({ from, to, error: String(e) }));
     return () => {
       current = false;
     };
   }, [from, to]);
-  if (changes === null) return <p className="muted">正在计算改动…</p>;
+  if (loaded?.from !== from || loaded.to !== to) return <p className="muted">正在计算改动…</p>;
+  if ('error' in loaded) return <p className="error">没能计算改动：{loaded.error}</p>;
+  const { changes } = loaded;
   if (changes.length === 0) return <p className="muted">没有改动。</p>;
   return (
     <div className="diff">

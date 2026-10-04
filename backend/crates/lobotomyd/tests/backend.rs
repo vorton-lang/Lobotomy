@@ -284,6 +284,26 @@ async fn a_failed_turn_holds_the_role_until_continue() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// A CLI that exits on its own with only stderr to show failed, and the failure says why. Only
+/// stopping it makes a turn interrupted (data-model.md §3.2, #13).
+#[tokio::test]
+async fn a_cli_that_exits_with_only_stderr_fails_with_its_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start_with(dir.path(), fake_codex_with(&["--fake-start-error"])).await;
+    let db = backend.project.db.clone();
+    create_task(&db, "FAKE:done");
+
+    let turn = ended_turn(&db).await;
+    assert_eq!(turn.outcome, Some(Outcome::Failed));
+    let message = turn.failure.unwrap().message;
+    assert!(message.contains("退出码 1") && message.contains("Error: mcp_servers.lobotomy.url"), "{message}");
+    assert!(message.contains("<token>") && !message.contains(&turn.token), "the token is left out: {message}");
+    assert!(message.contains("  7: <unknown>"), "the excerpt keeps the start of stderr: {message}");
+    let stderr = backend.project.raw_output_path(&turn.id, "stderr");
+    assert!(stderr.exists(), "the raw stderr stays as evidence");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn interrupting_a_turn_ends_it_as_interrupted() {

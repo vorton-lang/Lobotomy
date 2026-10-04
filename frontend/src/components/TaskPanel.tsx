@@ -2,8 +2,8 @@
 // the candidate's changes, and the actions of its phase (data-model.md §9.2).
 
 import { useState } from 'react';
-import type { CheckRunRow, TaskDetail } from '../api/types';
-import { clock, PHASE_LABEL, shortSha } from '../format';
+import type { CheckRunRow, Phase, TaskDetail, VerificationRow } from '../api/types';
+import { clock, PHASE_LABEL, shortSha, timeline, workRange } from '../format';
 import { run, selectTask, useStore } from '../store';
 import { Markdown, Modal, Output } from './common';
 import { DiffPool, DiffView } from './DiffView';
@@ -19,6 +19,10 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const loaded = detail?.task.id === taskId ? detail : null;
   const verification = loaded?.verifications.at(-1);
   const criteria = loaded?.criteria.at(-1);
+  const latest = loaded?.attempts.at(-1);
+  // A verification of an earlier round stays visible, but never as the current result (#13).
+  const verifiedRound = loaded?.attempts.find((a) => a.id === verification?.attempt_id)?.seq;
+  const earlier = !!verification && verification.attempt_id !== latest?.id;
 
   // Accepting names the verification, the criteria version and the integration head the user saw;
   // the backend refuses if any moved (harness-adapter.md §4.2).
@@ -60,6 +64,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         <p className="muted">正在加载…</p>
       ) : (
         <div className="panel-body">
+          <p className="now">{now(task.phase, latest?.seq, verification && !earlier ? verification.state : null)}</p>
           <section>
             <h3>你的原话</h3>
             <Markdown text={loaded.task.body || '（无）'} />
@@ -76,18 +81,20 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             <Markdown text={criteria?.text || '（无）'} />
           </section>
           {verification && (
-            <section>
+            <section className={earlier ? 'earlier' : ''}>
               <h3>
-                验证 <span className={`badge ${verification.state}`}>{{ running: '进行中', passed: '通过', failed: '未通过' }[verification.state]}</span>
+                {earlier ? `上一轮的验证（第 ${verifiedRound} 轮）` : `验证（第 ${verifiedRound} 轮）`}{' '}
+                <span className={`badge ${verification.state}`}>{{ running: '进行中', passed: '通过', failed: '未通过' }[verification.state]}</span>
               </h3>
               <p className="muted">
-                基于集成版本 {shortSha(verification.base)} · {clock(verification.created_at)}
+                {earlier && `第 ${latest?.seq} 轮还没有验证。`}基于集成版本 {shortSha(verification.base)} · 检查设置第 {verification.config_version} 版 ·{' '}
+                {clock(verification.created_at)}
               </p>
               {verification.conflicts?.length > 0 && <p className="error">冲突：{verification.conflicts.join('、')}</p>}
               {loaded.checks
                 .filter((c) => c.verification_id === verification.id)
                 .map((check) => (
-                  <CheckView key={check.id} check={check} />
+                  <CheckView key={check.id} check={check} earlier={earlier} />
                 ))}
               {verification.state !== 'running' &&
                 !verification.conflicts?.length &&
@@ -106,10 +113,28 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   );
 }
 
-function CheckView({ check }: { check: CheckRunRow }) {
+/** Where the task stands, in one line: which round, and what it waits for. */
+function now(phase: Phase, round: number | undefined, verification: VerificationRow['state'] | null): string {
+  switch (phase) {
+    case 'queued':
+      return round ? `排队中，轮到时开始第 ${round + 1} 轮执行。` : '排队中，还没有开始执行。';
+    case 'executing':
+      return `第 ${round} 轮执行中，还没有交出候选成果。`;
+    case 'verifying':
+      return verification === 'running' ? `第 ${round} 轮的候选成果正在验证。` : `第 ${round} 轮的候选成果等待验证。`;
+    case 'accepting':
+      return `第 ${round} 轮的候选成果通过了验证，等你验收。`;
+    case 'done':
+      return `已完成，验收的是第 ${round} 轮的候选成果。`;
+    case 'abandoned':
+      return '已放弃。';
+  }
+}
+
+function CheckView({ check, earlier }: { check: CheckRunRow; earlier: boolean }) {
   const ok = !check.timed_out && check.exit_code === 0;
   return (
-    <details className={`check ${ok ? 'ok' : 'failed'}`} open={!ok}>
+    <details className={`check ${ok ? 'ok' : 'failed'}`} open={!ok && !earlier}>
       <summary>
         <code>{check.command}</code> · {check.timed_out ? '超时' : `退出码 ${check.exit_code}`} · {(check.duration_ms / 1000).toFixed(1)} 秒
       </summary>
@@ -119,22 +144,11 @@ function CheckView({ check }: { check: CheckRunRow }) {
   );
 }
 
-/** The latest candidate's changes: after rebasing when verified, else as captured. */
 function Changes({ detail }: { detail: TaskDetail }) {
-  const verification = detail.verifications.at(-1);
-  const candidate = detail.captures.filter((c) => c.kind === 'candidate' && c.commit_id).at(-1);
-  const range =
-    verification?.commit_id && verification.state !== 'running'
-      ? { from: verification.base, to: verification.commit_id, label: '候选成果（已合到当前集成版本上）' }
-      : candidate?.commit_id
-        ? { from: candidate.base, to: candidate.commit_id, label: '候选成果' }
-        : (() => {
-            const last = detail.captures.filter((c) => c.commit_id).at(-1);
-            return last?.commit_id ? { from: last.base, to: last.commit_id, label: `最近一次采集（${clock(last.created_at)}）` } : null;
-          })();
+  const range = workRange(detail);
   if (!range) return null;
   return (
-    <section>
+    <section className={range.earlier ? 'earlier' : ''}>
       <h3>改动</h3>
       <p className="muted">{range.label}</p>
       <DiffPool>
@@ -144,38 +158,17 @@ function Changes({ detail }: { detail: TaskDetail }) {
   );
 }
 
-const DECISION_LABEL: Record<string, string> = {
-  accept: '验收',
-  send_back: '退回',
-  abandon: '放弃',
-  reopen: '重开',
-  approve_new_files: '放行新增文件',
-  discard_uncaptured: '丢弃未能采集的内容',
-};
-
 function History({ detail }: { detail: TaskDetail }) {
   return (
     <section>
       <h3>记录</h3>
-      <ul className="history">
-        {detail.attempts.map((a) => (
-          <li key={a.id}>
-            {clock(a.started_at)} · 第 {a.seq} 轮执行开始
-            {a.ended_at && ` · ${clock(a.ended_at)} ${a.end_reason === 'candidate' ? '交出候选成果' : '结束'}`}
+      <ol className="history">
+        {timeline(detail).map((entry, i) => (
+          <li key={i}>
+            <span className="muted">{clock(entry.at)}</span> {entry.text}
           </li>
         ))}
-        {detail.decisions.map((d) => (
-          <li key={d.id}>
-            {clock(d.created_at)} · {DECISION_LABEL[d.kind] ?? d.kind}
-            {typeof d.detail.reason === 'string' && d.detail.reason && `：${d.detail.reason}`}
-          </li>
-        ))}
-        {detail.publications.map((p) => (
-          <li key={p.rev}>
-            {clock(p.created_at)} · 发布为集成版本 {shortSha(p.commit_id)}
-          </li>
-        ))}
-      </ul>
+      </ol>
     </section>
   );
 }

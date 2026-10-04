@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { Attention, Hold, RoleView, Task } from '../api/types';
 import { bytes, clock, elapsed, PHASE_LABEL } from '../format';
-import { act, MAIN_ROLE, run, selectTask, useStore } from '../store';
+import { act, MAIN_ROLE, run, selectTask, toast, useStore } from '../store';
 import { Modal, useNow } from './common';
 
 export function Sidebar() {
@@ -39,6 +39,8 @@ function AttentionCard({ attention: a }: { attention: Attention }) {
       );
     case 'task_blocked':
       return <BlockedCard taskId={a.task_id} title={a.title} reason={a.reason} />;
+    case 'stalled':
+      return <StalledCard attention={a} />;
     case 'accept':
       return (
         <div className="card">
@@ -101,7 +103,7 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
         <p>
           {role} 的上一个 turn {why}，它停下等你决定。
         </p>
-        {hold.turn.failure && <p className="muted">{hold.turn.failure.message}</p>}
+        {hold.turn.failure && <p className="muted failure">{hold.turn.failure.message}</p>}
         <div className="actions">
           <button className="primary" onClick={proceed}>
             继续
@@ -161,15 +163,42 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
 }
 
 function BlockedCard({ taskId, title, reason }: { taskId: string; title: string; reason: string }) {
-  const [reply, setReply] = useState('');
   return (
     <div className="card">
       <p>
         「{title}」的执行者在等你：
       </p>
       <p className="quote">{reason}</p>
-      <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder="回复" aria-label="回复" />
+      <Reply taskId={taskId} />
+    </div>
+  );
+}
+
+/** The turn ended normally, the task did not: nothing moves it on but the user (#13). */
+function StalledCard({ attention: a }: { attention: Extract<Attention, { kind: 'stalled' }> }) {
+  return (
+    <div className="card">
+      <p>
+        {a.role} 的 turn 已经结束，但「{a.title}」还没有完成：它没有报告完成，也没有提出问题。
+      </p>
+      {a.report_error && (
+        <p className="muted failure">它调用 org_report 没有成功：{a.report_error}</p>
+      )}
+      <p className="muted">看看它最后说了什么，再告诉它接下来做什么。</p>
+      <Reply taskId={a.task_id} placeholder={`发给 ${a.role}`}>
+        <button onClick={() => selectTask(a.task_id)}>查看任务</button>
+      </Reply>
+    </div>
+  );
+}
+
+function Reply({ taskId, placeholder = '回复', children }: { taskId: string; placeholder?: string; children?: React.ReactNode }) {
+  const [reply, setReply] = useState('');
+  return (
+    <>
+      <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder={placeholder} aria-label={placeholder} />
       <div className="actions">
+        {children}
         <button
           className="primary"
           disabled={!reply.trim()}
@@ -178,10 +207,10 @@ function BlockedCard({ taskId, title, reason }: { taskId: string; title: string;
             if (sent !== undefined) setReply('');
           }}
         >
-          回复
+          发送
         </button>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -229,6 +258,7 @@ function RoleLine({ role, tasks }: { role: RoleView; tasks: Task[] }) {
   if (role.unfinished?.state === 'running' && role.unfinished.started_at) activity = `正在跑 turn · ${elapsed(role.unfinished.started_at, now)}`;
   else if (role.unfinished) activity = role.unfinished.state === 'unknown' ? '上一个 turn 状态未知' : '即将开始 turn';
   else if (role.hold) activity = '停下，等你决定';
+  else if (role.stalled) activity = 'turn 已结束，任务还没完成，等你发消息';
   else if (role.workspace?.state === 'materializing') activity = '正在准备工作目录';
   else if (task) activity = PHASE_LABEL[task.phase];
   return (
@@ -268,7 +298,12 @@ function NewTask({ onClose }: { onClose: () => void }) {
   const [criteria, setCriteria] = useState('');
   const create = async () => {
     const created = await run<{ id: string }>('create_task', { title, body, criteria, executor: MAIN_ROLE });
-    if (created) onClose();
+    if (!created) return;
+    onClose();
+    // An open task panel would cover the thread where the new task's work shows (#13); the
+    // earlier task stays a click away in the Workboard.
+    selectTask(null);
+    toast(`「${title}」已交给 ${MAIN_ROLE}`);
   };
   return (
     <Modal title="新任务" onClose={onClose}>

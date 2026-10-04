@@ -237,13 +237,41 @@ async fn drive(
         (Outcome::Failed, Some((FailureKind::Other, message)))
     } else if interrupted {
         (Outcome::Interrupted, None)
-    } else if let (false, Some(message)) = (status.success(), seen.last_error) {
+    } else if let Some(message) = seen.last_error {
         (Outcome::Failed, Some((FailureKind::Other, message)))
     } else {
-        (Outcome::Interrupted, None)
+        // The CLI stopped on its own without saying why on stdout, as when it rejects its
+        // arguments at start (data-model.md §3.2, #13).
+        let status = match status.code() {
+            Some(code) => format!("退出码 {code}"),
+            None => status.to_string(),
+        };
+        let path = project.raw_output_path(&turn.id, "stderr");
+        let mut message = format!("Codex 自行退出（{status}），没有报告 turn 结束。");
+        match stderr_excerpt(&path, &turn.token).await {
+            Ok(excerpt) if !excerpt.is_empty() => {
+                message.push_str(&format!("\nstderr 开头：\n{excerpt}\n完整内容见 {}", path.display()))
+            }
+            Ok(_) => message.push_str("stderr 为空。"),
+            Err(e) => message.push_str(&format!("读不到 stderr（{}）：{e}", path.display())),
+        }
+        (Outcome::Failed, Some((FailureKind::Other, message)))
     };
     let clean = result.0 == Outcome::Completed && !seen.unparsed;
     Ok((result.0, result.1, clean))
+}
+
+const EXCERPT_LINES: usize = 20;
+const EXCERPT_BYTES: u64 = 4096;
+
+/// The start of what the CLI wrote to stderr, where an error comes before its backtrace. The
+/// turn's token is in the CLI's arguments, so an error that quotes them would show it.
+async fn stderr_excerpt(path: &Path, token: &str) -> std::io::Result<String> {
+    use tokio::io::AsyncReadExt as _;
+    let mut head = Vec::new();
+    tokio::fs::File::open(path).await?.take(EXCERPT_BYTES).read_to_end(&mut head).await?;
+    let text = String::from_utf8_lossy(&head).replace(token, "<token>");
+    Ok(text.trim_end().lines().take(EXCERPT_LINES).collect::<Vec<_>>().join("\n"))
 }
 
 async fn observe(project: &Arc<Project>, turn: &Turn, event: Event, seen: &mut Observed) -> anyhow::Result<()> {

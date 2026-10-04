@@ -249,6 +249,21 @@ pre {
 }
 .message.runtime {
   background: var(--runtime);
+  padding: 4px 12px;
+}
+.message.runtime summary {
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.message.runtime[open] summary {
+  white-space: normal;
+  margin-bottom: 4px;
+}
+.message.runtime summary .who {
+  display: inline;
 }
 .message.other {
   background: var(--panel);
@@ -313,13 +328,26 @@ pre {
   color: var(--muted);
   text-decoration: line-through;
 }
+/* Long outputs are clipped to their first and last lines, with the whole in the viewer, so
+   nothing scrolls inside the scrolling thread or panel (#13). */
 .output pre {
   background: var(--sunken);
   padding: 6px 8px;
   border-radius: 6px;
   margin-top: 4px;
-  max-height: 360px;
-  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.failure {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-panel .now {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+.task-panel section.earlier {
+  opacity: 0.7;
 }
 .output .elided {
   color: var(--muted);

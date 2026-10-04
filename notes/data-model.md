@@ -58,11 +58,13 @@ v1 中 role 与槽位一一固定，因此任务层不会出现"取得了 role�
 | 已登记 | 运行时在同一个事务中写入 turn 记录、MCP token 和绑定的输入消息。CLI 尚未启动 |
 | 运行中 | CLI 已启动。运行时记下 pid 与进程启动时间，用于在 pid 被复用时区分进程 |
 | 已结束 · completed | 运行时收到 harness 的 turn 结束事件（Claude `result`，Codex `turn.completed`），且 CLI 已退出 |
-| 已结束 · failed | harness 报告错误，例如额度被拒、登录失效、参数错误。按系统故障通知（manager-actions.md §6） |
-| 已结束 · interrupted | CLI 已退出，但没有 turn 结束事件。原因包括停止或中断、CLI 崩溃，以及对账结果 |
+| 已结束 · failed | harness 报告错误，例如额度被拒、登录失效、参数错误；或者 CLI 自行退出，没有 turn 结束事件，例如启动时拒绝参数、崩溃。失败信息取 harness 的错误事件；没有错误事件时，取退出状态与 stderr 的开头。按系统故障通知（manager-actions.md §6） |
+| 已结束 · interrupted | CLI 已退出，没有 turn 结束事件，且是 Lobotomy 让它停下的：用户中断、停止组织，以及对账结果 |
 | unknown | 后端重启时，处于"已登记"或"运行中"的 turn 都改为 unknown |
 
 completed 只表示 turn 正常结束，不表示任务完成。任务完成取决于 `done` 与验收（harness-adapter.md §4.1）。
+
+CLI 自行退出原先记为 interrupted，现在记为 failed（**语义更新**，#13，2026-10-04）。实测中，受管 Codex 不允许无沙箱模式，启动时只在 stderr 写出原因就退出；记为 interrupted 时，GUI 只显示"被中断"，用户以为继续即可恢复。两种结果之后可做的事相同：继续、新建 native session 或放弃。失败信息中的 stderr 去掉了本 turn 的 MCP token；stderr 全文保留在原始输出中。
 
 ### 3.3 对账
 

@@ -1,6 +1,6 @@
 // Labels and pure transformations for display.
 
-import type { BlobRef, Item, LiveItem, LiveTurn, Message, Phase, Turn } from './api/types';
+import type { BlobRef, Item, LiveItem, LiveTurn, Message, Phase, TaskDetail, Turn } from './api/types';
 import type { ThreadState } from './store';
 
 export const PHASE_LABEL: Record<Phase, string> = {
@@ -46,25 +46,56 @@ export function preview(value: unknown): { text: string; blob: BlobRef | null } 
   return { text: typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value, null, 2), blob: null };
 }
 
+/** Lines and characters an output shows before the rest goes behind "查看全文". */
+export const SHOWN = { head: 6, tail: 18, chars: 3000 };
+
+export function firstLines(text: string, lines = SHOWN.head, chars = SHOWN.chars / 4): string {
+  const head = text.split('\n').slice(0, lines).join('\n');
+  return head.length > chars ? `${head.slice(0, chars)}…` : head;
+}
+
+export function lastLines(text: string, lines = SHOWN.tail, chars = SHOWN.chars): string {
+  const tail = text.split('\n').slice(-lines).join('\n');
+  return tail.length > chars ? `…${tail.slice(-chars)}` : tail;
+}
+
+/** Whether a text is short enough to show whole. */
+export function fits(text: string): boolean {
+  return text.length <= SHOWN.chars && text.split('\n').length <= SHOWN.head + SHOWN.tail;
+}
+
 export function sourceLabel(source: string): string {
   if (source === 'user') return '你';
   if (source === 'runtime') return 'Lobotomy';
   return source.replace(/^role:/, '');
 }
 
+/** A turn's end says nothing about its task: a turn can end normally with the task unfinished. */
 export function turnOutcome(turn: Turn): string {
   if (turn.state === 'registered') return '等待启动';
   if (turn.state === 'running') return '运行中';
   if (turn.state === 'unknown') return '状态未知';
-  if (turn.outcome === 'completed') return '已完成';
+  if (turn.outcome === 'completed') return 'turn 正常结束';
   if (turn.outcome === 'interrupted') return '被中断';
   return turn.failure?.kind === 'quota' ? '额度不足' : '失败';
+}
+
+/**
+ * The note a continue put in front of the turn's input, without the queued messages after it;
+ * those show as messages of their own. The format is the backend's (`register` in turn.rs).
+ */
+export function continueNote(input: string): string | null {
+  const head = '【来自 Lobotomy】\n';
+  if (!input.startsWith(head)) return null;
+  const rest = input.slice(head.length);
+  const end = rest.indexOf('\n\n【来自 ');
+  return end < 0 ? rest : rest.slice(0, end);
 }
 
 export type Row =
   | { key: string; kind: 'turn'; turn: Turn }
   | { key: string; kind: 'message'; message: Message }
-  | { key: string; kind: 'input'; turn: Turn }
+  | { key: string; kind: 'input'; turn: Turn; note: string }
   | { key: string; kind: 'item'; item: Item }
   | { key: string; kind: 'live'; turnId: string; itemId: string; item: LiveItem }
   | { key: string; kind: 'running'; turnId: string; since: number }
@@ -88,12 +119,10 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
       const turn = thread.turns[item.turn_id];
       if (turn) {
         rows.push({ key: `turn-${turn.id}`, kind: 'turn', turn });
-        const messages = byTurn.get(turn.id) ?? [];
-        for (const message of messages) rows.push({ key: `msg-${message.id}`, kind: 'message', message });
-        // A continue note is not a message; the turn's input carries it.
-        if (messages.length === 0 || turn.input.startsWith('【来自 Lobotomy】\n上一个 turn')) {
-          rows.push({ key: `input-${turn.id}`, kind: 'input', turn });
-        }
+        // A continue note is not a message; the turn's input carries it, before the messages.
+        const note = continueNote(turn.input);
+        if (note !== null) rows.push({ key: `input-${turn.id}`, kind: 'input', turn, note });
+        for (const message of byTurn.get(turn.id) ?? []) rows.push({ key: `msg-${message.id}`, kind: 'message', message });
       }
     }
     if (item.kind === 'input') continue;
@@ -107,4 +136,82 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
   }
   for (const message of thread.queued) rows.push({ key: `queued-${message.id}`, kind: 'queued', message });
   return rows;
+}
+
+const DECISION_LABEL: Record<string, string> = {
+  accept: '你验收了',
+  send_back: '你退回了',
+  abandon: '放弃了任务',
+  reopen: '你重开了任务',
+  approve_new_files: '你放行了新增文件',
+  discard_uncaptured: '你丢弃了未能采集的内容',
+};
+
+export interface TimelineEntry {
+  at: number;
+  text: string;
+}
+
+/**
+ * A task's history in time order: execution rounds, verifications, decisions, publications and
+ * criteria changes (#13). What one command did shares a timestamp; the rank puts its cause first,
+ * e.g. a send-back before the round it opens.
+ */
+export function timeline(detail: TaskDetail): TimelineEntry[] {
+  const entries: (TimelineEntry & { rank: number })[] = [];
+  const add = (at: number | null, rank: number, text: string) => at && entries.push({ at, rank, text });
+  const round = (attemptId: string) => detail.attempts.find((a) => a.id === attemptId)?.seq;
+  add(detail.task.created_at, 0, '建立任务');
+  for (const c of detail.criteria) if (c.version > 1) add(c.created_at, 0, `完成条件改为第 ${c.version} 版`);
+  for (const d of detail.decisions) {
+    const reason = typeof d.detail.reason === 'string' && d.detail.reason ? `：${d.detail.reason}` : '';
+    add(d.created_at, 0, `${DECISION_LABEL[d.kind] ?? d.kind}${reason}`);
+  }
+  for (const v of detail.verifications) {
+    add(v.created_at, 0, `第 ${round(v.attempt_id)} 轮的候选成果开始验证，基于集成版本 ${shortSha(v.base)}`);
+    if (v.state !== 'running') {
+      const result = v.state === 'passed' ? '通过' : v.conflicts?.length ? '未通过：有冲突' : '未通过';
+      add(v.finished_at, 0, `第 ${round(v.attempt_id)} 轮的验证${result}`);
+    }
+  }
+  for (const a of detail.attempts) {
+    add(a.started_at, 2, `第 ${a.seq} 轮执行开始`);
+    add(a.ended_at, 1, a.end_reason === 'candidate' ? `第 ${a.seq} 轮交出候选成果` : `第 ${a.seq} 轮结束`);
+  }
+  for (const p of detail.publications) add(p.created_at, 3, `发布为集成版本 ${shortSha(p.commit_id)}`);
+  return entries.sort((a, b) => a.at - b.at || a.rank - b.rank).map(({ at, text }) => ({ at, text }));
+}
+
+export interface WorkRange {
+  from: string;
+  to: string;
+  label: string;
+  /** The range belongs to an earlier round than the latest one. */
+  earlier: boolean;
+}
+
+/**
+ * The changes to show for a task: the latest round's verified candidate, its candidate, or its
+ * latest capture; failing all of these, an earlier round's verified candidate, marked as such
+ * (#13).
+ */
+export function workRange(detail: TaskDetail): WorkRange | null {
+  const latest = detail.attempts.at(-1);
+  const verification = detail.verifications.at(-1);
+  const done = verification?.commit_id && verification.state !== 'running' ? verification : null;
+  if (latest && done?.attempt_id === latest.id) {
+    return { from: done.base, to: done.commit_id!, label: `第 ${latest.seq} 轮的候选成果，已合到集成版本 ${shortSha(done.base)} 上`, earlier: false };
+  }
+  const captures = detail.captures.filter((c) => c.commit_id && latest && c.attempt_id === latest.id);
+  const candidate = captures.filter((c) => c.kind === 'candidate').at(-1);
+  if (latest && candidate) return { from: candidate.base, to: candidate.commit_id!, label: `第 ${latest.seq} 轮的候选成果`, earlier: false };
+  const last = captures.at(-1);
+  if (latest && last) {
+    return { from: last.base, to: last.commit_id!, label: `第 ${latest.seq} 轮目前的工作（${clock(last.created_at)} 采集），还不是候选成果`, earlier: false };
+  }
+  if (done) {
+    const seq = detail.attempts.find((a) => a.id === done.attempt_id)?.seq;
+    return { from: done.base, to: done.commit_id!, label: `上一轮（第 ${seq} 轮）的候选成果`, earlier: true };
+  }
+  return null;
 }

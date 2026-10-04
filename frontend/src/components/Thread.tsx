@@ -77,14 +77,14 @@ function RowView({
           <span>{clock(t.started_at ?? t.registered_at)}</span>
           {name && <span>· {name}</span>}
           <span>· {turnOutcome(t)}</span>
-          {t.failure && <span className="error">· {t.failure.message}</span>}
+          {t.failure && <span className="error">· {t.failure.message.split('\n')[0]}</span>}
         </div>
       );
     }
     case 'message':
       return <MessageView source={row.message.source} body={row.message.body} />;
     case 'input':
-      return <MessageView source="runtime" body={row.turn.input.replace(/^【来自 [^】]*】\n/, '')} />;
+      return <MessageView source="runtime" body={row.note} />;
     case 'queued':
       return <MessageView source={row.message.source} body={row.message.body} queued />;
     case 'item':
@@ -98,6 +98,20 @@ function RowView({
 
 function MessageView({ source, body, queued }: { source: string; body: string; queued?: boolean }) {
   const mine = source === 'user';
+  // The runtime's messages repeat the task and carry instructions for the executor; the first
+  // line says what each is about, the rest opens on demand (#13).
+  if (source === 'runtime') {
+    const [summary, ...rest] = body.split('\n');
+    const more = rest.join('\n').trim();
+    return (
+      <details className={`message runtime ${queued ? 'queued' : ''}`}>
+        <summary>
+          <span className="who">Lobotomy{queued && ' · 排队中'}</span> {summary}
+        </summary>
+        {more && <Markdown text={more} />}
+      </details>
+    );
+  }
   return (
     <div className={`message ${mine ? 'mine' : source === 'runtime' ? 'runtime' : 'other'} ${queued ? 'queued' : ''}`}>
       <div className="who">

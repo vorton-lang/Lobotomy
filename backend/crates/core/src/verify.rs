@@ -501,7 +501,8 @@ impl Command for SendBack {
             },
             None => None,
         };
-        let body = format!("用户退回了候选成果：\n{}\n\n请修改后再次报告 done。", self.reason);
+        // The reason starts on the first line, which the GUI shows as the message's summary.
+        let body = format!("用户退回了候选成果：{}\n\n请修改后再次报告 done。", self.reason);
         reenter(cx, &task, slot, &body)
     }
 }

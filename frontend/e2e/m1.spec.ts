@@ -32,13 +32,13 @@ test('a task goes from creation to the user repository', async ({ page }) => {
   // Malkuth's report shows in the thread; the turn's end shows too; the candidate waits for
   // acceptance.
   await expect(page.locator('.report.done')).toContainText('写了 work.txt');
-  await expect(page.locator('.turn-divider').first()).toContainText('已完成');
+  await expect(page.locator('.turn-divider').first()).toContainText('turn 正常结束');
   const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
   await expect(card).toBeVisible();
   await card.getByRole('button', { name: '查看并验收' }).click();
 
   const panel = page.getByRole('dialog', { name: '写 work.txt' });
-  await expect(panel.getByText('通过')).toBeVisible();
+  await expect(panel.locator('.badge.passed')).toHaveText('通过');
   await expect(panel.getByText('1 个文件')).toBeVisible();
   await panel.getByRole('button', { name: '验收', exact: true }).click();
   await expect(panel.locator('.phase')).toHaveText('已完成');
@@ -47,6 +47,42 @@ test('a task goes from creation to the user repository', async ({ page }) => {
   await expect.poll(() => fs.existsSync(file), { timeout: 20_000 }).toBe(true);
   expect(fs.readFileSync(file, 'utf8')).toBe('hi');
   await expect(page.getByText('现在没有需要你处理的事。')).toBeVisible();
+});
+
+// The panel stays open from one candidate to the next: what it shows is always the candidate the
+// "验收" button would accept (#13).
+test('an open task panel follows the candidate through a send-back', async ({ page }) => {
+  await open(page);
+  // A slow check keeps each candidate in verification long enough to look at it there.
+  await page.getByRole('button', { name: '项目设置' }).click();
+  const settings = page.getByRole('dialog', { name: /项目设置/ });
+  await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
+  await settings.getByLabel('检查命令').fill('node -e "setTimeout(() => {}, 6000)"');
+  await settings.getByRole('button', { name: /保存为/ }).click();
+  await expect(settings).toBeHidden();
+
+  await createTask(page, '改 work.txt', 'FAKE:done FAKE:text=first');
+  const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
+  await card.getByRole('button', { name: '查看并验收' }).click();
+  const panel = page.getByRole('dialog', { name: '改 work.txt' });
+  await expect(panel.locator('.diff')).toContainText('first');
+
+  await panel.getByRole('button', { name: '退回…' }).click();
+  const sendBack = page.getByRole('dialog', { name: '退回候选成果' });
+  await sendBack.getByLabel(/理由/).fill('FAKE:done FAKE:text=second');
+  await sendBack.getByRole('button', { name: '退回', exact: true }).click();
+  // While the new candidate is verified, its own changes show, not the last round's. The check
+  // runs for 6 s; an old diff left on screen would still be there after 2.
+  await expect(panel.locator('.now')).toHaveText('第 2 轮的候选成果正在验证。');
+  await expect(panel.locator('.diff')).toContainText('second', { timeout: 2_000 });
+  await expect(panel.locator('.diff')).not.toContainText('first');
+  await expect(panel.locator('.now')).toHaveText('第 2 轮的候选成果通过了验证，等你验收。');
+  await expect(panel.locator('.diff')).toContainText('second');
+  await expect(panel.locator('.diff')).not.toContainText('first');
+  await expect(panel.locator('.history')).toContainText('你退回了：FAKE:done FAKE:text=second');
+
+  await panel.getByRole('button', { name: '验收', exact: true }).click();
+  await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
 test('a failed turn waits for the user to continue', async ({ page }) => {
@@ -58,4 +94,13 @@ test('a failed turn waits for the user to continue', async ({ page }) => {
   await expect(card).toBeHidden();
   // The continued turn opens with the runtime's note.
   await expect(page.locator('.message.runtime').last()).toContainText('上一个 turn 失败');
+
+  // It ends normally without reporting anything: the task waits for the user (#13).
+  const stalled = page.locator('.attention .card').filter({ hasText: '还没有完成' });
+  await expect(stalled).toBeVisible();
+  await stalled.getByRole('button', { name: '查看任务' }).click();
+  const panel = page.getByRole('dialog', { name: '会失败的任务' });
+  await expect(panel.locator('.now')).toHaveText('第 1 轮执行中，还没有交出候选成果。');
+  await panel.getByRole('button', { name: '放弃' }).click();
+  await expect(stalled).toBeHidden();
 });

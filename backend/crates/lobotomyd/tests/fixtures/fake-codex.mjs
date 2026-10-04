@@ -2,14 +2,18 @@
 // calls org_report on the real MCP service through the URL in its arguments.
 //
 // The input decides what happens:
-//   FAKE:done   writes work.txt, reports done, completes the turn
+//   FAKE:done   writes work.txt, reports done, completes the turn; with FAKE:text=<word> the
+//               file holds that word instead of "hi"
 //   FAKE:fail   reports a failed turn
 //   FAKE:sleep  starts a turn and waits; Ctrl+C ends it without a turn end event
 //   FAKE:big    emits a command item with 200 KiB of output
+//   FAKE:refused  emits an org_report call that Codex refused, then completes the turn
 //   otherwise   completes the turn with a message
 // Flags placed before Codex's own arguments change the process itself:
 //   --fake-stderr-flood  writes 4 MiB to stderr first and waits until it is read
 //   --fake-hang          never finishes on its own
+//   --fake-start-error   rejects its arguments: an error and a backtrace on stderr, nothing on
+//                        stdout, exit code 1 (#13)
 // Every run writes the environment it sees to last-env.json and its arguments to last-args.json,
 // inside .git when its cwd is a slot (so captures do not pick them up), else in its cwd.
 import fs from 'node:fs';
@@ -28,6 +32,12 @@ const resumeAt = args.indexOf('resume');
 const threadId = resumeAt >= 0 ? args[resumeAt + 1] : crypto.randomUUID();
 const url = config('mcp_servers.lobotomy.url');
 fs.writeFileSync(`${diag}last-args.json`, JSON.stringify(args));
+
+if (flags.has('--fake-start-error')) {
+  const backtrace = Array.from({ length: 8 }, (_, i) => `  ${i}: <unknown>`).join('\n');
+  process.stderr.write(`Error: mcp_servers.lobotomy.url = ${url} is not allowed here\n${backtrace}\n`);
+  process.exit(1);
+}
 
 const emit = event => process.stdout.write(JSON.stringify(event) + '\n');
 let input = '';
@@ -57,8 +67,14 @@ if (input.includes('FAKE:big')) {
   emit({ type: 'item.completed', item: { id: 'item_1', type: 'command_execution', command: 'build', aggregated_output: output, exit_code: 0, status: 'completed' } });
 }
 
+if (input.includes('FAKE:refused')) {
+  const error = { message: 'MCP tool call requires approval, but approval policy is never' };
+  const call = { id: 'item_2', type: 'mcp_tool_call', server: 'lobotomy', tool: 'org_report', arguments: { status: 'done' } };
+  emit({ type: 'item.completed', item: { ...call, result: null, error, status: 'failed' } });
+}
+
 if (input.includes('FAKE:done')) {
-  fs.writeFileSync('work.txt', 'hi');
+  fs.writeFileSync('work.txt', /FAKE:text=(\S+)/.exec(input)?.[1] ?? 'hi');
   const arguments_ = { title: '完成', body: '写了 work.txt', status: 'done' };
   const response = await fetch(url, {
     method: 'POST',

@@ -93,6 +93,7 @@ export interface Capture {
   turn_id: string;
   role: string;
   task_id: string | null;
+  attempt_id: string | null;
   kind: 'turn' | 'candidate' | 'interrupted';
   base: string;
   state: 'intent' | 'pinned' | 'oversized' | 'uncovered';
@@ -126,8 +127,16 @@ export interface RoleView {
   unfinished: Turn | null;
   last_turn: Turn | null;
   hold: Hold | null;
+  stalled: Stalled | null;
   workspace: Workspace | null;
   queued_messages: number;
+}
+
+/** The executing task waits on the user: the last turn ended without done or a question. */
+export interface Stalled {
+  task_id: string;
+  turn_id: string;
+  report_error: string | null;
 }
 
 export interface Domain {
@@ -142,6 +151,7 @@ export type Attention =
   | { kind: 'hold'; role: string; hold: Hold }
   | { kind: 'unknown_turn'; role: string; turn_id: string }
   | { kind: 'task_blocked'; task_id: string; title: string; reason: string }
+  | ({ kind: 'stalled'; role: string; title: string } & Stalled)
   | { kind: 'accept'; task_id: string; title: string; verification_id: string }
   | { kind: 'quota'; domain: Domain }
   | { kind: 'job_failed'; key: string; reason: string }
@@ -236,19 +246,23 @@ export interface CheckRunRow {
   duration_ms: number;
 }
 
+export interface Attempt {
+  id: string;
+  seq: number;
+  started_at: number;
+  ended_at: number | null;
+  end_reason: string | null;
+  candidate_id: string | null;
+}
+
+export type VerificationRow = Omit<Verification, 'task_id'> & { created_at: number; finished_at: number | null; attempt_id: string };
+
 export interface TaskDetail {
   task: Omit<Task, 'attempt_seq' | 'attempt_open' | 'verification'>;
   criteria: { version: number; text: string; created_by: string; created_at: number }[];
-  attempts: {
-    id: string;
-    seq: number;
-    started_at: number;
-    ended_at: number | null;
-    end_reason: string | null;
-    candidate_id: string | null;
-  }[];
+  attempts: Attempt[];
   captures: Capture[];
-  verifications: (Omit<Verification, 'task_id'> & { created_at: number; finished_at: number | null; attempt_id: string })[];
+  verifications: VerificationRow[];
   checks: CheckRunRow[];
   decisions: { id: string; kind: string; actor: string; detail: Record<string, unknown>; created_at: number }[];
   publications: { rev: number; commit_id: string; previous: string; created_at: number }[];

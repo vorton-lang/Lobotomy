@@ -30,7 +30,7 @@ use lobotomy_core::task::{
     queued_messages,
 };
 use lobotomy_core::turn::{
-    Continue, Hold, NewNativeSession, Turn, TurnState, hold, last_turn, load_turn, unfinished_turn,
+    Continue, Hold, NewNativeSession, Outcome, Turn, TurnState, hold, last_turn, load_turn, unfinished_turn,
 };
 use lobotomy_core::verify::{Accept, RetryPreview, SendBack, Verification, latest_verification, preview_stopped};
 use lobotomy_core::workspace::{Workspace, current_workspace};
@@ -307,8 +307,61 @@ struct RoleView {
     unfinished: Option<Turn>,
     last_turn: Option<Turn>,
     hold: Option<Hold>,
+    stalled: Option<Stalled>,
     workspace: Option<Workspace>,
     queued_messages: usize,
+}
+
+#[derive(Clone, Serialize)]
+struct Stalled {
+    task_id: String,
+    turn_id: String,
+    /// Why a call to a Lobotomy tool in that turn recorded nothing, when one did not.
+    report_error: Option<String>,
+}
+
+/// The role's task is executing, yet nothing will move it on without the user: the last turn of
+/// the attempt completed without done or a question, and nothing is queued, running, held or
+/// being captured (#13).
+fn stalled(conn: &Connection, role: &RoleView) -> lobotomy_core::Result<Option<Stalled>> {
+    let (Some(task_id), Some(last)) = (&role.task_id, &role.last_turn) else { return Ok(None) };
+    if role.unfinished.is_some()
+        || role.hold.is_some()
+        || role.queued_messages > 0
+        || lobotomy_core::capture::require_no_pending_capture(conn, &role.role.name).is_err()
+    {
+        return Ok(None);
+    }
+    let task = lobotomy_core::task::load_task(conn, task_id)?;
+    let attempt = lobotomy_core::task::open_attempt(conn, task_id)?;
+    if task.phase != Phase::Executing
+        || task.paused
+        || task.blocked_reason.is_some()
+        || last.outcome != Some(Outcome::Completed)
+        || last.attempt_id != attempt.map(|a| a.id)
+    {
+        return Ok(None);
+    }
+    // A Lobotomy tool call that went through has a command record; one without failed before
+    // reaching the runtime, or the runtime refused it.
+    let mut stmt = conn.prepare(
+        "SELECT content FROM item WHERE turn_id = ?1 AND kind = 'mcp_call' AND command_id IS NULL ORDER BY seq",
+    )?;
+    let calls = stmt.query_map([&last.id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let report_error = calls
+        .iter()
+        .filter_map(|c| serde_json::from_str::<Value>(c).ok())
+        .filter(|c| c["server"] == "lobotomy")
+        .map(|c| {
+            let text = c["error"]["message"].as_str().or(c["error"].as_str()).or(c["result"]["content"][0]["text"].as_str());
+            match text {
+                Some(text) => text.to_owned(),
+                None if !c["error"].is_null() => c["error"].to_string(),
+                None => "调用没有返回内容".to_owned(),
+            }
+        })
+        .next_back();
+    Ok(Some(Stalled { task_id: task_id.clone(), turn_id: last.id.clone(), report_error }))
 }
 
 #[derive(Serialize)]
@@ -328,6 +381,9 @@ enum Attention {
     /// The backend restarted while this turn's CLI ran, and the CLI still runs.
     UnknownTurn { role: String, turn_id: String },
     TaskBlocked { task_id: String, title: String, reason: String },
+    /// The executor's turn ended normally but it reported neither done nor a question, and
+    /// nothing is queued for it. In M1 only the user can move it on (#13).
+    Stalled { role: String, task_id: String, title: String, turn_id: String, report_error: Option<String> },
     Accept { task_id: String, title: String, verification_id: String },
     Quota { domain: Domain },
     JobFailed { key: String, reason: String },
@@ -356,15 +412,18 @@ fn db_view(conn: &Connection) -> lobotomy_core::Result<DbView> {
             Some(slot) => current_workspace(conn, slot)?,
             None => None,
         };
-        roles.push(RoleView {
+        let mut view = RoleView {
             task_id: occupant(conn, &role.name)?,
             unfinished: unfinished_turn(conn, &role.name)?,
             last_turn: last_turn(conn, &role.name)?,
             hold: hold(conn, &role.name)?,
+            stalled: None,
             workspace,
             queued_messages: queued_messages(conn, &role.name)?.len(),
             role,
-        });
+        };
+        view.stalled = stalled(conn, &view)?;
+        roles.push(view);
     }
     let mut tasks = Vec::new();
     for task in list_tasks(conn)? {
@@ -399,6 +458,16 @@ pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
         }
         if let Some(hold) = &role.hold {
             attention.push(Attention::Hold { role: role.role.name.clone(), hold: hold.clone() });
+        }
+        if let Some(stalled) = &role.stalled {
+            let task = view.tasks.iter().find(|t| t.task.id == stalled.task_id).map(|t| &t.task);
+            attention.push(Attention::Stalled {
+                role: role.role.name.clone(),
+                task_id: stalled.task_id.clone(),
+                title: task.map(|t| t.title.clone()).unwrap_or_default(),
+                turn_id: stalled.turn_id.clone(),
+                report_error: stalled.report_error.clone(),
+            });
         }
     }
     for task in &view.tasks {

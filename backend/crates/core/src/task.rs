@@ -163,17 +163,17 @@ pub fn criteria_text(conn: &Connection, task_id: &str, version: i64) -> Result<S
 }
 
 /// The task as the executor first sees it: the user's words and the current criteria. Sent when
-/// an attempt starts and when the role starts a new native session mid-attempt.
+/// an attempt starts and when the role starts a new native session mid-attempt. The first line
+/// doubles as its summary in the GUI; the task id is in the message header (`compose_input`).
 pub fn brief(conn: &Connection, task: &Task, attempt_seq: i64) -> Result<String> {
     let criteria = criteria_text(conn, &task.id, task.criteria_version)?;
     Ok(format!(
-        "任务：{title}（{id}，第 {attempt_seq} 轮执行）\n\n\
+        "任务：{title}（第 {attempt_seq} 轮执行）\n\n\
          用户原话：\n{body}\n\n\
          完成条件（第 {version} 版）：\n{criteria}\n\n\
          完成后调用 org_report，status 为 done。遇到需要用户决定的问题时，调用 org_report，status 为 blocked，\
          并在 blocked_on 中写明问题。",
         title = task.title,
-        id = task.id,
         body = task.body,
         version = task.criteria_version,
     ))

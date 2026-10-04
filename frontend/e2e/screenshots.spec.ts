@@ -33,4 +33,20 @@ test('screenshots', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.waitForTimeout(300);
   await page.screenshot({ path: `${out}/4-dark.png` });
+  await page.emulateMedia({ colorScheme: 'light' });
+
+  // A send-back: the panel tells the rounds apart, the history reads in time order.
+  const panel = page.getByRole('dialog', { name: '写 work.txt' });
+  await panel.getByRole('button', { name: '退回…' }).click();
+  const sendBack = page.getByRole('dialog', { name: '退回候选成果' });
+  await sendBack.getByLabel(/理由/).fill('内容改成 second。FAKE:done FAKE:text=second');
+  await sendBack.getByRole('button', { name: '退回', exact: true }).click();
+  await expect(panel.locator('.now')).toContainText('第 2 轮');
+  await page.screenshot({ path: `${out}/5-sent-back.png` });
+  await expect(panel.locator('.now')).toContainText('等你验收');
+  await page.waitForTimeout(1500);
+  await panel.locator('.panel-body').evaluate((e) => e.scrollTo(0, e.scrollHeight));
+  await page.screenshot({ path: `${out}/6-round-2.png` });
+  await panel.getByRole('button', { name: '关闭' }).click();
+  await page.screenshot({ path: `${out}/7-thread.png` });
 });
