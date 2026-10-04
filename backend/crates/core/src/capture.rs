@@ -259,7 +259,11 @@ impl Command for FinishCapture {
             "UPDATE capture SET state = ?2, commit_id = ?3, detail = ?4, finished_at = ?5 WHERE id = ?1",
             params![capture.id, state, commit, detail.as_ref().map(Value::to_string), cx.now],
         )?;
-        cx.emit("capture.finished", &capture.id, json!({ "role": capture.role, "state": state, "kind": capture.kind }))?;
+        cx.emit(
+            "capture.finished",
+            &capture.id,
+            json!({ "role": capture.role, "state": state, "kind": capture.kind }),
+        )?;
 
         if capture.kind != CaptureKind::Candidate || !matches!(self.result, CaptureResult::Pinned { .. }) {
             return Ok(());
@@ -272,7 +276,9 @@ impl Command for FinishCapture {
         let task = load_task(cx.tx, task_id)?;
         let attempt = open_attempt(cx.tx, task_id)?;
         let current = task.phase == Phase::Executing
-            && attempt.as_ref().is_some_and(|a| &a.id == attempt_id && a.done_turn_id.as_deref() == Some(&capture.turn_id));
+            && attempt
+                .as_ref()
+                .is_some_and(|a| &a.id == attempt_id && a.done_turn_id.as_deref() == Some(&capture.turn_id));
         if !current {
             return Ok(());
         }
@@ -295,7 +301,8 @@ pub fn stopped_note(capture: &Capture) -> String {
     let body = match capture.state {
         CaptureState::Oversized => {
             let files: Vec<NewFile> = serde_json::from_value(detail["files"].clone()).unwrap_or_default();
-            let mut list: Vec<String> = files.iter().take(LISTED).map(|f| format!("- {}（{} 字节）", f.path, f.size)).collect();
+            let mut list: Vec<String> =
+                files.iter().take(LISTED).map(|f| format!("- {}（{} 字节）", f.path, f.size)).collect();
             if files.len() > LISTED {
                 list.push(format!("- ……另有 {} 个文件", files.len() - LISTED));
             }
@@ -349,7 +356,10 @@ fn retry(cx: &mut Cx<'_>, caller: &Caller, capture_id: &str, keep: bool) -> Resu
         (CaptureState::Oversized, false) => options.leave_new_files = true,
         (CaptureState::Uncovered, false) => options.leave_uncovered = true,
         _ => {
-            return Err(Error::rejected("bad_capture_state", format!("capture {} was not stopped that way", capture.id)));
+            return Err(Error::rejected(
+                "bad_capture_state",
+                format!("capture {} was not stopped that way", capture.id),
+            ));
         }
     }
     let latest = latest_capture(cx.tx, &capture.role)?;

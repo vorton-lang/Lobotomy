@@ -15,7 +15,7 @@ use lobotomy_core::turn::{
     Continue, EndTurn, Outcome, RegisterTurn, SessionIdentified, TurnRegistered, current_session,
 };
 use lobotomy_core::verify::{
-    Accept, CheckOutcome, FinishPreview, FinishVerification, PreviewResult, Reverify, RetryPreview, SendBack,
+    Accept, CheckOutcome, FinishPreview, FinishVerification, PreviewResult, RetryPreview, Reverify, SendBack,
     StartVerification, VerificationState, latest_verification, next_preview, preview_stopped,
 };
 use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceState, current_workspace};
@@ -50,13 +50,19 @@ fn register(db: &Db) -> TurnRegistered {
 fn report_done(db: &Db, turn_id: &str) {
     db.execute(
         &Caller::Role { role: ROLE.into(), turn_id: turn_id.into() },
-        &OrgReport { title: "完成了".into(), body: "加了 new.txt".into(), status: ReportStatus::Done, blocked_on: None },
+        &OrgReport {
+            title: "完成了".into(),
+            body: "加了 new.txt".into(),
+            status: ReportStatus::Done,
+            blocked_on: None,
+        },
     )
     .unwrap();
 }
 
 fn end_turn(db: &Db, turn_id: &str) {
-    db.execute(&Caller::Runtime, &EndTurn { turn_id: turn_id.into(), outcome: Outcome::Completed, failure: None }).unwrap();
+    db.execute(&Caller::Runtime, &EndTurn { turn_id: turn_id.into(), outcome: Outcome::Completed, failure: None })
+        .unwrap();
 }
 
 fn pending(db: &Db) -> String {
@@ -92,7 +98,8 @@ fn check(exit_code: i64) -> CheckOutcome {
 /// Verifies the task's candidate and returns the verification id.
 fn verify(db: &Db, task: &str, commit: &str, conflicts: Vec<String>, checks: Vec<CheckOutcome>) -> String {
     let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.into() }).unwrap();
-    let finish = FinishVerification { verification_id: v.clone(), commit: commit.into(), conflicts, checks, blobs: vec![] };
+    let finish =
+        FinishVerification { verification_id: v.clone(), commit: commit.into(), conflicts, checks, blobs: vec![] };
     db.execute(&Caller::Runtime, &finish).unwrap();
     v
 }
@@ -172,7 +179,8 @@ fn a_new_check_configuration_sends_the_task_back_to_verification() {
     let (task, _) = candidate(&db);
     let v = verify(&db, &task, "rebased", vec![], vec![]);
     assert_eq!(rejection(db.execute(&Caller::Runtime, &Reverify { task_id: task.clone() })), "evidence_current");
-    let config = ProjectConfig { checks: vec![Check { command: "cargo test".into(), timeout_secs: 60 }], ..Default::default() };
+    let config =
+        ProjectConfig { checks: vec![Check { command: "cargo test".into(), timeout_secs: 60 }], ..Default::default() };
     db.execute(&Caller::User, &EditProjectConfig { request_id: "p1".into(), expected_version: 1, config }).unwrap();
     // The old checks do not cover the new configuration.
     assert_eq!(rejection(accept(&db, "a1", &task, &v, BASE)), "stale_verification");
@@ -193,7 +201,10 @@ fn a_failed_check_goes_straight_back_to_the_executor() {
     assert_eq!(attempt.seq, 2);
     let inbox = db.read(|c| queued_messages(c, ROLE)).unwrap();
     let body = &inbox.last().unwrap().body;
-    assert!(body.contains("cargo test") && body.contains("退出码为 101") && body.contains("test result: FAILED"), "{body}");
+    assert!(
+        body.contains("cargo test") && body.contains("退出码为 101") && body.contains("test result: FAILED"),
+        "{body}"
+    );
     // The candidate was made on the current integration version, so the slot already holds it.
     let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
     assert_eq!(ws.state, WorkspaceState::Ready);
@@ -224,8 +235,11 @@ fn sending_back_opens_the_next_attempt_with_the_reason() {
     let db = db();
     let (task, _) = candidate(&db);
     verify(&db, &task, "rebased", vec![], vec![]);
-    db.execute(&Caller::User, &SendBack { request_id: "b1".into(), task_id: task.clone(), reason: "文件名要改成 NEW.txt".into() })
-        .unwrap();
+    db.execute(
+        &Caller::User,
+        &SendBack { request_id: "b1".into(), task_id: task.clone(), reason: "文件名要改成 NEW.txt".into() },
+    )
+    .unwrap();
     assert_eq!(phase(&db, &task), Phase::Executing);
     assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap().unwrap().seq, 2);
     let body = db.read(|c| queued_messages(c, ROLE)).unwrap().pop().unwrap().body;
@@ -237,8 +251,10 @@ fn a_late_verification_advances_nothing() {
     let db = db();
     let (task, commit) = candidate(&db);
     let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
-    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: task.clone(), reason: String::new() }).unwrap();
-    let finish = FinishVerification { verification_id: v.clone(), commit, conflicts: vec![], checks: vec![], blobs: vec![] };
+    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: task.clone(), reason: String::new() })
+        .unwrap();
+    let finish =
+        FinishVerification { verification_id: v.clone(), commit, conflicts: vec![], checks: vec![], blobs: vec![] };
     assert_eq!(db.execute(&Caller::Runtime, &finish).unwrap(), VerificationState::Passed);
     assert_eq!(phase(&db, &task), Phase::Abandoned);
     assert_eq!(db.read(|c| latest_verification(c, &task)).unwrap().unwrap().id, v);
@@ -263,8 +279,11 @@ fn a_stopped_capture_stops_the_role_until_the_user_decides() {
     let (task, capture) = stopped_done(&db);
     // Nothing goes back to the executor on its own, and no turn starts, whatever arrives.
     assert!(db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty());
-    db.execute(&Caller::User, &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "在吗".into() })
-        .unwrap();
+    db.execute(
+        &Caller::User,
+        &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "在吗".into() },
+    )
+    .unwrap();
     assert_eq!(rejection(db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() })), "capture_stopped");
     assert_eq!(phase(&db, &task), Phase::Executing);
 
@@ -320,8 +339,11 @@ fn deciding_needs_the_latest_capture_and_no_running_turn() {
     pin_captures(&db);
     assert_eq!(rejection(db.execute(&Caller::User, &approve)), "not_latest");
     // The role runs normally again once its latest capture is pinned.
-    db.execute(&Caller::User, &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "好".into() })
-        .unwrap();
+    db.execute(
+        &Caller::User,
+        &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "好".into() },
+    )
+    .unwrap();
     register(&db);
 }
 
@@ -353,11 +375,13 @@ fn a_slot_whose_last_capture_was_stopped_does_not_go_to_the_next_task() {
 fn a_reopened_task_starts_from_its_last_candidate_rebased() {
     let db = db();
     let (task, _) = candidate(&db);
-    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: task.clone(), reason: String::new() }).unwrap();
+    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: task.clone(), reason: String::new() })
+        .unwrap();
     db.execute(&Caller::User, &Reopen { request_id: "o1".into(), task_id: task.clone() }).unwrap();
     let plain = StartAttempt { task_id: task.clone(), code_start: None };
     assert_eq!(rejection(db.execute(&Caller::Runtime, &plain)), "code_start_needed");
-    let code_start = CodeStart { commit: "rebased-candidate".into(), base: BASE.into(), conflicts: vec!["a.txt".into()] };
+    let code_start =
+        CodeStart { commit: "rebased-candidate".into(), base: BASE.into(), conflicts: vec!["a.txt".into()] };
     db.execute(&Caller::Runtime, &StartAttempt { task_id: task.clone(), code_start: Some(code_start) }).unwrap();
     let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
     assert_eq!((ws.target.as_str(), ws.head.as_str()), ("rebased-candidate", BASE));
@@ -372,8 +396,11 @@ fn align(db: &Db) -> lobotomy_core::Result<()> {
 #[test]
 fn a_role_without_a_task_gets_a_slot_at_the_integration_version() {
     let db = db();
-    db.execute(&Caller::User, &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "在吗".into() })
-        .unwrap();
+    db.execute(
+        &Caller::User,
+        &SendMessage { request_id: "m1".into(), role: ROLE.into(), task_id: None, body: "在吗".into() },
+    )
+    .unwrap();
     assert_eq!(rejection(db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() })), "slot_not_ready");
     align(&db).unwrap();
     let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
@@ -393,7 +420,10 @@ fn after_acceptance_the_idle_slot_follows_the_new_integration_version() {
     accept(&db, "a1", &task, &v, BASE).unwrap();
     align(&db).unwrap();
     let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
-    assert_eq!((ws.state, ws.target.as_str(), ws.head.as_str()), (WorkspaceState::Materializing, "published", "published"));
+    assert_eq!(
+        (ws.state, ws.target.as_str(), ws.head.as_str()),
+        (WorkspaceState::Materializing, "published", "published")
+    );
 }
 
 #[test]
@@ -454,8 +484,10 @@ fn a_verification_passes_only_when_every_check_ran() {
     let (task, commit) = candidate(&db);
     let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
     // Only the first check ran, for example because the task left verification meanwhile.
-    let finish = FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![check(0)], blobs: vec![] };
-    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: task.clone(), reason: String::new() }).unwrap();
+    let finish =
+        FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![check(0)], blobs: vec![] };
+    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: task.clone(), reason: String::new() })
+        .unwrap();
     assert_eq!(db.execute(&Caller::Runtime, &finish).unwrap(), VerificationState::Failed);
 }
 

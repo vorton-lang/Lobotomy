@@ -38,10 +38,7 @@ use crate::project::Project;
 pub struct TurnToken(pub String);
 
 /// The HTTP routes of the MCP service. rmcp calls `make_handler` once per request.
-pub fn router<S>(
-    make_handler: impl Fn() -> S + Send + Sync + 'static,
-    shutdown: CancellationToken,
-) -> Router
+pub fn router<S>(make_handler: impl Fn() -> S + Send + Sync + 'static, shutdown: CancellationToken) -> Router
 where
     S: ServerHandler + Send + 'static,
 {
@@ -123,7 +120,9 @@ pub struct OrgReportArgs {
 
 #[tool_router]
 impl OrgTools {
-    #[tool(description = "向 Lobotomy 组织汇报：阶段性进展（progress）、需要用户决定的问题（blocked）或任务完成（done）。")]
+    #[tool(
+        description = "向 Lobotomy 组织汇报：阶段性进展（progress）、需要用户决定的问题（blocked）或任务完成（done）。"
+    )]
     async fn org_report(
         &self,
         Parameters(args): Parameters<OrgReportArgs>,
@@ -132,7 +131,8 @@ impl OrgTools {
         let token = turn_token(&context).map(str::to_owned);
         let project = self.project.clone();
         let outcome = tokio::task::spawn_blocking(move || {
-            let token = token.ok_or_else(|| lobotomy_core::Error::rejected("no_token", "the URL carries no turn token"))?;
+            let token =
+                token.ok_or_else(|| lobotomy_core::Error::rejected("no_token", "the URL carries no turn token"))?;
             let turn = project
                 .db
                 .read(|c| turn_by_token(c, &token))?
@@ -243,9 +243,8 @@ mod tests {
         }
         let body = body.map_or_else(Body::empty, |body| Body::from(body.to_string()));
         let response = echo_router().oneshot(request.body(body).unwrap()).await.unwrap();
-        let header = |name| {
-            response.headers().get(name).map(|value: &http::HeaderValue| value.to_str().unwrap().to_owned())
-        };
+        let header =
+            |name| response.headers().get(name).map(|value: &http::HeaderValue| value.to_str().unwrap().to_owned());
         let content_type = header(header::CONTENT_TYPE.as_str()).unwrap_or_default();
         let session_id = header("mcp-session-id");
         let status = response.status();
@@ -298,11 +297,7 @@ mod tests {
                 }
             }
         });
-        let headers = [
-            ("mcp-protocol-version", "2026-07-28"),
-            ("mcp-method", "tools/call"),
-            ("mcp-name", "echo"),
-        ];
+        let headers = [("mcp-protocol-version", "2026-07-28"), ("mcp-method", "tools/call"), ("mcp-name", "echo")];
         let reply = send("tok-b", "POST", &headers, Some(call)).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(reply.content_type.starts_with("application/json"), "{}", reply.content_type);

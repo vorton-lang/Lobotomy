@@ -52,7 +52,8 @@ impl Client {
         let request = json!({ "id": id, "method": method, "params": params });
         self.socket.send(Message::Text(request.to_string().into())).await.unwrap();
         loop {
-            let message = tokio::time::timeout(Duration::from_secs(30), self.socket.next()).await.unwrap().unwrap().unwrap();
+            let message =
+                tokio::time::timeout(Duration::from_secs(30), self.socket.next()).await.unwrap().unwrap().unwrap();
             let Message::Text(text) = message else { continue };
             let value: Value = serde_json::from_str(&text).unwrap();
             if value["id"] == json!(id) {
@@ -76,7 +77,8 @@ impl Client {
             if let Some(event) = self.events.take(kind) {
                 return event;
             }
-            let message = tokio::time::timeout_at(deadline, self.socket.next()).await.expect("no such event").unwrap().unwrap();
+            let message =
+                tokio::time::timeout_at(deadline, self.socket.next()).await.expect("no such event").unwrap().unwrap();
             if let Message::Text(text) = message {
                 self.events.add(serde_json::from_str(&text).unwrap());
             }
@@ -184,7 +186,8 @@ async fn a_failed_turn_waits_in_attention_until_the_user_continues() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let mut gui = Client::connect(&backend).await;
-    let args = json!({ "request_id": "r1", "title": "失败", "body": "FAKE:fail", "criteria": "-", "executor": "Malkuth" });
+    let args =
+        json!({ "request_id": "r1", "title": "失败", "body": "FAKE:fail", "criteria": "-", "executor": "Malkuth" });
     gui.command("create_task", args).await.unwrap();
     gui.event("turn.ended").await;
     // Nothing to decide until the turn's scene is captured.
@@ -215,7 +218,10 @@ async fn a_turn_without_a_report_leaves_the_task_to_the_user() {
     let snapshot = gui.call("snapshot", json!({})).await.unwrap();
     let attention = snapshot["attention"].as_array().unwrap();
     assert_eq!(attention.len(), 1, "{attention:?}");
-    assert_eq!((attention[0]["kind"].as_str(), attention[0]["task_id"].as_str()), (Some("stalled"), Some(task.as_str())));
+    assert_eq!(
+        (attention[0]["kind"].as_str(), attention[0]["task_id"].as_str()),
+        (Some("stalled"), Some(task.as_str()))
+    );
     assert!(attention[0]["report_error"].as_str().unwrap().contains("requires approval"), "{attention:?}");
 
     // A message moves it on. This turn keeps running, so the snapshot cannot race its end.
@@ -238,7 +244,9 @@ async fn search_finds_the_threads_text_in_order() {
     gui.command("create_task", args).await.unwrap();
     gui.event("task.accepting").await;
     // Outside execution a message waits in the queue.
-    gui.command("send_message", json!({ "request_id": "m1", "role": "Malkuth", "body": "work.txt 再改一下" })).await.unwrap();
+    gui.command("send_message", json!({ "request_id": "m1", "role": "Malkuth", "body": "work.txt 再改一下" }))
+        .await
+        .unwrap();
     let thread = gui.call("thread", json!({ "role": "Malkuth" })).await.unwrap();
     let item = |kind: &str| thread["items"].as_array().unwrap().iter().find(|i| i["kind"] == kind).unwrap().clone();
     let first_seq = thread["items"][0]["seq"].clone();

@@ -207,7 +207,10 @@ mod tests {
         assert_eq!(events[0], Event::SessionStarted { native_id: "01a104d4-07c5-7063-9a66-7c93fd2cdd3f".into() });
         assert_eq!(events[1], Event::TurnStarted);
         let Event::ItemCompleted(message) = &events[2] else { panic!("{:?}", events[2]) };
-        assert_eq!((message.kind, message.content["text"].as_str()), (ItemKind::AgentMessage, Some("I'll run the command.\n")));
+        assert_eq!(
+            (message.kind, message.content["text"].as_str()),
+            (ItemKind::AgentMessage, Some("I'll run the command.\n"))
+        );
         let Event::ItemStarted(started) = &events[3] else { panic!("{:?}", events[3]) };
         assert_eq!((started.kind, started.content["status"].as_str()), (ItemKind::Command, Some("in_progress")));
         let Event::ItemCompleted(done) = &events[4] else { panic!("{:?}", events[4]) };
@@ -235,7 +238,10 @@ mod tests {
             parse_line(r#"{"type":"turn.failed","error":{"message":"boom"}}"#),
             Some(Event::TurnFailed { message: "boom".into() })
         );
-        assert_eq!(parse_line(r#"{"type":"error","message":"retrying"}"#), Some(Event::Error { message: "retrying".into() }));
+        assert_eq!(
+            parse_line(r#"{"type":"error","message":"retrying"}"#),
+            Some(Event::Error { message: "retrying".into() })
+        );
     }
 
     #[test]

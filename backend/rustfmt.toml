@@ -1,0 +1,3 @@
+# Lines as wide as the code was written: 99% of lines were within 119 characters.
+max_width = 120
+use_small_heuristics = "Max"

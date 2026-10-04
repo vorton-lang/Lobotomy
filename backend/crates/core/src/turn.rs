@@ -687,7 +687,10 @@ impl Command for NewNativeSession {
         caller.require_user()?;
         role_harness(cx.tx, &self.role)?;
         if let Some(running) = unfinished_turn(cx.tx, &self.role)? {
-            return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", self.role, running.id)));
+            return Err(Error::rejected(
+                "turn_unfinished",
+                format!("{} has unfinished turn {}", self.role, running.id),
+            ));
         }
         let (task, attempt) = current_work(cx.tx, &self.role)?;
         let task_id = task.as_ref().map(|t| t.id.as_str());

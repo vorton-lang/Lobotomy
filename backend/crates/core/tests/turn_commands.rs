@@ -52,7 +52,12 @@ fn end(db: &Db, turn_id: &str, outcome: Outcome) {
     pin_captures(db);
 }
 
-fn report(db: &Db, turn_id: &str, status: ReportStatus, blocked_on: Option<&str>) -> lobotomy_core::Result<ReportEffect> {
+fn report(
+    db: &Db,
+    turn_id: &str,
+    status: ReportStatus,
+    blocked_on: Option<&str>,
+) -> lobotomy_core::Result<ReportEffect> {
     db.execute(
         &Caller::Role { role: ROLE.into(), turn_id: turn_id.into() },
         &OrgReport { title: "汇报".into(), body: "内容".into(), status, blocked_on: blocked_on.map(Into::into) },
@@ -277,8 +282,11 @@ fn an_abnormal_turn_of_an_ended_attempt_does_not_hold_the_next_attempt() {
     report(&db, &t.turn_id, ReportStatus::Done, None).unwrap();
     // The turn reported done, then ended abnormally; its capture became the candidate.
     let [commit] = <[String; 1]>::try_from({
-        db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id.clone(), outcome: Outcome::Interrupted, failure: None })
-            .unwrap();
+        db.execute(
+            &Caller::Runtime,
+            &EndTurn { turn_id: t.turn_id.clone(), outcome: Outcome::Interrupted, failure: None },
+        )
+        .unwrap();
         pin_captures(&db)
     })
     .unwrap();
@@ -292,7 +300,8 @@ fn an_abnormal_turn_of_an_ended_attempt_does_not_hold_the_next_attempt() {
         duration_ms: 10,
         tail: "1 failed".into(),
     };
-    let finish = FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![check], blobs: vec![] };
+    let finish =
+        FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![check], blobs: vec![] };
     db.execute(&Caller::Runtime, &finish).unwrap();
     let next = register(&db).unwrap();
     assert_eq!(t_session(&db, &next.turn_id), t_session(&db, &t.turn_id), "same task, same session");
@@ -386,9 +395,11 @@ fn reports_after_the_turn_ended_are_late_and_change_nothing() {
     // The late call is still on record.
     let recorded: i64 = db
         .read(|c| {
-            Ok(c.query_row("SELECT COUNT(*) FROM command_record WHERE name = 'org_report' AND turn_id = ?1", [&t.turn_id], |r| {
-                r.get(0)
-            })?)
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM command_record WHERE name = 'org_report' AND turn_id = ?1",
+                [&t.turn_id],
+                |r| r.get(0),
+            )?)
         })
         .unwrap();
     assert_eq!(recorded, 1);
@@ -400,9 +411,15 @@ fn only_the_turns_own_role_can_report() {
     started_task(&db);
     let t = register(&db).unwrap();
     let other = Caller::Role { role: "Yesod".into(), turn_id: t.turn_id.clone() };
-    let r = db.execute(&other, &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None });
+    let r = db.execute(
+        &other,
+        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None },
+    );
     assert_eq!(rejection(r), "forbidden");
-    let r = db.execute(&Caller::User, &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None });
+    let r = db.execute(
+        &Caller::User,
+        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None },
+    );
     assert_eq!(rejection(r), "forbidden");
 }
 

@@ -129,7 +129,13 @@ impl Host {
             std::fs::create_dir_all(dir)?;
         }
         let env = capability::env(&gh);
-        let spec = Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &env, env_remove: capability::REMOVED_VARS };
+        let spec = Spec {
+            program: Path::new(program),
+            args: &args,
+            cwd: &cwd,
+            env: &env,
+            env_remove: capability::REMOVED_VARS,
+        };
         let mut spawned = process::spawn(&spec)?;
         spawned.resume()?;
         let mut stdin = spawned.child.stdin.take().context("no stdin")?;

@@ -16,7 +16,8 @@ use lobotomy_core::item::externalize;
 use lobotomy_core::project::{Check, ProjectConfig, config_version, current_config, require_project};
 use lobotomy_core::task::CodeStart;
 use lobotomy_core::verify::{
-    CheckOutcome, FinishPreview, FinishVerification, PreviewJob, PreviewResult, latest_candidate_commit, verification_plan,
+    CheckOutcome, FinishPreview, FinishVerification, PreviewJob, PreviewResult, latest_candidate_commit,
+    verification_plan,
 };
 use lobotomy_core::workspace::{ReplaceWorkspace, Workspace, WorkspaceReady, current_workspace, load_workspace};
 use lobotomy_harness::process::{self, Spec};
@@ -95,7 +96,8 @@ fn quarantine(project: &Project, dir: &Path, label: &str) -> anyhow::Result<std:
 /// Writes a slot's target (harness-adapter.md §3). A directory that cannot be brought to its
 /// target is moved aside and the next generation starts empty.
 pub async fn materialize(project: Arc<Project>, ws: Workspace) -> anyhow::Result<()> {
-    let (branch, config) = db(&project, |db| db.read(|c| Ok((require_project(c)?.branch, current_config(c)?.1)))).await?;
+    let (branch, config) =
+        db(&project, |db| db.read(|c| Ok((require_project(c)?.branch, current_config(c)?.1)))).await?;
     let scope = scope(&config);
     let write = |project: Arc<Project>, ws: Workspace, branch: String, scope: Scope| {
         blocking(move || {
@@ -128,10 +130,9 @@ pub async fn materialize(project: Arc<Project>, ws: Workspace) -> anyhow::Result
 /// publishes the result (step ③).
 pub async fn capture(project: Arc<Project>, capture: Capture) -> anyhow::Result<()> {
     let (workspace_id, version) = (capture.workspace_id.clone(), capture.config_version);
-    let (ws, config) = db(&project, move |db| {
-        db.read(|c| Ok((load_workspace(c, &workspace_id)?, config_version(c, version)?)))
-    })
-    .await?;
+    let (ws, config) =
+        db(&project, move |db| db.read(|c| Ok((load_workspace(c, &workspace_id)?, config_version(c, version)?))))
+            .await?;
     let guard = (!capture.options.ignore_guard)
         .then_some(Guard { max_new_files: config.max_new_files, max_new_bytes: config.max_new_bytes });
     let leave = Leave { new_files: capture.options.leave_new_files, uncovered: capture.options.leave_uncovered };
@@ -145,7 +146,9 @@ pub async fn capture(project: Arc<Project>, capture: Capture) -> anyhow::Result<
         Captured::Oversized { files, total_bytes } => {
             CaptureResult::Oversized { files: serde_json::from_value(serde_json::to_value(files)?)?, total_bytes }
         }
-        Captured::Uncovered { paths } => CaptureResult::Uncovered { paths: serde_json::from_value(serde_json::to_value(paths)?)? },
+        Captured::Uncovered { paths } => {
+            CaptureResult::Uncovered { paths: serde_json::from_value(serde_json::to_value(paths)?)? }
+        }
     };
     runtime(&project, FinishCapture { capture_id: capture.id, result }).await?;
     Ok(())
@@ -211,7 +214,8 @@ pub async fn verify(project: Arc<Project>, verification_id: String) -> anyhow::R
         (checks, blobs)
     })
     .await?;
-    let finish = FinishVerification { verification_id, commit: composed.commit, conflicts: composed.conflicts, checks, blobs };
+    let finish =
+        FinishVerification { verification_id, commit: composed.commit, conflicts: composed.conflicts, checks, blobs };
     runtime(&project, finish).await?;
     Ok(())
 }
@@ -255,7 +259,8 @@ async fn run_check(project: &Arc<Project>, check: &Check, cwd: &Path) -> anyhow:
     spawned.reap();
     let stdout = stdout.await?;
     let stderr = stderr.await?;
-    let combined = [stdout.as_str(), stderr.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n");
+    let combined =
+        [stdout.as_str(), stderr.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n");
     let lines: Vec<&str> = combined.lines().collect();
     let tail = lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n");
     Ok(CheckOutcome {
@@ -291,7 +296,9 @@ async fn read_capped(mut stream: impl AsyncRead + Unpin) -> String {
 pub async fn preview(project: Arc<Project>, job: PreviewJob) -> anyhow::Result<()> {
     let p = project.clone();
     let j = job.clone();
-    let written = blocking(move || repo::fast_forward(Path::new(&j.repo_path), &p.store, &j.branch, &j.previewed, &j.target)).await?;
+    let written =
+        blocking(move || repo::fast_forward(Path::new(&j.repo_path), &p.store, &j.branch, &j.previewed, &j.target))
+            .await?;
     let result = match written {
         Ok(None) => PreviewResult::Written,
         Ok(Some(diverged)) => PreviewResult::Stopped { reason: diverged.to_string() },
@@ -322,7 +329,8 @@ pub async fn code_start(project: &Arc<Project>, task_id: &str) -> anyhow::Result
     // new one (#12).
     let pin = format!("start-{task_id}-{candidate}-{integration}");
     let (p, base) = (project.clone(), integration.clone());
-    let composed = blocking(move || p.store.compose(&candidate, &base, "code start", &Identity::runtime(), &pin)).await??;
+    let composed =
+        blocking(move || p.store.compose(&candidate, &base, "code start", &Identity::runtime(), &pin)).await??;
     Ok(Some(CodeStart { commit: composed.commit, base: integration, conflicts: composed.conflicts }))
 }
 

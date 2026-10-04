@@ -83,7 +83,10 @@ impl<'a> Git<'a> {
         match out.status.code() {
             Some(0) => Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_owned())),
             Some(1) => Ok(None),
-            _ => Err(Error::Git { args: args.join(" "), message: String::from_utf8_lossy(&out.stderr).trim().to_owned() }),
+            _ => Err(Error::Git {
+                args: args.join(" "),
+                message: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+            }),
         }
     }
 }

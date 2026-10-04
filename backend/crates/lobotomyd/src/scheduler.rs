@@ -13,7 +13,8 @@ use lobotomy_core::role::list_roles;
 use lobotomy_core::task::{Phase, StartAttempt, next_queued_task, occupant};
 use lobotomy_core::turn::{EndTurn, MarkUnfinishedUnknown, Outcome, RegisterTurn, TurnState, turns_in_state};
 use lobotomy_core::verify::{
-    Reverify, StartVerification, evidence_is_stale, latest_verification, next_preview, running_verifications, tasks_in_phase,
+    Reverify, StartVerification, evidence_is_stale, latest_verification, next_preview, running_verifications,
+    tasks_in_phase,
 };
 use lobotomy_core::workspace::{AlignIdleSlot, materializing};
 use lobotomy_harness::process;
@@ -66,10 +67,9 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
             continue;
         }
         let name = role.name.clone();
-        let (busy, next) = db(project, move |db| {
-            db.read(|c| Ok((occupant(c, &name)?.is_some(), next_queued_task(c, &name)?)))
-        })
-        .await?;
+        let (busy, next) =
+            db(project, move |db| db.read(|c| Ok((occupant(c, &name)?.is_some(), next_queued_task(c, &name)?))))
+                .await?;
         if !busy && let Some(task) = next {
             let code_start = results::code_start(project, &task.id).await?;
             ignore_rejection(runtime(project, StartAttempt { task_id: task.id, code_start }).await)?;

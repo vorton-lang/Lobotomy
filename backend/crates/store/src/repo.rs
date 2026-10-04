@@ -27,7 +27,10 @@ pub fn inspect(repo: &Path) -> Result<RepoState> {
     let args = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
     let out = git.output(&args)?;
     if !out.status.success() {
-        return Err(Error::Git { args: args.join(" "), message: String::from_utf8_lossy(&out.stderr).trim().to_owned() });
+        return Err(Error::Git {
+            args: args.join(" "),
+            message: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        });
     }
     // Entries are `XY path`, NUL-terminated; a rename or copy is followed by its source path.
     let status = String::from_utf8_lossy(&out.stdout);
@@ -98,7 +101,13 @@ pub fn check_unchanged(repo: &Path, branch: &str, previewed: &str) -> Result<Opt
 /// tree, like `git merge --ff-only` (harness-adapter.md §4.3). Writes nothing when the repository
 /// is not as the last preview left it. A repository already at `target` counts as written: the
 /// receipt of an earlier run was lost (data-model.md §5).
-pub fn fast_forward(repo: &Path, store: &Store, branch: &str, previewed: &str, target: &str) -> Result<Option<Diverged>> {
+pub fn fast_forward(
+    repo: &Path,
+    store: &Store,
+    branch: &str,
+    previewed: &str,
+    target: &str,
+) -> Result<Option<Diverged>> {
     if check_unchanged(repo, branch, target)?.is_none() {
         return Ok(None);
     }

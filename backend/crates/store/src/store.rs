@@ -74,8 +74,7 @@ impl Store {
     pub fn init(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root).map_err(Error::io(root))?;
         let settings = settings()?;
-        let backend =
-            GitBackend::init_internal(&settings, root, gix_sha1()).map_err(Error::jj)?;
+        let backend = GitBackend::init_internal(&settings, root, gix_sha1()).map_err(Error::jj)?;
         Self::with_backend(settings, backend)
     }
 
@@ -112,7 +111,9 @@ impl Store {
         if let Some(expected) = expected
             && expected != commit
         {
-            return Err(Error::Invalid(format!("{branch} moved to {commit} while it was imported (expected {expected})")));
+            return Err(Error::Invalid(format!(
+                "{branch} moved to {commit} while it was imported (expected {expected})"
+            )));
         }
         // Reading the commit through jj imports it, assigning it a change id.
         self.commit(&commit)?;
@@ -127,7 +128,12 @@ impl Store {
 
     /// The commit pinned under `name`, if any.
     pub fn pinned(&self, name: &str) -> Result<Option<String>> {
-        Git::bare(&self.git_dir).optional(&["rev-parse", "-q", "--verify", &format!("{PIN_NAMESPACE}{name}^{{commit}}")])
+        Git::bare(&self.git_dir).optional(&[
+            "rev-parse",
+            "-q",
+            "--verify",
+            &format!("{PIN_NAMESPACE}{name}^{{commit}}"),
+        ])
     }
 
     /// Points a ref of the store at `commit`, for other repositories to fetch.
@@ -141,7 +147,13 @@ impl Store {
         self.inner.get_commit(&id).map_err(Error::jj)
     }
 
-    pub(crate) fn write_commit(&self, parent: &Commit, tree: MergedTree, message: &str, who: &Identity) -> Result<String> {
+    pub(crate) fn write_commit(
+        &self,
+        parent: &Commit,
+        tree: MergedTree,
+        message: &str,
+        who: &Identity,
+    ) -> Result<String> {
         let signature = Signature { name: who.name.clone(), email: who.email.clone(), timestamp: Timestamp::now() };
         let (root_tree, labels) = tree.into_tree_ids_and_labels();
         let commit = backend::Commit {
@@ -163,7 +175,14 @@ impl Store {
     /// merged into `onto`'s tree. Conflicts do not stop the rebase; jj records them in the commit
     /// (harness-adapter.md §4.2). The result has `onto` as its only parent and is pinned under
     /// `pin`; asking again with the same pin returns the same commit.
-    pub fn compose(&self, candidate: &str, onto: &str, message: &str, author: &Identity, pin: &str) -> Result<Composed> {
+    pub fn compose(
+        &self,
+        candidate: &str,
+        onto: &str,
+        message: &str,
+        author: &Identity,
+        pin: &str,
+    ) -> Result<Composed> {
         if let Some(existing) = self.pinned(pin)? {
             let conflicts = conflicts(&self.commit(&existing)?.tree());
             return Ok(Composed { commit: existing, conflicts });
@@ -210,10 +229,18 @@ impl Store {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Content {
-    Text { text: String },
-    Binary { size: u64 },
-    TooLarge { size: u64 },
-    Symlink { target: String },
+    Text {
+        text: String,
+    },
+    Binary {
+        size: u64,
+    },
+    TooLarge {
+        size: u64,
+    },
+    Symlink {
+        target: String,
+    },
     /// jj recorded a conflict at this path.
     Conflict,
 }
@@ -263,7 +290,11 @@ impl Store {
             Some(TreeValue::File { id, .. }) => {
                 let mut reader = self.inner.read_file(path, id).await.map_err(Error::jj)?;
                 let mut bytes = Vec::new();
-                (&mut reader).take(DIFF_CONTENT_LIMIT + 1).read_to_end(&mut bytes).await.map_err(Error::io(path.as_internal_file_string()))?;
+                (&mut reader)
+                    .take(DIFF_CONTENT_LIMIT + 1)
+                    .read_to_end(&mut bytes)
+                    .await
+                    .map_err(Error::io(path.as_internal_file_string()))?;
                 let size = bytes.len() as u64;
                 if size > DIFF_CONTENT_LIMIT {
                     Some(Content::TooLarge { size })

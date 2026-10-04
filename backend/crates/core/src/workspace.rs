@@ -112,7 +112,11 @@ pub(crate) fn plan(cx: &mut Cx<'_>, name: &str, target: &str, head: &str, task_i
             id
         }
     };
-    cx.emit("workspace.materializing", &id, json!({ "name": name, "target": target, "head": head, "task_id": task_id }))?;
+    cx.emit(
+        "workspace.materializing",
+        &id,
+        json!({ "name": name, "target": target, "head": head, "task_id": task_id }),
+    )?;
     Ok(id)
 }
 
@@ -145,7 +149,10 @@ impl Command for AlignIdleSlot {
                 return Err(Error::rejected("slot_aligned", format!("slot {slot} is at the integration version")));
             }
             if let Some(turn) = crate::turn::unfinished_turn(cx.tx, &self.role)? {
-                return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", self.role, turn.id)));
+                return Err(Error::rejected(
+                    "turn_unfinished",
+                    format!("{} has unfinished turn {}", self.role, turn.id),
+                ));
             }
             crate::capture::require_captured(cx.tx, &self.role)?;
         }
@@ -198,7 +205,8 @@ impl Command for ReplaceWorkspace {
             return Err(Error::rejected("not_materializing", format!("workspace {} is not being written", old.id)));
         }
         cx.tx.execute("UPDATE workspace SET state = 'retired' WHERE id = ?1", [&old.id])?;
-        let new = Workspace { id: new_id("ws"), generation: old.generation + 1, state: WorkspaceState::Materializing, ..old };
+        let new =
+            Workspace { id: new_id("ws"), generation: old.generation + 1, state: WorkspaceState::Materializing, ..old };
         cx.tx.execute(
             "INSERT INTO workspace (id, name, generation, target, head, task_id, state, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'materializing', ?7)",

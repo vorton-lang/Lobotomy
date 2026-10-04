@@ -53,8 +53,7 @@ async fn reaping_ends_what_the_cli_left_running() {
     spawned.resume().unwrap();
     let status = spawned.child.wait().await.unwrap();
     assert!(status.success());
-    let grandchild: u32 =
-        std::fs::read_to_string(dir.path().join("grandchild.txt")).unwrap().trim().parse().unwrap();
+    let grandchild: u32 = std::fs::read_to_string(dir.path().join("grandchild.txt")).unwrap().trim().parse().unwrap();
     assert!(pid_alive(grandchild), "the grandchild outlives the CLI until reaped");
     spawned.reap();
     assert!(wait_until(|| !pid_alive(grandchild), Duration::from_secs(10)), "reaping ends the grandchild");

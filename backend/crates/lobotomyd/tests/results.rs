@@ -124,7 +124,8 @@ if (original === 'candidate A') {{
     let (version, mut config) = db.read(current_config).unwrap();
     let command = format!("node \"{}\"", script.to_string_lossy().replace('\\', "/"));
     config.checks = vec![Check { command, timeout_secs: 60 }];
-    db.execute(&Caller::User, &EditProjectConfig { request_id: "checks".into(), expected_version: version, config }).unwrap();
+    db.execute(&Caller::User, &EditProjectConfig { request_id: "checks".into(), expected_version: version, config })
+        .unwrap();
 
     let a = create_task(db, "old verifier");
     start_attempt(&project, &a).await;

@@ -70,7 +70,9 @@ fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result
 }
 
 pub fn load_verification(conn: &Connection, id: &str) -> Result<Verification> {
-    query(conn, "WHERE id = ?1", [id])?.pop().ok_or_else(|| Error::rejected("not_found", format!("no verification {id}")))
+    query(conn, "WHERE id = ?1", [id])?
+        .pop()
+        .ok_or_else(|| Error::rejected("not_found", format!("no verification {id}")))
 }
 
 pub fn latest_verification(conn: &Connection, task_id: &str) -> Result<Option<Verification>> {
@@ -334,7 +336,9 @@ fn rebased_slot(conn: &Connection, v: &Verification, commit: &str) -> Result<Opt
 /// Opens the next attempt of a task coming back to execution, with a message for the executor
 /// (data-model.md §4.1). The native session carries on; the executor has seen the brief.
 fn reenter(cx: &mut Cx<'_>, task: &Task, slot: Option<(String, String)>, body: &str) -> Result<()> {
-    let seq: i64 = cx.tx.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| r.get(0))?;
+    let seq: i64 =
+        cx.tx
+            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| r.get(0))?;
     let attempt_id = new_id("att");
     cx.tx.execute(
         "INSERT INTO attempt (id, task_id, seq, started_at, code_start) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -416,7 +420,12 @@ impl Command for Accept {
         }
         let v = latest_verification(cx.tx, &task.id)?
             .filter(|v| v.id == self.verification_id && v.state == VerificationState::Passed)
-            .ok_or_else(|| Error::rejected("stale_verification", format!("{} is not the task's passed verification", self.verification_id)))?;
+            .ok_or_else(|| {
+                Error::rejected(
+                    "stale_verification",
+                    format!("{} is not the task's passed verification", self.verification_id),
+                )
+            })?;
         if task.criteria_version != self.criteria_version {
             return Err(Error::rejected(
                 "stale_criteria",
@@ -435,7 +444,8 @@ impl Command for Accept {
         if evidence_is_stale(cx.tx, &v)? {
             return Err(Error::rejected("stale_verification", format!("the checks of {} are out of date", v.id)));
         }
-        let commit = v.commit_id.clone().ok_or_else(|| Error::rejected("no_commit", "the verification has no commit"))?;
+        let commit =
+            v.commit_id.clone().ok_or_else(|| Error::rejected("no_commit", "the verification has no commit"))?;
         let detail = json!({
             "verification_id": v.id,
             "capture_id": v.capture_id,
@@ -558,7 +568,9 @@ pub fn preview_stopped(conn: &Connection) -> Result<Option<String>> {
 pub enum PreviewResult {
     Written,
     /// The user's repository is not as the last preview left it; nothing was written.
-    Stopped { reason: String },
+    Stopped {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -575,7 +587,9 @@ impl Command for FinishPreview {
         caller.require_runtime()?;
         let (payload, state): (String, String) = cx
             .tx
-            .query_row("SELECT payload, state FROM outbox WHERE id = ?1", [&self.outbox_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT payload, state FROM outbox WHERE id = ?1", [&self.outbox_id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .optional()?
             .ok_or_else(|| Error::rejected("not_found", format!("no outbox record {}", self.outbox_id)))?;
         if state != "pending" {
@@ -600,7 +614,10 @@ impl Command for FinishPreview {
                 cx.emit("preview.written", &self.outbox_id, json!({ "target": target }))?;
             }
             PreviewResult::Stopped { reason } => {
-                cx.tx.execute("UPDATE outbox SET state = 'stopped', receipt = ?2 WHERE id = ?1", params![self.outbox_id, reason])?;
+                cx.tx.execute(
+                    "UPDATE outbox SET state = 'stopped', receipt = ?2 WHERE id = ?1",
+                    params![self.outbox_id, reason],
+                )?;
                 // A system failure: the user restores the repository and retries
                 // (harness-adapter.md §4.3; manager-actions.md §6).
                 cx.emit("preview.stopped", &self.outbox_id, json!({ "target": target, "reason": reason }))?;

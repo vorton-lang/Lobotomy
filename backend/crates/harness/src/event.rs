@@ -6,16 +6,24 @@ use serde_json::Value;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Event {
     /// The harness's own session id. Codex reports it at the start of every turn.
-    SessionStarted { native_id: String },
+    SessionStarted {
+        native_id: String,
+    },
     TurnStarted,
     ItemStarted(Item),
     ItemUpdated(Item),
     ItemCompleted(Item),
     /// The turn ended normally. `usage` is the harness's own record, kept as is.
-    TurnCompleted { usage: Value },
-    TurnFailed { message: String },
+    TurnCompleted {
+        usage: Value,
+    },
+    TurnFailed {
+        message: String,
+    },
     /// An error outside an item, such as a lost connection the harness retries.
-    Error { message: String },
+    Error {
+        message: String,
+    },
     /// Valid JSON of a type the adapter does not know. Kept so the raw output can be inspected.
     Unknown(Value),
     /// A line that is not JSON.

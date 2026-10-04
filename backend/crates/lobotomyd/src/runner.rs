@@ -15,7 +15,7 @@ use lobotomy_core::workspace::load_workspace;
 use lobotomy_core::{Caller, Command, Db};
 use lobotomy_harness::codex::{self, TurnArgs};
 use lobotomy_harness::event::{Event, Item, ItemKind};
-use lobotomy_harness::process::{self, Spec, Spawned};
+use lobotomy_harness::process::{self, Spawned, Spec};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -61,7 +61,11 @@ pub fn launch(project: &Arc<Project>, turn_id: String) {
             let end = EndTurn {
                 turn_id: turn_id.clone(),
                 outcome: Outcome::Failed,
-                failure: Some(Failure { kind: FailureKind::Other, message: format!("运行时出错：{e:#}"), resets_at: None }),
+                failure: Some(Failure {
+                    kind: FailureKind::Other,
+                    message: format!("运行时出错：{e:#}"),
+                    resets_at: None,
+                }),
             };
             if let Err(e) = runtime(&project, end).await {
                 tracing::error!(turn_id, error = format!("{e:#}"), "could not end the turn");
@@ -98,7 +102,12 @@ struct Observed {
     unparsed: bool,
 }
 
-async fn end(project: &Arc<Project>, turn_id: &str, outcome: Outcome, failure: Option<(FailureKind, String)>) -> anyhow::Result<()> {
+async fn end(
+    project: &Arc<Project>,
+    turn_id: &str,
+    outcome: Outcome,
+    failure: Option<(FailureKind, String)>,
+) -> anyhow::Result<()> {
     let failure = failure.map(|(kind, message)| Failure { kind, message, resets_at: None });
     let quota = failure.clone().filter(|f| f.kind == FailureKind::Quota);
     runtime(project, EndTurn { turn_id: turn_id.to_owned(), outcome, failure }).await?;
@@ -141,7 +150,8 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let (program, prefix) = project.host.harness.codex.split_first().context("no Codex program configured")?;
     let args: Vec<String> = prefix.iter().cloned().chain(turn_args.to_args()).collect();
     let env = capability::env(&gh);
-    let spec = Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &env, env_remove: capability::REMOVED_VARS };
+    let spec =
+        Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &env, env_remove: capability::REMOVED_VARS };
     let mut spawned = match process::spawn(&spec) {
         Ok(spawned) => spawned,
         Err(e) => {
@@ -154,7 +164,8 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     }
     // Recorded before the CLI runs: after a crash, a turn without a pid never ran
     // (data-model.md §3.3).
-    let launched = TurnLaunched { turn_id: turn_id.to_owned(), pid: spawned.pid as i64, process_start: spawned.process_start };
+    let launched =
+        TurnLaunched { turn_id: turn_id.to_owned(), pid: spawned.pid as i64, process_start: spawned.process_start };
     if let Err(e) = runtime(project, launched).await {
         let _ = spawned.child.start_kill();
         return Err(e);
@@ -327,7 +338,13 @@ async fn store_harness_item(project: &Arc<Project>, turn: &Turn, item: Item) -> 
     store_with(project, turn, Some(item.native_id), item.kind.as_str(), content, command_id).await
 }
 
-async fn store(project: &Arc<Project>, turn: &Turn, native_id: Option<String>, kind: &str, content: Value) -> anyhow::Result<()> {
+async fn store(
+    project: &Arc<Project>,
+    turn: &Turn,
+    native_id: Option<String>,
+    kind: &str,
+    content: Value,
+) -> anyhow::Result<()> {
     store_with(project, turn, native_id, kind, content, None).await
 }
 

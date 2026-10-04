@@ -248,7 +248,12 @@ impl Workspace {
             // The rewritten files are read again at the next snapshot.
             tree_state.reset(&normalized).block_on().map_err(Error::jj)?;
         }
-        let commit = store.write_commit(&parent, tree_state.current_tree().clone(), &format!("capture {pin}"), &Identity::runtime())?;
+        let commit = store.write_commit(
+            &parent,
+            tree_state.current_tree().clone(),
+            &format!("capture {pin}"),
+            &Identity::runtime(),
+        )?;
         store.pin(pin, &commit)?;
         tree_state.save().map_err(Error::jj)?;
         Ok(Captured::Pinned { commit })

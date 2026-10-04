@@ -71,5 +71,5 @@ frontend/                Electron + React + TypeScript
    - **真实小仓库的全链路**：用户与测试者已在 Windows 和 Linux 上分别走通，用的是真实 Codex。问题记在 #13，已修；之后没有阻断性问题。
    - **性能基线**：框架与第一份参考数据见 perf-baseline.md。
    - **对话搜索**：第 4 个增量留下的 Ctrl+F，实现见 frontend.md §7"搜索"。
-   - **CI**（用户确认，2026-10-04）：每次推送与 PR 都在 Windows 和 Ubuntu 上运行全部测试与 clippy；推送到 main 时另外运行性能基线，只记录，不设门槛（`.github/workflows/ci.yml`）。代码没有按 rustfmt 统一格式，CI 暂不检查格式。
+   - **CI**（用户确认，2026-10-04）：每次推送与 PR 都在 Windows 和 Ubuntu 上运行全部测试与 clippy；推送到 main 时另外运行性能基线，只记录，不设门槛（`.github/workflows/ci.yml`）。后端按 `backend/rustfmt.toml` 统一格式（行宽 120，沿用原有写法），CI 检查格式（用户确认，2026-10-04）。
    - **Electron 重连**：顺带修了一个问题。后端重启后会换端口，原先窗口一直重连旧地址；现在每次重连前，先向主进程询问后端当前的地址。

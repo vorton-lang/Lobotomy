@@ -97,7 +97,8 @@ pub fn current_config(conn: &Connection) -> Result<(i64, ProjectConfig)> {
 }
 
 pub fn config_version(conn: &Connection, version: i64) -> Result<ProjectConfig> {
-    let config: String = conn.query_row("SELECT config FROM project_config WHERE version = ?1", [version], |r| r.get(0))?;
+    let config: String =
+        conn.query_row("SELECT config FROM project_config WHERE version = ?1", [version], |r| r.get(0))?;
     Ok(serde_json::from_str(&config)?)
 }
 
@@ -138,7 +139,11 @@ impl Command for Onboard {
             "INSERT INTO project_config (version, config, created_by, created_at) VALUES (1, ?1, ?2, ?3)",
             params![serde_json::to_string(&ProjectConfig::default())?, caller.scope(), cx.now],
         )?;
-        cx.emit("project.onboarded", &id, json!({ "repo_path": self.repo_path, "branch": self.branch, "head": self.head }))?;
+        cx.emit(
+            "project.onboarded",
+            &id,
+            json!({ "repo_path": self.repo_path, "branch": self.branch, "head": self.head }),
+        )?;
         Ok(())
     }
 }

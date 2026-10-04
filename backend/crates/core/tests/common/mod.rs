@@ -39,7 +39,8 @@ pub fn rejection<T: std::fmt::Debug>(r: lobotomy_core::Result<T>) -> &'static st
 pub fn ready_slot(db: &Db) {
     let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().expect("the slot was planned");
     if ws.state == WorkspaceState::Materializing {
-        db.execute(&Caller::Runtime, &WorkspaceReady { workspace_id: ws.id, target: ws.target, head: ws.head }).unwrap();
+        db.execute(&Caller::Runtime, &WorkspaceReady { workspace_id: ws.id, target: ws.target, head: ws.head })
+            .unwrap();
     }
 }
 

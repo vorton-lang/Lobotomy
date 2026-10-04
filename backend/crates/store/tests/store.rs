@@ -136,7 +136,9 @@ fn forced_paths_are_captured_despite_ignore_rules() {
     fs::write(slot.path.join(".gitignore"), "*\n").unwrap();
     fs::write(slot.path.join("src/new.rs"), "forced\n").unwrap();
     let forced = Scope { excluded: vec![], force_tracked: vec!["src".into()] };
-    let Captured::Pinned { commit } = slot.capture(&f.store, &f.head, &forced, Some(&GUARD), Leave::default(), "cap_1").unwrap() else {
+    let Captured::Pinned { commit } =
+        slot.capture(&f.store, &f.head, &forced, Some(&GUARD), Leave::default(), "cap_1").unwrap()
+    else {
         panic!("not captured");
     };
     let check = f.workspace("verify");
@@ -165,7 +167,9 @@ fn the_guardrail_stops_before_anything_is_written() {
     // The user may leave the new files out: changes to tracked files are still captured.
     fs::write(slot.path.join("a.txt"), "changed\n").unwrap();
     let leave = Leave { new_files: true, ..Leave::default() };
-    let Captured::Pinned { commit } = slot.capture(&f.store, &f.head, &scope(), Some(&guard), leave, "cap_left").unwrap() else {
+    let Captured::Pinned { commit } =
+        slot.capture(&f.store, &f.head, &scope(), Some(&guard), leave, "cap_left").unwrap()
+    else {
         panic!("not captured");
     };
     let check = f.workspace("left");
@@ -209,7 +213,10 @@ fn the_user_may_discard_what_cannot_be_captured() {
     fs::create_dir_all(slot.path.join("vendor/lib")).unwrap();
     git(&slot.path.join("vendor/lib"), &["init", "--quiet"]);
     fs::write(slot.path.join("kept.txt"), "kept\n").unwrap();
-    let Captured::Pinned { commit } = slot.capture(&f.store, &f.head, &scope(), Some(&GUARD), Leave { uncovered: true, ..Leave::default() }, "cap_1").unwrap() else {
+    let Captured::Pinned { commit } = slot
+        .capture(&f.store, &f.head, &scope(), Some(&GUARD), Leave { uncovered: true, ..Leave::default() }, "cap_1")
+        .unwrap()
+    else {
         panic!("not captured");
     };
     let check = f.workspace("verify");

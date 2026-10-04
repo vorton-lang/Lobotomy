@@ -112,11 +112,8 @@ async fn record(State(log): State<Log>, request: Request, next: Next) -> Respons
     let (parts, body) = request.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap_or_default();
     let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    let protocol_header = parts
-        .headers
-        .get("mcp-protocol-version")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let protocol_header =
+        parts.headers.get("mcp-protocol-version").and_then(|value| value.to_str().ok()).map(str::to_owned);
     let http_method = parts.method.to_string();
     let response = next.run(Request::from_parts(parts, Body::from(bytes))).await;
 
@@ -132,11 +129,7 @@ async fn record(State(log): State<Log>, request: Request, next: Next) -> Respons
             .or_else(|| text(&json["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"])),
         answered_version: text(&reply["result"]["protocolVersion"]),
         status: parts.status.as_u16(),
-        content_type: parts
-            .headers
-            .get("content-type")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned),
+        content_type: parts.headers.get("content-type").and_then(|value| value.to_str().ok()).map(str::to_owned),
     });
     Response::from_parts(parts, Body::from(bytes))
 }
@@ -158,8 +151,8 @@ async fn serve() -> Service {
     let shutdown = CancellationToken::new();
 
     let probe = Probe { ack: ack.clone(), calls: calls.clone(), tool_router: Probe::tool_router() };
-    let app = mcp::router(move || probe.clone(), shutdown.clone())
-        .layer(middleware::from_fn_with_state(log.clone(), record));
+    let app =
+        mcp::router(move || probe.clone(), shutdown.clone()).layer(middleware::from_fn_with_state(log.clone(), record));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/mcp/{token}", listener.local_addr().unwrap());
     let stop = shutdown.clone();
@@ -191,10 +184,8 @@ async fn run(program: &Path, args: &[String], cwd: &Path) -> Run {
     let mut stdin = child.stdin.take().unwrap();
     stdin.write_all(PROMPT.as_bytes()).await.unwrap();
     drop(stdin);
-    let output = tokio::time::timeout(TURN_TIMEOUT, child.wait_with_output())
-        .await
-        .expect("the turn timed out")
-        .unwrap();
+    let output =
+        tokio::time::timeout(TURN_TIMEOUT, child.wait_with_output()).await.expect("the turn timed out").unwrap();
     Run {
         success: output.status.success(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

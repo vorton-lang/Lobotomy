@@ -114,7 +114,8 @@ fn attributes(dir: &Path, paths: &[RepoPathBuf]) -> Result<HashMap<RepoPathBuf, 
     let mut attrs: HashMap<RepoPathBuf, Attrs> = HashMap::new();
     let fields: Vec<&[u8]> = out.split(|b| *b == 0).collect();
     for record in fields.as_chunks::<3>().0 {
-        let path = RepoPathBuf::from_internal_string(String::from_utf8_lossy(record[0]).into_owned()).map_err(Error::jj)?;
+        let path =
+            RepoPathBuf::from_internal_string(String::from_utf8_lossy(record[0]).into_owned()).map_err(Error::jj)?;
         let entry = attrs.entry(path).or_insert(Attrs { text: Text::Unspecified, eol: Eol::Unspecified });
         match (record[1], record[2]) {
             (b"text", b"set") => entry.text = Text::Set,

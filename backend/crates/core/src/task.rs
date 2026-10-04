@@ -90,9 +90,8 @@ fn task_from_row(r: &Row<'_>) -> rusqlite::Result<(Task, String)> {
 }
 
 pub fn load_task(conn: &Connection, id: &str) -> Result<Task> {
-    let row = conn
-        .query_row(&format!("SELECT {TASK_COLUMNS} FROM task WHERE id = ?1"), [id], task_from_row)
-        .optional()?;
+    let row =
+        conn.query_row(&format!("SELECT {TASK_COLUMNS} FROM task WHERE id = ?1"), [id], task_from_row).optional()?;
     let (mut task, phase) = row.ok_or_else(|| Error::rejected("not_found", format!("no task {id}")))?;
     task.phase = Phase::parse(&phase)?;
     Ok(task)
@@ -130,9 +129,7 @@ pub fn next_queued_task(conn: &Connection, role: &str) -> Result<Option<Task>> {
 
 /// The task currently occupying a role, if any.
 pub fn occupant(conn: &Connection, role: &str) -> Result<Option<String>> {
-    Ok(conn
-        .query_row("SELECT task_id FROM occupancy WHERE role = ?1", [role], |r| r.get(0))
-        .optional()?)
+    Ok(conn.query_row("SELECT task_id FROM occupancy WHERE role = ?1", [role], |r| r.get(0)).optional()?)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -250,7 +247,13 @@ pub(crate) fn record_decision(
 }
 
 /// Puts a message in a role's inbox. Delivery is the scheduler's job (data-model.md §3.4, §4.2).
-pub fn queue_message(cx: &mut Cx<'_>, role: &str, source: &Caller, task_id: Option<&str>, body: &str) -> Result<String> {
+pub fn queue_message(
+    cx: &mut Cx<'_>,
+    role: &str,
+    source: &Caller,
+    task_id: Option<&str>,
+    body: &str,
+) -> Result<String> {
     let id = new_id("msg");
     let seq: i64 = cx.tx.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM message", [], |r| r.get(0))?;
     cx.tx.execute(
@@ -444,8 +447,7 @@ impl Command for MoveInQueue {
             let mut stmt = cx.tx.prepare(
                 "SELECT id, queue_pos FROM task WHERE executor = ?1 AND phase = 'queued' ORDER BY queue_pos, id",
             )?;
-            stmt.query_map([&task.executor], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<rusqlite::Result<_>>()?
+            stmt.query_map([&task.executor], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
         };
         let mut order: Vec<&str> = queue.iter().map(|(id, _)| id.as_str()).filter(|id| *id != task.id).collect();
         order.insert(self.to_index.min(order.len()), &task.id);
@@ -587,7 +589,10 @@ impl Command for StartAttempt {
         // The slot is about to be rewritten: nothing may run in it, and what is there must be
         // captured.
         if let Some(turn) = crate::turn::unfinished_turn(cx.tx, &task.executor)? {
-            return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", task.executor, turn.id)));
+            return Err(Error::rejected(
+                "turn_unfinished",
+                format!("{} has unfinished turn {}", task.executor, turn.id),
+            ));
         }
         crate::capture::require_captured(cx.tx, &task.executor)?;
         let project = crate::project::require_project(cx.tx)?;
@@ -595,16 +600,20 @@ impl Command for StartAttempt {
         let start = match (&earlier, &self.code_start) {
             (Some(_), Some(start)) if start.base == project.integration => start.clone(),
             (Some(_), _) => {
-                return Err(Error::rejected("code_start_needed", "rebase the earlier candidate onto the integration version"));
+                return Err(Error::rejected(
+                    "code_start_needed",
+                    "rebase the earlier candidate onto the integration version",
+                ));
             }
-            (None, _) => CodeStart { commit: project.integration.clone(), base: project.integration.clone(), conflicts: vec![] },
+            (None, _) => {
+                CodeStart { commit: project.integration.clone(), base: project.integration.clone(), conflicts: vec![] }
+            }
         };
 
-        let seq: i64 = cx.tx.query_row(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1",
-            [&task.id],
-            |r| r.get(0),
-        )?;
+        let seq: i64 =
+            cx.tx.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| {
+                r.get(0)
+            })?;
         let attempt_id = new_id("att");
         cx.tx.execute(
             "INSERT INTO attempt (id, task_id, seq, started_at, code_start) VALUES (?1, ?2, ?3, ?4, ?5)",

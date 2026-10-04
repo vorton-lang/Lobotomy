@@ -118,7 +118,9 @@ pub fn externalize(store: &BlobStore, content: &mut Value) -> Vec<Blob> {
                         *value = json!({ "blob": blob.hash, "size": blob.size, "head": blob.head, "tail": blob.tail });
                         blobs.push(blob);
                     }
-                    Err(e) => tracing::warn!(field = name, error = %e, "blob not written; the field stays in the database"),
+                    Err(e) => {
+                        tracing::warn!(field = name, error = %e, "blob not written; the field stays in the database")
+                    }
                 }
             }
         }

@@ -9,13 +9,13 @@ use std::time::{Duration, Instant};
 use common::*;
 use lobotomy_core::capture::stopped_capture;
 use lobotomy_core::id::now_ms;
-use lobotomyd::results::{failures, retry_failed};
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, current_config, load_project};
 use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, load_task, open_attempt};
 use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, TurnState};
 use lobotomy_core::verify::{Accept, RetryPreview, VerificationState, latest_verification, preview_stopped};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::host::Host;
+use lobotomyd::results::{failures, retry_failed};
 
 /// The M1 chain: the user creates a task, Malkuth works in its slot and reports done, the runtime
 /// captures and verifies the candidate, the user accepts it, and the user's repository is
@@ -46,7 +46,9 @@ async fn a_task_runs_from_done_to_the_users_repository() {
     let items: Vec<(String, Option<String>, String)> = db
         .read(|c| {
             let mut stmt = c.prepare("SELECT kind, command_id, content FROM item WHERE turn_id = ?1 ORDER BY seq")?;
-            Ok(stmt.query_map([&turn.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?)
+            Ok(stmt
+                .query_map([&turn.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?)
         })
         .unwrap();
     let kinds: Vec<&str> = items.iter().map(|(kind, ..)| kind.as_str()).collect();
@@ -90,7 +92,10 @@ async fn a_task_runs_from_done_to_the_users_repository() {
     assert_eq!(git(&repo, &["log", "-1", "--format=%an <%ae>"]), "Test User <user@example.com>");
     let message = git(&repo, &["log", "-1", "--format=%B"]);
     assert!(message.starts_with("测试任务\n\n完成\n\n写了 work.txt"), "{message}");
-    assert!(message.contains(&format!("Lobotomy-Task: {task}")) && message.contains("Lobotomy-Role: Malkuth"), "{message}");
+    assert!(
+        message.contains(&format!("Lobotomy-Task: {task}")) && message.contains("Lobotomy-Role: Malkuth"),
+        "{message}"
+    );
     assert_eq!(git(&repo, &["rev-parse", "HEAD~1"]), base, "one commit per accepted task");
     wait_for("the preview to be recorded", || {
         (db.read(load_project).unwrap().unwrap().previewed == published).then_some(())
@@ -110,8 +115,11 @@ async fn a_task_runs_from_done_to_the_users_repository() {
 fn set_config(db: &Db, change: impl FnOnce(&mut ProjectConfig)) {
     let (version, mut config) = db.read(current_config).unwrap();
     change(&mut config);
-    db.execute(&Caller::User, &EditProjectConfig { request_id: format!("cfg-{version}"), expected_version: version, config })
-        .unwrap();
+    db.execute(
+        &Caller::User,
+        &EditProjectConfig { request_id: format!("cfg-{version}"), expected_version: version, config },
+    )
+    .unwrap();
 }
 
 /// Checks run in the verification site on the candidate; a failing one sends it straight back to
@@ -123,7 +131,10 @@ async fn checks_run_on_the_candidate_and_a_failure_goes_back_to_the_executor() {
     let db = backend.project.db.clone();
     set_config(&db, |config| {
         config.checks = vec![
-            Check { command: r#"node -e "process.exit(require('fs').existsSync('work.txt') ? 0 : 1)""#.into(), timeout_secs: 60 },
+            Check {
+                command: r#"node -e "process.exit(require('fs').existsSync('work.txt') ? 0 : 1)""#.into(),
+                timeout_secs: 60,
+            },
             Check { command: r#"node -e "console.log('two tests failed'); process.exit(3)""#.into(), timeout_secs: 60 },
         ];
     });
@@ -187,7 +198,8 @@ async fn an_oversized_done_stops_the_role_until_the_user_decides() {
 
     db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
     backend.project.wake.notify_one();
-    let next = wait_for("the continued turn", || last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)).await;
+    let next =
+        wait_for("the continued turn", || last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)).await;
     assert!(next.input.contains("work.txt") && next.input.contains("超过了项目设定的上限"), "{}", next.input);
     backend.shutdown(Duration::from_secs(5)).await;
 }
@@ -274,10 +286,8 @@ async fn a_failed_turn_holds_the_role_until_continue() {
 
     db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
     backend.project.wake.notify_one();
-    let next = wait_for("the continued turn", || {
-        last(&db).filter(|t| t.id != failed.id && t.state == TurnState::Ended)
-    })
-    .await;
+    let next =
+        wait_for("the continued turn", || last(&db).filter(|t| t.id != failed.id && t.state == TurnState::Ended)).await;
     assert_eq!(next.outcome, Some(Outcome::Completed));
     assert_eq!(next.native_id, failed.native_id, "continue resumes the same native session");
     assert!(next.input.contains("失败") && next.input.contains("换个做法"), "{}", next.input);
@@ -464,10 +474,8 @@ async fn after_recovery_a_quota_failed_role_waits_for_the_user() {
 
     db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
     backend.project.wake.notify_one();
-    let next = wait_for("the continued turn", || {
-        last(&db).filter(|t| t.id != failed.id && t.state == TurnState::Ended)
-    })
-    .await;
+    let next =
+        wait_for("the continued turn", || last(&db).filter(|t| t.id != failed.id && t.state == TurnState::Ended)).await;
     assert!(next.input.contains("额度不足"), "{}", next.input);
     backend.shutdown(Duration::from_secs(5)).await;
 }

@@ -106,10 +106,7 @@ fn local_origin(headers: &HeaderMap) -> bool {
     if origin == "file://" {
         return true;
     }
-    origin
-        .strip_prefix("http://")
-        .or_else(|| origin.strip_prefix("https://"))
-        .is_some_and(is_local)
+    origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")).is_some_and(is_local)
 }
 
 async fn session(socket: WebSocket, project: Arc<Project>) {
@@ -184,7 +181,8 @@ pub async fn watch(project: Arc<Project>, shutdown: CancellationToken) {
         if let Ok(heads) = db(&project, |db| db.read(thread_heads)).await {
             for (role, seq) in &heads {
                 if last_items.get(role) != Some(seq) {
-                    let _ = project.gui_push.send(json!({ "type": "thread", "role": role, "seq": seq }).to_string().into());
+                    let _ =
+                        project.gui_push.send(json!({ "type": "thread", "role": role, "seq": seq }).to_string().into());
                 }
             }
             last_items = heads;
@@ -208,7 +206,8 @@ struct EventRow {
 
 /// The newest item of each role's thread.
 fn thread_heads(conn: &Connection) -> lobotomy_core::Result<HashMap<String, i64>> {
-    let mut stmt = conn.prepare("SELECT t.role, MAX(i.seq) FROM item i JOIN thread t ON t.id = i.thread_id GROUP BY t.role")?;
+    let mut stmt =
+        conn.prepare("SELECT t.role, MAX(i.seq) FROM item i JOIN thread t ON t.id = i.thread_id GROUP BY t.role")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
@@ -239,7 +238,9 @@ struct Request {
 async fn respond(project: &Arc<Project>, text: &str) -> String {
     let request: Request = match serde_json::from_str(text) {
         Ok(request) => request,
-        Err(e) => return json!({ "id": null, "error": { "code": "bad_request", "message": e.to_string() } }).to_string(),
+        Err(e) => {
+            return json!({ "id": null, "error": { "code": "bad_request", "message": e.to_string() } }).to_string();
+        }
     };
     match call(project, &request.method, request.params).await {
         Ok(result) => json!({ "id": request.id, "result": result }).to_string(),
@@ -357,7 +358,8 @@ fn stalled(conn: &Connection, role: &RoleView) -> lobotomy_core::Result<Option<S
         .filter_map(|c| serde_json::from_str::<Value>(c).ok())
         .filter(|c| c["server"] == "lobotomy")
         .map(|c| {
-            let text = c["error"]["message"].as_str().or(c["error"].as_str()).or(c["result"]["content"][0]["text"].as_str());
+            let text =
+                c["error"]["message"].as_str().or(c["error"].as_str()).or(c["result"]["content"][0]["text"].as_str());
             match text {
                 Some(text) => text.to_owned(),
                 None if !c["error"].is_null() => c["error"].to_string(),
@@ -381,17 +383,44 @@ struct TaskView {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Attention {
     /// The role waits: continue, start a new session, or decide on a stopped capture.
-    Hold { role: String, hold: Hold },
+    Hold {
+        role: String,
+        hold: Hold,
+    },
     /// The backend restarted while this turn's CLI ran, and the CLI still runs.
-    UnknownTurn { role: String, turn_id: String },
-    TaskBlocked { task_id: String, title: String, reason: String },
+    UnknownTurn {
+        role: String,
+        turn_id: String,
+    },
+    TaskBlocked {
+        task_id: String,
+        title: String,
+        reason: String,
+    },
     /// The executor's turn ended normally but it reported neither done nor a question, and
     /// nothing is queued for it. In M1 only the user can move it on (#13).
-    Stalled { role: String, task_id: String, title: String, turn_id: String, report_error: Option<String> },
-    Accept { task_id: String, title: String, verification_id: String },
-    Quota { domain: Domain },
-    JobFailed { key: String, reason: String },
-    PreviewStopped { reason: String },
+    Stalled {
+        role: String,
+        task_id: String,
+        title: String,
+        turn_id: String,
+        report_error: Option<String>,
+    },
+    Accept {
+        task_id: String,
+        title: String,
+        verification_id: String,
+    },
+    Quota {
+        domain: Domain,
+    },
+    JobFailed {
+        key: String,
+        reason: String,
+    },
+    PreviewStopped {
+        reason: String,
+    },
 }
 
 struct DbView {
@@ -477,12 +506,20 @@ pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
     for task in &view.tasks {
         let t = &task.task;
         if let (Phase::Executing, Some(reason)) = (t.phase, &t.blocked_reason) {
-            attention.push(Attention::TaskBlocked { task_id: t.id.clone(), title: t.title.clone(), reason: reason.clone() });
+            attention.push(Attention::TaskBlocked {
+                task_id: t.id.clone(),
+                title: t.title.clone(),
+                reason: reason.clone(),
+            });
         }
         if t.phase == Phase::Accepting
             && let Some(v) = &task.verification
         {
-            attention.push(Attention::Accept { task_id: t.id.clone(), title: t.title.clone(), verification_id: v.id.clone() });
+            attention.push(Attention::Accept {
+                task_id: t.id.clone(),
+                title: t.title.clone(),
+                verification_id: v.id.clone(),
+            });
         }
     }
     let harnesses: BTreeSet<&str> = view.roles.iter().map(|r| r.role.harness.as_str()).collect();
@@ -569,7 +606,15 @@ fn thread_page(conn: &Connection, p: &ThreadParams) -> lobotomy_core::Result<Val
     let mut items = Vec::new();
     for row in rows {
         let (id, seq, turn_id, kind, content, command_id, created_at) = row?;
-        items.push(ItemRow { id, seq, turn_id, kind, content: serde_json::from_str(&content)?, command_id, created_at });
+        items.push(ItemRow {
+            id,
+            seq,
+            turn_id,
+            kind,
+            content: serde_json::from_str(&content)?,
+            command_id,
+            created_at,
+        });
     }
     if p.after.is_none() {
         items.reverse();
@@ -607,10 +652,16 @@ fn thread_page(conn: &Connection, p: &ThreadParams) -> lobotomy_core::Result<Val
     }
     // Messages still waiting for a turn belong at the end of the newest page.
     let queued = messages_where(conn, "role = ?1 AND state = 'queued'", [&p.role])?;
-    Ok(json!({ "items": items, "has_more": has_more, "turns": turns, "messages": messages, "commands": commands, "queued": queued }))
+    Ok(
+        json!({ "items": items, "has_more": has_more, "turns": turns, "messages": messages, "commands": commands, "queued": queued }),
+    )
 }
 
-fn messages_where(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> lobotomy_core::Result<Vec<MessageRow>> {
+fn messages_where(
+    conn: &Connection,
+    filter: &str,
+    args: impl rusqlite::Params,
+) -> lobotomy_core::Result<Vec<MessageRow>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, source, task_id, body, turn_id, created_at FROM message WHERE {filter} ORDER BY seq"
     ))?;
@@ -682,7 +733,9 @@ fn search_thread(conn: &Connection, p: &SearchParams) -> lobotomy_core::Result<V
          ORDER BY i.seq DESC LIMIT ?3"
     ))?;
     let limit = MATCH_LIMIT as i64 + 1;
-    let items = stmt.query_map(params![p.role, query, limit], |r| Ok(Match { kind: "item", id: r.get(0)?, seq: Some(r.get(1)?) }))?;
+    let items = stmt.query_map(params![p.role, query, limit], |r| {
+        Ok(Match { kind: "item", id: r.get(0)?, seq: Some(r.get(1)?) })
+    })?;
     let mut matches = items.collect::<rusqlite::Result<Vec<_>>>()?;
     // A message bound to a turn that never stored an item is not shown, so it does not match.
     let mut stmt = conn.prepare(
@@ -714,7 +767,12 @@ struct TaskParams {
     task_id: String,
 }
 
-fn rows_as_json(conn: &Connection, sql: &str, task_id: &str, json_columns: &[&str]) -> lobotomy_core::Result<Vec<Value>> {
+fn rows_as_json(
+    conn: &Connection,
+    sql: &str,
+    task_id: &str,
+    json_columns: &[&str],
+) -> lobotomy_core::Result<Vec<Value>> {
     let mut stmt = conn.prepare(sql)?;
     let names: Vec<String> = stmt.column_names().into_iter().map(str::to_owned).collect();
     let mut rows = stmt.query([task_id])?;

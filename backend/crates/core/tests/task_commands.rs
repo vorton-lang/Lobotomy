@@ -102,13 +102,10 @@ fn the_database_allows_one_open_attempt_per_task_and_one_occupant_per_role() {
     let b = create(&db, "r2", "b");
     start(&db, &a);
     db.read(|c| {
-        let second_open = c.execute(
-            "INSERT INTO attempt (id, task_id, seq, started_at) VALUES ('att_dup', ?1, 2, 0)",
-            [&a],
-        );
+        let second_open =
+            c.execute("INSERT INTO attempt (id, task_id, seq, started_at) VALUES ('att_dup', ?1, 2, 0)", [&a]);
         assert!(second_open.is_err(), "a second open attempt must violate the unique index");
-        let second_occupant =
-            c.execute("INSERT INTO occupancy (role, task_id, since) VALUES ('Malkuth', ?1, 0)", [&b]);
+        let second_occupant = c.execute("INSERT INTO occupancy (role, task_id, since) VALUES ('Malkuth', ?1, 0)", [&b]);
         assert!(second_occupant.is_err(), "a second occupant must violate the primary key");
         Ok(())
     })
@@ -120,7 +117,10 @@ fn paused_tasks_do_not_start() {
     let db = db();
     let a = create(&db, "r1", "a");
     db.execute(&Caller::User, &SetPaused { request_id: "p1".into(), task_id: a.clone(), paused: true }).unwrap();
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone(), code_start: None })), "paused");
+    assert_eq!(
+        rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone(), code_start: None })),
+        "paused"
+    );
     db.execute(&Caller::User, &SetPaused { request_id: "p2".into(), task_id: a.clone(), paused: false }).unwrap();
     start(&db, &a);
 }
@@ -267,9 +267,8 @@ fn abandoning_closes_the_attempt_and_releases_the_executor() {
     assert_eq!(t.phase, Phase::Abandoned);
     assert!(t.closed_at.is_some());
     assert_eq!(db.read(|c| occupant(c, "Malkuth")).unwrap(), None);
-    let open: i64 = db
-        .read(|c| Ok(c.query_row("SELECT COUNT(*) FROM attempt WHERE ended_at IS NULL", [], |r| r.get(0))?))
-        .unwrap();
+    let open: i64 =
+        db.read(|c| Ok(c.query_row("SELECT COUNT(*) FROM attempt WHERE ended_at IS NULL", [], |r| r.get(0))?)).unwrap();
     assert_eq!(open, 0);
     // A closed task cannot be abandoned again.
     let again = db.execute(&Caller::User, &Abandon { request_id: "x2".into(), task_id: a, reason: String::new() });
@@ -280,7 +279,10 @@ fn abandoning_closes_the_attempt_and_releases_the_executor() {
 fn reopening_queues_the_task_and_the_next_attempt_gets_a_new_number() {
     let db = db();
     let a = create(&db, "r1", "a");
-    assert_eq!(rejection(db.execute(&Caller::User, &Reopen { request_id: "o0".into(), task_id: a.clone() })), "not_closed");
+    assert_eq!(
+        rejection(db.execute(&Caller::User, &Reopen { request_id: "o0".into(), task_id: a.clone() })),
+        "not_closed"
+    );
     start(&db, &a);
     db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: a.clone(), reason: String::new() }).unwrap();
     db.execute(&Caller::User, &Reopen { request_id: "o1".into(), task_id: a.clone() }).unwrap();
