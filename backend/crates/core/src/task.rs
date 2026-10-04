@@ -63,10 +63,12 @@ pub struct Task {
     pub revision: i64,
     pub created_at: i64,
     pub closed_at: Option<i64>,
+    /// For a task made from changes outside any task: their capture, where its work starts (#14).
+    pub origin_capture: Option<String>,
 }
 
 const TASK_COLUMNS: &str = "id, title, body, executor, phase, paused, blocked_reason, criteria_version, \
-                            queue_pos, revision, created_at, closed_at";
+                            queue_pos, revision, created_at, closed_at, origin_capture";
 
 fn task_from_row(r: &Row<'_>) -> rusqlite::Result<(Task, String)> {
     let phase: String = r.get(4)?;
@@ -84,6 +86,7 @@ fn task_from_row(r: &Row<'_>) -> rusqlite::Result<(Task, String)> {
             revision: r.get(9)?,
             created_at: r.get(10)?,
             closed_at: r.get(11)?,
+            origin_capture: r.get(12)?,
         },
         phase,
     ))
@@ -189,11 +192,38 @@ pub struct Message {
 
 /// Messages waiting in a role's inbox, in arrival order (data-model.md §3.4).
 pub fn queued_messages(conn: &Connection, role: &str) -> Result<Vec<Message>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, seq, role, source, task_id, body FROM message
-         WHERE role = ?1 AND state = 'queued' ORDER BY seq",
-    )?;
-    let rows = stmt.query_map([role], |r| {
+    messages(conn, "role = ?1 AND state = 'queued'", role)
+}
+
+/// The user's messages to a task that its executor has not got: sent after the executor reported
+/// done, they wait while the task is out of execution (data-model.md §4.2). Accepting the task
+/// needs the user to let them go (#14).
+pub fn undelivered_user_messages(conn: &Connection, task_id: &str) -> Result<Vec<Message>> {
+    messages(conn, "task_id = ?1 AND state = 'queued' AND source = 'user'", task_id)
+}
+
+/// A closed task's queued messages are not delivered: its executor no longer works on it
+/// (data-model.md §4.2, #14). The runtime's own, such as a criteria update, lose their point too.
+pub(crate) fn drop_queued(cx: &mut Cx<'_>, task_id: &str) -> Result<()> {
+    let dropped = messages(cx.tx, "task_id = ?1 AND state = 'queued'", task_id)?;
+    if dropped.is_empty() {
+        return Ok(());
+    }
+    cx.tx.execute("UPDATE message SET state = 'dropped' WHERE task_id = ?1 AND state = 'queued'", [task_id])?;
+    let ids: Vec<&str> = dropped.iter().map(|m| m.id.as_str()).collect();
+    cx.emit("message.dropped", task_id, json!({ "messages": ids }))?;
+    Ok(())
+}
+
+/// The user's messages a decision let go, as the decision records them.
+pub(crate) fn dropped_detail(messages: &[Message]) -> serde_json::Value {
+    json!(messages.iter().map(|m| json!({ "id": m.id, "body": m.body })).collect::<Vec<_>>())
+}
+
+fn messages(conn: &Connection, filter: &str, arg: &str) -> Result<Vec<Message>> {
+    let mut stmt =
+        conn.prepare(&format!("SELECT id, seq, role, source, task_id, body FROM message WHERE {filter} ORDER BY seq"))?;
+    let rows = stmt.query_map([arg], |r| {
         Ok(Message {
             id: r.get(0)?,
             seq: r.get(1)?,
@@ -291,22 +321,65 @@ impl Command for CreateTask {
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<Created> {
         caller.require_user()?;
-        require_role(cx, &self.executor)?;
-        if self.title.trim().is_empty() {
-            return Err(Error::rejected("empty_title", "a task needs a title"));
-        }
-        let id = new_id("task");
-        let pos = next_queue_pos(cx, &self.executor)?;
-        cx.tx.execute(
-            "INSERT INTO task (id, title, body, executor, phase, criteria_version, queue_pos, revision, created_at)
-             VALUES (?1, ?2, ?3, ?4, 'queued', 1, ?5, 1, ?6)",
-            params![id, self.title, self.body, self.executor, pos, cx.now],
-        )?;
-        cx.tx.execute(
-            "INSERT INTO criteria_version (task_id, version, text, created_by, created_at) VALUES (?1, 1, ?2, ?3, ?4)",
-            params![id, self.criteria, caller.scope(), cx.now],
-        )?;
-        cx.emit("task.created", &id, json!({ "executor": self.executor }))?;
+        let id = create_task(cx, caller, &self.title, &self.body, &self.criteria, &self.executor)?;
+        Ok(Created { id })
+    }
+}
+
+fn create_task(
+    cx: &mut Cx<'_>,
+    caller: &Caller,
+    title: &str,
+    body: &str,
+    criteria: &str,
+    executor: &str,
+) -> Result<String> {
+    require_role(cx, executor)?;
+    if title.trim().is_empty() {
+        return Err(Error::rejected("empty_title", "a task needs a title"));
+    }
+    let id = new_id("task");
+    let pos = next_queue_pos(cx, executor)?;
+    cx.tx.execute(
+        "INSERT INTO task (id, title, body, executor, phase, criteria_version, queue_pos, revision, created_at)
+         VALUES (?1, ?2, ?3, ?4, 'queued', 1, ?5, 1, ?6)",
+        params![id, title, body, executor, pos, cx.now],
+    )?;
+    cx.tx.execute(
+        "INSERT INTO criteria_version (task_id, version, text, created_by, created_at) VALUES (?1, 1, ?2, ?3, ?4)",
+        params![id, criteria, caller.scope(), cx.now],
+    )?;
+    cx.emit("task.created", &id, json!({ "executor": executor }))?;
+    Ok(id)
+}
+
+/// "建成任务": a task made from the changes a turn outside any task left in its executor's slot.
+/// Its first attempt starts from them, as a reopened task starts from its last candidate
+/// (data-model.md §4.6, #14).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AdoptOutsideChanges {
+    pub request_id: String,
+    pub capture_id: String,
+    pub title: String,
+    pub body: String,
+    pub criteria: String,
+}
+
+impl Command for AdoptOutsideChanges {
+    const NAME: &'static str = "adopt_outside_changes";
+    type Output = Created;
+
+    fn idem_key(&self) -> Option<&str> {
+        Some(&self.request_id)
+    }
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<Created> {
+        caller.require_user()?;
+        let capture = crate::capture::settle_outside(cx, &self.capture_id, crate::capture::Outside::Adopted)?;
+        // The changes are in this role's slot; its executor carries on with them.
+        let id = create_task(cx, caller, &self.title, &self.body, &self.criteria, &capture.role)?;
+        cx.tx.execute("UPDATE task SET origin_capture = ?2 WHERE id = ?1", params![id, capture.id])?;
+        record_decision(cx, "adopt_outside_changes", Some(&id), caller, json!({ "capture_id": capture.id }))?;
         Ok(Created { id })
     }
 }
@@ -489,7 +562,10 @@ impl Command for Abandon {
         caller.require_user()?;
         let task = load_task(cx.tx, &self.task_id)?;
         require_open(&task)?;
-        record_decision(cx, "abandon", Some(&task.id), caller, json!({ "reason": self.reason }))?;
+        let dropped = undelivered_user_messages(cx.tx, &task.id)?;
+        let detail = json!({ "reason": self.reason, "dropped_messages": dropped_detail(&dropped) });
+        record_decision(cx, "abandon", Some(&task.id), caller, detail)?;
+        drop_queued(cx, &task.id)?;
         cx.tx.execute(
             "UPDATE attempt SET ended_at = ?2, end_reason = 'abandoned' WHERE task_id = ?1 AND ended_at IS NULL",
             params![task.id, cx.now],
@@ -595,14 +671,21 @@ impl Command for StartAttempt {
             ));
         }
         crate::capture::require_captured(cx.tx, &task.executor)?;
+        // Changes outside any task are in the slot until the user decides about them (#14).
+        if let Some(capture) = crate::capture::outside_changes(cx.tx, &task.executor)? {
+            return Err(Error::rejected(
+                "outside_changes",
+                format!("the slot of {} holds undecided changes of capture {}", task.executor, capture.id),
+            ));
+        }
         let project = crate::project::require_project(cx.tx)?;
-        let earlier = crate::verify::latest_candidate_commit(cx.tx, &task.id)?;
+        let earlier = crate::verify::work_so_far(cx.tx, &task.id)?;
         let start = match (&earlier, &self.code_start) {
             (Some(_), Some(start)) if start.base == project.integration => start.clone(),
             (Some(_), _) => {
                 return Err(Error::rejected(
                     "code_start_needed",
-                    "rebase the earlier candidate onto the integration version",
+                    "rebase the task's work so far onto the integration version",
                 ));
             }
             (None, _) => {
@@ -629,9 +712,12 @@ impl Command for StartAttempt {
             crate::workspace::plan(cx, &slot, &start.commit, &start.base, Some(&task.id))?;
         }
         let mut brief = brief(cx.tx, &task, seq)?;
+        if task.origin_capture.is_some() && seq == 1 {
+            brief.push_str("\n\n工作目录里已经有这项任务的初始改动：它们是在任务之外做的，用户把它们建成了这项任务。请在此基础上继续。");
+        }
         if !start.conflicts.is_empty() {
             brief.push_str(&format!(
-                "\n\n这项任务重开时，上一次的候选成果与当前的集成版本冲突。工作目录中以下文件有冲突标记，请先解决：\n{}",
+                "\n\n这项任务已有的改动与当前的集成版本冲突。工作目录中以下文件有冲突标记，请先解决：\n{}",
                 start.conflicts.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n")
             ));
         }

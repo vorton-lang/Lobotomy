@@ -375,6 +375,25 @@ pre {
   border-color: var(--warn-line);
   background: var(--warn-bg);
 }
+/* A report the backend recorded without effect: it must not look like one that took effect (#14). */
+.report.void {
+  border-style: dashed;
+  background: var(--sunken);
+}
+.report.void .badge {
+  color: var(--muted);
+}
+.report-void {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0;
+}
+.task-panel .undelivered {
+  border: 1px solid var(--warn-line);
+  background: var(--warn-bg);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+}
 
 .composer {
   border-top: 1px solid var(--line);

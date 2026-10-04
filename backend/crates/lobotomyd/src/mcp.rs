@@ -152,7 +152,11 @@ impl OrgTools {
         let text = match outcome {
             Ok((ReportEffect::Recorded, id)) => format!("已记录（{id}）。"),
             Ok((ReportEffect::Unchanged, id)) => format!("与之前的汇报相同，没有重复记录（{id}）。"),
-            Ok((ReportEffect::Late, id)) => format!("这次汇报没有生效：所在的 turn 或执行轮已经结束（{id}）。"),
+            Ok((ReportEffect::Late, id)) => format!("这次汇报没有生效：它所属的执行轮已经结束（{id}）。"),
+            Ok((ReportEffect::NoTask, id)) => format!(
+                "这次汇报没有生效：这个 turn 不属于任何任务，done 和提问只对执行中的任务有效（{id}）。\
+                 你在这个 turn 里做的改动不会进入任何成果；用户会决定把它们建成任务还是丢弃。"
+            ),
             Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(format!("汇报被拒绝：{e}"))])),
         };
         self.project.wake.notify_one();

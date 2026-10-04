@@ -21,13 +21,13 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures::{SinkExt as _, StreamExt as _};
-use lobotomy_core::capture::{ApproveNewFiles, Capture, DiscardUncaptured};
+use lobotomy_core::capture::{ApproveNewFiles, Capture, DiscardOutsideChanges, DiscardUncaptured, outside_changes};
 use lobotomy_core::project::{EditProjectConfig, ProjectConfig, current_config, load_project};
 use lobotomy_core::quota::Domain;
 use lobotomy_core::role::{Role, list_roles};
 use lobotomy_core::task::{
-    Abandon, CreateTask, EditCriteria, MoveInQueue, Phase, Reopen, SendMessage, SetPaused, Task, list_tasks, occupant,
-    queued_messages,
+    Abandon, AdoptOutsideChanges, CreateTask, EditCriteria, MoveInQueue, Phase, Reopen, SendMessage, SetPaused, Task,
+    list_tasks, occupant, queued_messages, undelivered_user_messages,
 };
 use lobotomy_core::turn::{
     Continue, Hold, NewNativeSession, Outcome, Turn, TurnState, hold, last_turn, load_turn, unfinished_turn,
@@ -313,6 +313,8 @@ struct RoleView {
     last_turn: Option<Turn>,
     hold: Option<Hold>,
     stalled: Option<Stalled>,
+    /// Changes a turn outside any task left in the slot, waiting for the user (#14).
+    outside: Option<Capture>,
     workspace: Option<Workspace>,
     queued_messages: usize,
 }
@@ -377,6 +379,8 @@ struct TaskView {
     attempt_seq: Option<i64>,
     attempt_open: bool,
     verification: Option<Verification>,
+    /// The user's messages its executor never got; accepting needs the user to let them go (#14).
+    undelivered_messages: usize,
 }
 
 #[derive(Serialize)]
@@ -386,6 +390,12 @@ enum Attention {
     Hold {
         role: String,
         hold: Hold,
+    },
+    /// A turn outside any task changed files; no task starts in the slot until the user makes a
+    /// task of them or discards them (#14).
+    OutsideChanges {
+        role: String,
+        capture: Capture,
     },
     /// The backend restarted while this turn's CLI ran, and the CLI still runs.
     UnknownTurn {
@@ -451,6 +461,7 @@ fn db_view(conn: &Connection) -> lobotomy_core::Result<DbView> {
             last_turn: last_turn(conn, &role.name)?,
             hold: hold(conn, &role.name)?,
             stalled: None,
+            outside: outside_changes(conn, &role.name)?,
             workspace,
             queued_messages: queued_messages(conn, &role.name)?.len(),
             role,
@@ -471,6 +482,7 @@ fn db_view(conn: &Connection) -> lobotomy_core::Result<DbView> {
             attempt_seq: attempt.map(|a| a.0),
             attempt_open: attempt.is_some_and(|a| a.1),
             verification: latest_verification(conn, &task.id)?,
+            undelivered_messages: undelivered_user_messages(conn, &task.id)?.len(),
             task,
         });
     }
@@ -491,6 +503,9 @@ pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
         }
         if let Some(hold) = &role.hold {
             attention.push(Attention::Hold { role: role.role.name.clone(), hold: hold.clone() });
+        }
+        if let Some(capture) = &role.outside {
+            attention.push(Attention::OutsideChanges { role: role.role.name.clone(), capture: capture.clone() });
         }
         if let Some(stalled) = &role.stalled {
             let task = view.tasks.iter().find(|t| t.task.id == stalled.task_id).map(|t| &t.task);
@@ -859,6 +874,7 @@ fn task_view(conn: &Connection, task_id: &str) -> lobotomy_core::Result<Value> {
         "checks": checks,
         "decisions": decisions,
         "publications": publications,
+        "undelivered_messages": undelivered_user_messages(conn, task_id)?,
     }))
 }
 
@@ -932,6 +948,8 @@ async fn command(project: &Arc<Project>, name: &str, args: Value) -> anyhow::Res
         NewNativeSession,
         ApproveNewFiles,
         DiscardUncaptured,
+        AdoptOutsideChanges,
+        DiscardOutsideChanges,
         RetryPreview,
         EditProjectConfig,
     );

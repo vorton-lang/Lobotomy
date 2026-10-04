@@ -56,7 +56,7 @@ pub fn pin_captures(db: &Db) -> Vec<String> {
     let mut commits = Vec::new();
     for capture in db.read(pending_captures).unwrap() {
         let commit = format!("commit-of-{}", capture.id);
-        let result = CaptureResult::Pinned { commit: commit.clone() };
+        let result = CaptureResult::Pinned { commit: commit.clone(), changed: vec![] };
         db.execute(&Caller::Runtime, &FinishCapture { capture_id: capture.id, result }).unwrap();
         commits.push(commit);
     }

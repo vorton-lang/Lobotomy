@@ -117,6 +117,7 @@ fn accept(db: &Db, request_id: &str, task: &str, verification: &str, expected: &
             verification_id: verification.into(),
             criteria_version: 1,
             expected_integration: expected.into(),
+            dropping: vec![],
         },
     )
 }
@@ -292,7 +293,7 @@ fn a_stopped_capture_stops_the_role_until_the_user_decides() {
     db.execute(&Caller::User, &ApproveNewFiles { request_id: "k1".into(), capture_id: capture.clone() }).unwrap();
     let retried = db.read(|c| latest_capture(c, ROLE)).unwrap().unwrap();
     assert_eq!((retried.state, retried.options.ignore_guard), (CaptureState::Intent, true));
-    finish_capture(&db, &capture, CaptureResult::Pinned { commit: "with-venv".into() });
+    finish_capture(&db, &capture, CaptureResult::Pinned { commit: "with-venv".into(), changed: vec![] });
     assert_eq!(phase(&db, &task), Phase::Verifying, "the approved capture is the candidate");
 }
 
@@ -319,7 +320,7 @@ fn discarding_leaves_out_what_stopped_the_capture() {
     db.execute(&Caller::User, &DiscardUncaptured { request_id: "d1".into(), capture_id: capture.clone() }).unwrap();
     let retried = db.read(|c| latest_capture(c, ROLE)).unwrap().unwrap();
     assert!(retried.options.leave_new_files && !retried.options.ignore_guard);
-    finish_capture(&db, &capture, CaptureResult::Pinned { commit: "without-venv".into() });
+    finish_capture(&db, &capture, CaptureResult::Pinned { commit: "without-venv".into(), changed: vec![] });
     assert_eq!(phase(&db, &task), Phase::Verifying);
 }
 
@@ -367,7 +368,7 @@ fn a_slot_whose_last_capture_was_stopped_does_not_go_to_the_next_task() {
     assert_eq!(rejection(db.execute(&Caller::Runtime, &start_b)), "capture_pending");
     let retried = db.read(|c| latest_capture(c, ROLE)).unwrap().unwrap();
     assert!(retried.options.leave_uncovered);
-    finish_capture(&db, &capture, CaptureResult::Pinned { commit: "without-vendor".into() });
+    finish_capture(&db, &capture, CaptureResult::Pinned { commit: "without-vendor".into(), changed: vec![] });
     start(&db, &b);
 }
 

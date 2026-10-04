@@ -83,6 +83,7 @@ async fn a_task_runs_from_done_to_the_users_repository() {
         verification_id: v.id.clone(),
         criteria_version: 1,
         expected_integration: base.clone(),
+        dropping: vec![],
     };
     let published = db.execute(&Caller::User, &accept).unwrap();
     backend.project.wake.notify_one();
@@ -248,6 +249,7 @@ async fn the_preview_stops_on_local_changes_until_the_user_retries() {
         verification_id: v.id,
         criteria_version: 1,
         expected_integration: base.clone(),
+        dropping: vec![],
     };
     let published = db.execute(&Caller::User, &accept).unwrap();
     backend.project.wake.notify_one();

@@ -76,6 +76,10 @@ export interface Task {
   attempt_seq: number | null;
   attempt_open: boolean;
   verification: Verification | null;
+  /** The user's messages its executor never got; accepting needs the user to let them go. */
+  undelivered_messages: number;
+  /** For a task made from changes outside any task: their capture. */
+  origin_capture: string | null;
 }
 
 export interface NewFile {
@@ -98,8 +102,10 @@ export interface Capture {
   base: string;
   state: 'intent' | 'pinned' | 'oversized' | 'uncovered';
   commit_id: string | null;
-  detail: { files?: NewFile[]; total_bytes?: number; paths?: UncoveredPath[] } | null;
+  detail: { files?: NewFile[]; total_bytes?: number; paths?: UncoveredPath[]; changed?: string[] } | null;
   created_at: number;
+  /** Set for a capture outside any task that changed something. */
+  outside: 'pending' | 'adopted' | 'discarded' | null;
 }
 
 export type Hold =
@@ -128,6 +134,8 @@ export interface RoleView {
   last_turn: Turn | null;
   hold: Hold | null;
   stalled: Stalled | null;
+  /** Changes a turn outside any task left in the slot, waiting for the user. */
+  outside: Capture | null;
   workspace: Workspace | null;
   queued_messages: number;
 }
@@ -149,6 +157,7 @@ export interface Domain {
 
 export type Attention =
   | { kind: 'hold'; role: string; hold: Hold }
+  | { kind: 'outside_changes'; role: string; capture: Capture }
   | { kind: 'unknown_turn'; role: string; turn_id: string }
   | { kind: 'task_blocked'; task_id: string; title: string; reason: string }
   | ({ kind: 'stalled'; role: string; title: string } & Stalled)
@@ -265,7 +274,7 @@ export interface Attempt {
 export type VerificationRow = Omit<Verification, 'task_id'> & { created_at: number; finished_at: number | null; attempt_id: string };
 
 export interface TaskDetail {
-  task: Omit<Task, 'attempt_seq' | 'attempt_open' | 'verification'>;
+  task: Omit<Task, 'attempt_seq' | 'attempt_open' | 'verification' | 'undelivered_messages'>;
   criteria: { version: number; text: string; created_by: string; created_at: number }[];
   attempts: Attempt[];
   captures: Capture[];
@@ -273,6 +282,8 @@ export interface TaskDetail {
   checks: CheckRunRow[];
   decisions: { id: string; kind: string; actor: string; detail: Record<string, unknown>; created_at: number }[];
   publications: { rev: number; commit_id: string; previous: string; created_at: number }[];
+  /** The user's messages to the task that its executor never got (data-model.md §4.2). */
+  undelivered_messages: { id: string; body: string }[];
 }
 
 export interface RemoteError {

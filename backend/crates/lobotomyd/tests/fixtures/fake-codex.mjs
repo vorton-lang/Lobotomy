@@ -3,7 +3,9 @@
 //
 // The input decides what happens:
 //   FAKE:done   writes work.txt, reports done, completes the turn; with FAKE:text=<word> the
-//               file holds that word instead of "hi"
+//               file holds that word instead of "hi"; with FAKE:nowrite it writes nothing
+//   FAKE:wait=<ms>  waits that long before anything else, so a message can arrive meanwhile
+//   FAKE:longcmd  emits a command that writes a file with a heredoc of 405 lines (#14)
 //   FAKE:fail   reports a failed turn
 //   FAKE:sleep  starts a turn and waits; Ctrl+C ends it without a turn end event
 //   FAKE:big    emits a command item with 200 KiB of output
@@ -50,6 +52,8 @@ if (flags.has('--fake-hang')) await new Promise(r => setTimeout(r, 600_000));
 
 emit({ type: 'thread.started', thread_id: threadId });
 emit({ type: 'turn.started' });
+const wait = /FAKE:wait=(\d+)/.exec(input);
+if (wait) await new Promise((r) => setTimeout(r, Number(wait[1])));
 emit({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: `got ${input.length} chars` } });
 
 if (input.includes('FAKE:fail')) {
@@ -77,8 +81,14 @@ if (input.includes('FAKE:refused')) {
   emit({ type: 'item.completed', item: { ...call, result: null, error, status: 'failed' } });
 }
 
+if (input.includes('FAKE:longcmd')) {
+  const body = Array.from({ length: 402 }, (_, i) => `  line ${i} of the generated source;`).join('\n');
+  const command = `cat > generated.txt <<'EOF'\n${body}\nheredoc-end-marker\nEOF`;
+  emit({ type: 'item.completed', item: { id: 'item_long', type: 'command_execution', command, aggregated_output: '', exit_code: 0, status: 'completed' } });
+}
+
 if (input.includes('FAKE:done')) {
-  fs.writeFileSync('work.txt', /FAKE:text=(\S+)/.exec(input)?.[1] ?? 'hi');
+  if (!input.includes('FAKE:nowrite')) fs.writeFileSync('work.txt', /FAKE:text=(\S+)/.exec(input)?.[1] ?? 'hi');
   const arguments_ = { title: '完成', body: '写了 work.txt', status: 'done' };
   const response = await fetch(url, {
     method: 'POST',

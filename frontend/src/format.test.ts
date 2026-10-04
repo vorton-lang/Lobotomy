@@ -116,7 +116,7 @@ const verification = (seq: number, at: number, state: VerificationRow['state']):
 });
 
 const detail = (patch: Partial<TaskDetail>): TaskDetail => ({
-  task: { id: 't', title: 't', body: '', executor: 'Malkuth', phase: 'executing', paused: false, blocked_reason: null, criteria_version: 1, queue_pos: null, revision: 1, created_at: 1, closed_at: null },
+  task: { id: 't', title: 't', body: '', executor: 'Malkuth', phase: 'executing', paused: false, blocked_reason: null, criteria_version: 1, queue_pos: null, revision: 1, created_at: 1, closed_at: null, origin_capture: null },
   criteria: [{ version: 1, text: '', created_by: 'user', created_at: 1 }],
   attempts: [],
   captures: [],
@@ -124,6 +124,7 @@ const detail = (patch: Partial<TaskDetail>): TaskDetail => ({
   checks: [],
   decisions: [],
   publications: [],
+  undelivered_messages: [],
   ...patch,
 });
 
@@ -156,7 +157,7 @@ describe('workRange', () => {
   it('shows the latest round’s own work once there is some', () => {
     const capture: Capture = {
       id: 'c2', turn_id: 'turn2', role: 'Malkuth', task_id: 't', attempt_id: 'att2', kind: 'turn',
-      base: 'base0000', state: 'pinned', commit_id: 'work2', detail: null, created_at: 50,
+      base: 'base0000', state: 'pinned', commit_id: 'work2', detail: null, created_at: 50, outside: null,
     };
     const d = detail({ attempts: [attempt(1, 10, 20), attempt(2, 40, null)], verifications: [verification(1, 25, 'passed')], captures: [capture] });
     expect(workRange(d)).toMatchObject({ to: 'work2', earlier: false });

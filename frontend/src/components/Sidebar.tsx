@@ -1,10 +1,11 @@
 // The right column (frontend.md §2): what waits for the user, then the Workboard.
 
 import { useState } from 'react';
-import type { Attention, Hold, RoleView, Task } from '../api/types';
+import type { Attention, Capture, Hold, RoleView, Task } from '../api/types';
 import { bytes, clock, elapsed, PHASE_LABEL } from '../format';
 import { act, MAIN_ROLE, run, selectTask, toast, useStore } from '../store';
 import { Modal, useNow } from './common';
+import { DiffPool, DiffView } from './DiffView';
 
 export function Sidebar() {
   const attention = useStore((s) => s.snapshot?.attention ?? []);
@@ -28,6 +29,8 @@ function AttentionCard({ attention: a }: { attention: Attention }) {
   switch (a.kind) {
     case 'hold':
       return <HoldCard role={a.role} hold={a.hold} />;
+    case 'outside_changes':
+      return <OutsideChangesCard role={a.role} capture={a.capture} />;
     case 'unknown_turn':
       return (
         <div className="card warn">
@@ -47,6 +50,7 @@ function AttentionCard({ attention: a }: { attention: Attention }) {
           <p>
             「{a.title}」通过了验证，等你验收。
           </p>
+          <UndeliveredNote taskId={a.task_id} />
           <div className="actions">
             <button className="primary" onClick={() => selectTask(a.task_id)}>
               查看并验收
@@ -162,6 +166,49 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
   );
 }
 
+function UndeliveredNote({ taskId }: { taskId: string }) {
+  const count = useStore((s) => s.snapshot?.tasks.find((t) => t.id === taskId)?.undelivered_messages ?? 0);
+  if (count === 0) return null;
+  return <p className="muted">还有 {count} 条你发的消息没交给执行者，验收前要先决定怎么处理。</p>;
+}
+
+/** A turn outside any task changed files; nothing writes over them until the user decides (#14). */
+function OutsideChangesCard({ role, capture }: { role: string; capture: Capture }) {
+  const changed = capture.detail?.changed ?? [];
+  const [viewing, setViewing] = useState(false);
+  const [adopting, setAdopting] = useState(false);
+  return (
+    <div className="card warn">
+      <p>
+        {role} 在任务之外改了 {changed.length} 个文件。这些改动不属于任何任务，不会被验收或发布；你决定之前，不会开始下一个任务。
+      </p>
+      <ul className="paths">
+        {changed.slice(0, 12).map((path) => (
+          <li key={path}>{path}</li>
+        ))}
+        {changed.length > 12 && <li className="muted">……共 {changed.length} 个文件</li>}
+      </ul>
+      <div className="actions">
+        <button onClick={() => setViewing(true)}>查看改动</button>
+        <button onClick={() => run('discard_outside_changes', { capture_id: capture.id })} title="工作目录回到集成版本；采集记录仍保留这些改动">
+          丢弃这些改动
+        </button>
+        <button className="primary" onClick={() => setAdopting(true)}>
+          建成任务…
+        </button>
+      </div>
+      {viewing && capture.commit_id && (
+        <Modal title="任务之外的改动" onClose={() => setViewing(false)} wide>
+          <DiffPool>
+            <DiffView from={capture.base} to={capture.commit_id} />
+          </DiffPool>
+        </Modal>
+      )}
+      {adopting && <NewTask fromCapture={capture.id} onClose={() => setAdopting(false)} />}
+    </div>
+  );
+}
+
 function BlockedCard({ taskId, title, reason }: { taskId: string; title: string; reason: string }) {
   return (
     <div className="card">
@@ -258,6 +305,7 @@ function RoleLine({ role, tasks }: { role: RoleView; tasks: Task[] }) {
   if (role.unfinished?.state === 'running' && role.unfinished.started_at) activity = `正在跑 turn · ${elapsed(role.unfinished.started_at, now)}`;
   else if (role.unfinished) activity = role.unfinished.state === 'unknown' ? '上一个 turn 状态未知' : '即将开始 turn';
   else if (role.hold) activity = '停下，等你决定';
+  else if (role.outside) activity = '任务之外有改动，等你决定';
   else if (role.stalled) activity = 'turn 已结束，任务还没完成，等你发消息';
   else if (role.workspace?.state === 'materializing') activity = '正在准备工作目录';
   else if (task) activity = PHASE_LABEL[task.phase];
@@ -292,12 +340,15 @@ function TaskLine({ task, queueIndex, queueLength }: { task: Task; queueIndex?: 
   );
 }
 
-function NewTask({ onClose }: { onClose: () => void }) {
+/** A new task; with `fromCapture`, made from changes outside any task and starting from them (#14). */
+function NewTask({ onClose, fromCapture }: { onClose: () => void; fromCapture?: string }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [criteria, setCriteria] = useState('');
   const create = async () => {
-    const created = await run<{ id: string }>('create_task', { title, body, criteria, executor: MAIN_ROLE });
+    const created = fromCapture
+      ? await run<{ id: string }>('adopt_outside_changes', { capture_id: fromCapture, title, body, criteria })
+      : await run<{ id: string }>('create_task', { title, body, criteria, executor: MAIN_ROLE });
     if (!created) return;
     onClose();
     // An open task panel would cover the thread where the new task's work shows (#13); the
@@ -306,7 +357,8 @@ function NewTask({ onClose }: { onClose: () => void }) {
     toast(`「${title}」已交给 ${MAIN_ROLE}`);
   };
   return (
-    <Modal title="新任务" onClose={onClose}>
+    <Modal title={fromCapture ? '用这些改动建任务' : '新任务'} onClose={onClose}>
+      {fromCapture && <p className="muted">任务从这些改动开始：执行者在它们的基础上继续，做完后照常验证、验收。</p>}
       <label>
         标题
         <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />

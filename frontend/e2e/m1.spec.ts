@@ -105,6 +105,75 @@ test('a failed turn waits for the user to continue', async ({ page }) => {
   await expect(stalled).toBeHidden();
 });
 
+// A message sent while the executor's turn finishes the task never reaches the executor. It
+// does not slip away at acceptance: the user lets it go explicitly (#14).
+test('a message the executor never got waits for the user at acceptance', async ({ page }) => {
+  await open(page);
+  await createTask(page, '补充要求的任务', 'FAKE:wait=2500 FAKE:done FAKE:text=v1');
+  await expect(page.getByRole('button', { name: '中断' })).toBeVisible();
+  const composer = page.getByLabel('消息');
+  await composer.fill('补充：异常行要能看到原始行号');
+  await composer.press('Enter');
+
+  const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
+  await expect(card).toContainText('还有 1 条你发的消息没交给执行者');
+  await card.getByRole('button', { name: '查看并验收' }).click();
+  const panel = page.getByRole('dialog', { name: '补充要求的任务' });
+  await expect(panel.locator('.undelivered')).toContainText('异常行要能看到原始行号');
+  await expect(panel.getByRole('button', { name: '验收', exact: true })).toHaveCount(0);
+  await panel.getByRole('button', { name: '验收，不再投递这些消息' }).click();
+  await expect(panel.locator('.phase')).toHaveText('已完成');
+  await expect(panel.locator('.history')).toContainText('1 条消息没有投递');
+  await panel.getByRole('button', { name: '关闭' }).click();
+});
+
+// What a turn outside any task changed waits for the user; its done is shown as having no effect;
+// a task made from the changes carries them to the user's repository (#14).
+test('changes made outside any task become a task', async ({ page }) => {
+  await open(page);
+  const composer = page.getByLabel('消息');
+  await composer.fill('FAKE:done FAKE:text=outside');
+  await composer.press('Enter');
+  await expect(page.locator('.report').last()).toContainText('未生效');
+
+  const card = page.locator('.attention .card').filter({ hasText: '在任务之外改了 1 个文件' });
+  await expect(card).toContainText('work.txt');
+  await card.getByRole('button', { name: '建成任务…' }).click();
+  const dialog = page.getByRole('dialog', { name: '用这些改动建任务' });
+  await dialog.getByLabel('标题').fill('保留任务之外的改动');
+  await dialog.getByLabel('你的原话').fill('FAKE:done FAKE:nowrite');
+  await dialog.getByRole('button', { name: '交给 Malkuth' }).click();
+
+  const accept = page.locator('.attention .card').filter({ hasText: '「保留任务之外的改动」通过了验证' });
+  await accept.getByRole('button', { name: '查看并验收' }).click();
+  const panel = page.getByRole('dialog', { name: '保留任务之外的改动' });
+  await panel.getByRole('button', { name: '验收', exact: true }).click();
+  await expect(panel.locator('.phase')).toHaveText('已完成');
+  const file = path.join(info().repo, 'work.txt');
+  await expect.poll(() => fs.readFileSync(file, 'utf8'), { timeout: 20_000 }).toBe('outside');
+  await panel.getByRole('button', { name: '关闭' }).click();
+});
+
+// A command that writes a file through a heredoc takes a line or two until opened; search still
+// reaches its end (#14).
+test('a long command stays short until opened', async ({ page }) => {
+  await open(page);
+  const composer = page.getByLabel('消息');
+  await composer.fill('FAKE:longcmd');
+  await composer.press('Enter');
+  const item = page.locator('.item.command', { hasText: 'cat > generated.txt' });
+  await expect(item.locator('summary')).toContainText('共 405 行');
+  expect((await item.locator('summary').boundingBox())!.height).toBeLessThan(60);
+
+  await page.keyboard.press('Control+f');
+  const bar = page.getByRole('search');
+  await bar.getByLabel('搜索对话').fill('heredoc-end-marker');
+  await expect(bar.locator('.search-count')).toHaveText('1 / 1');
+  await expect(item).toHaveAttribute('open', '');
+  await expect.poll(() => page.evaluate(() => CSS.highlights.get('search-current')?.size ?? 0)).toBeGreaterThan(0);
+  await bar.getByLabel('搜索对话').press('Escape');
+});
+
 // Ctrl+F finds what the virtualized thread has not loaded, loads it and scrolls there
 // (frontend.md §4.1 "搜索").
 test('search goes to a match pages back', async ({ page }) => {

@@ -275,6 +275,22 @@ impl Store {
         .block_on()
     }
 
+    /// The paths that differ between two commits, without their content.
+    pub fn changed_paths(&self, from: &str, to: &str) -> Result<Vec<String>> {
+        use futures::StreamExt as _;
+        let (from, to) = (self.commit(from)?.tree(), self.commit(to)?.tree());
+        async {
+            let mut paths = Vec::new();
+            let mut stream = from.diff_stream(&to, &jj_lib::matchers::EverythingMatcher);
+            while let Some(entry) = stream.next().await {
+                entry.values.map_err(Error::jj)?;
+                paths.push(entry.path.as_internal_file_string().to_owned());
+            }
+            Ok(paths)
+        }
+        .block_on()
+    }
+
     async fn content(
         &self,
         path: &jj_lib::repo_path::RepoPath,

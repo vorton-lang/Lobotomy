@@ -15,7 +15,9 @@ use crate::error::{Error, Result};
 use crate::id::new_id;
 use crate::item::Blob;
 use crate::project::{ProjectConfig, config_version, current_config, require_project};
-use crate::task::{Phase, Task, load_task, queue_message, record_decision};
+use crate::task::{
+    Phase, Task, drop_queued, dropped_detail, load_task, queue_message, record_decision, undelivered_user_messages,
+};
 use crate::workspace::{plan, role_slot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +114,22 @@ pub fn latest_candidate_commit(conn: &Connection, task_id: &str) -> Result<Optio
             |r| r.get(0),
         )
         .optional()?)
+}
+
+/// Where a task's work so far stands, for the code start of its next attempt (data-model.md
+/// §4.6): its latest candidate, or for a task made from changes outside any task, those (#14).
+pub fn work_so_far(conn: &Connection, task_id: &str) -> Result<Option<String>> {
+    if let Some(candidate) = latest_candidate_commit(conn, task_id)? {
+        return Ok(Some(candidate));
+    }
+    Ok(conn
+        .query_row(
+            "SELECT c.commit_id FROM task t JOIN capture c ON c.id = t.origin_capture WHERE t.id = ?1",
+            [task_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
 }
 
 /// Everything the runtime needs to carry out a verification.
@@ -402,6 +420,10 @@ pub struct Accept {
     pub verification_id: String,
     pub criteria_version: i64,
     pub expected_integration: String,
+    /// The user's messages to the executor that it never got, which the user lets go with this
+    /// acceptance; exactly those there are (data-model.md §4.2, #14).
+    #[serde(default)]
+    pub dropping: Vec<String>,
 }
 
 impl Command for Accept {
@@ -444,6 +466,19 @@ impl Command for Accept {
         if evidence_is_stale(cx.tx, &v)? {
             return Err(Error::rejected("stale_verification", format!("the checks of {} are out of date", v.id)));
         }
+        // A message the user sent that the executor never got must not slip away unseen: the
+        // user lets go of exactly those there are, or sends the task back with them.
+        let undelivered = undelivered_user_messages(cx.tx, &task.id)?;
+        let mut pending: Vec<&str> = undelivered.iter().map(|m| m.id.as_str()).collect();
+        let mut letting_go: Vec<&str> = self.dropping.iter().map(String::as_str).collect();
+        pending.sort_unstable();
+        letting_go.sort_unstable();
+        if pending != letting_go {
+            return Err(Error::rejected(
+                "undelivered_messages",
+                format!("the executor never got {} message(s): {}", pending.len(), pending.join(", ")),
+            ));
+        }
         let commit =
             v.commit_id.clone().ok_or_else(|| Error::rejected("no_commit", "the verification has no commit"))?;
         let detail = json!({
@@ -452,6 +487,7 @@ impl Command for Accept {
             "criteria_version": self.criteria_version,
             "integration": project.integration,
             "commit": commit,
+            "dropped_messages": dropped_detail(&undelivered),
         });
         let decision = record_decision(cx, "accept", Some(&task.id), caller, detail)?;
         let rev = project.integration_rev + 1;
@@ -466,6 +502,7 @@ impl Command for Accept {
         )?;
         cx.tx.execute("DELETE FROM occupancy WHERE task_id = ?1", [&task.id])?;
         crate::turn::end_task_sessions(cx, &task.id)?;
+        drop_queued(cx, &task.id)?;
         cx.tx.execute(
             "UPDATE task SET phase = 'done', closed_at = ?2, revision = revision + 1 WHERE id = ?1",
             params![task.id, cx.now],

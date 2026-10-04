@@ -63,6 +63,18 @@ pub struct CaptureOptions {
     pub leave_uncovered: bool,
 }
 
+/// What becomes of changes a turn outside any task left in the slot (harness-adapter.md §3, #14).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outside {
+    /// The user has not decided; no task starts in the slot until then.
+    Pending,
+    /// A task was made from them and starts from them.
+    Adopted,
+    /// The slot was written over; the capture keeps them.
+    Discarded,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Capture {
     pub id: String,
@@ -80,10 +92,12 @@ pub struct Capture {
     pub commit_id: Option<String>,
     pub detail: Option<Value>,
     pub created_at: i64,
+    /// Set for a capture outside any task that changed something.
+    pub outside: Option<Outside>,
 }
 
 const SELECT: &str = "SELECT id, turn_id, role, task_id, attempt_id, kind, workspace_id, base, config_version, state,
-                             options, commit_id, detail, created_at FROM capture";
+                             options, commit_id, detail, created_at, outside FROM capture";
 
 fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Capture>> {
     let mut stmt = conn.prepare(&format!("{SELECT} {filter}"))?;
@@ -103,16 +117,19 @@ fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result
             commit_id: r.get(11)?,
             detail: None,
             created_at: r.get(13)?,
+            outside: None,
         };
-        let text: (String, String, String, Option<String>) = (r.get(5)?, r.get(9)?, r.get(10)?, r.get(12)?);
+        let text: (String, String, String, Option<String>, Option<String>) =
+            (r.get(5)?, r.get(9)?, r.get(10)?, r.get(12)?, r.get(14)?);
         Ok((capture, text))
     })?;
     rows.map(|row| {
-        let (mut capture, (kind, state, options, detail)) = row?;
+        let (mut capture, (kind, state, options, detail, outside)) = row?;
         capture.kind = serde_json::from_value(Value::String(kind))?;
         capture.state = serde_json::from_value(Value::String(state))?;
         capture.options = serde_json::from_str(&options)?;
         capture.detail = detail.as_deref().map(serde_json::from_str).transpose()?;
+        capture.outside = outside.map(|o| serde_json::from_value(Value::String(o))).transpose()?;
         Ok(capture)
     })
     .collect()
@@ -202,6 +219,58 @@ pub fn require_no_pending_capture(conn: &Connection, role: &str) -> Result<()> {
     }
 }
 
+/// Changes a turn outside any task left in the role's slot, while the user has not decided about
+/// them: no task starts in the slot until then (harness-adapter.md §3, #14). A later turn outside
+/// a task captures the slot again, changes included, so only the latest capture counts.
+pub fn outside_changes(conn: &Connection, role: &str) -> Result<Option<Capture>> {
+    Ok(latest_capture(conn, role)?.filter(|c| c.outside == Some(Outside::Pending)))
+}
+
+/// Settles the pending changes of `capture_id`, which must be the role's latest capture, with no
+/// turn running that could change the slot further.
+pub(crate) fn settle_outside(cx: &mut Cx<'_>, capture_id: &str, outcome: Outside) -> Result<Capture> {
+    let capture = load_capture(cx.tx, capture_id)?;
+    let pending = outside_changes(cx.tx, &capture.role)?;
+    if pending.as_ref().map(|c| c.id.as_str()) != Some(capture.id.as_str()) {
+        return Err(Error::rejected("not_pending", format!("capture {} holds no undecided changes", capture.id)));
+    }
+    if let Some(turn) = unfinished_turn(cx.tx, &capture.role)? {
+        return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", capture.role, turn.id)));
+    }
+    let value = serde_json::to_value(outcome)?;
+    cx.tx.execute("UPDATE capture SET outside = ?2 WHERE id = ?1", params![capture.id, value.as_str()])?;
+    cx.emit("capture.outside", &capture.id, json!({ "role": capture.role, "outside": outcome }))?;
+    Ok(capture)
+}
+
+/// "丢弃任务之外的改动": the slot is written over with the integration version; the capture
+/// keeps the changes (#14).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DiscardOutsideChanges {
+    pub request_id: String,
+    pub capture_id: String,
+}
+
+impl Command for DiscardOutsideChanges {
+    const NAME: &'static str = "discard_outside_changes";
+    type Output = ();
+
+    fn idem_key(&self) -> Option<&str> {
+        Some(&self.request_id)
+    }
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
+        caller.require_user()?;
+        let capture = settle_outside(cx, &self.capture_id, Outside::Discarded)?;
+        record_decision(cx, "discard_outside_changes", None, caller, json!({ "capture_id": capture.id }))?;
+        let integration = crate::project::require_project(cx.tx)?.integration;
+        if let Some(slot) = crate::workspace::role_slot(cx.tx, &capture.role)? {
+            crate::workspace::plan(cx, &slot, &integration, &integration, None)?;
+        }
+        Ok(())
+    }
+}
+
 /// The role's latest capture, if the runtime stopped it. The role then waits for the user, like
 /// after a turn that did not end normally (harness-adapter.md §4.1).
 pub fn stopped_capture(conn: &Connection, role: &str) -> Result<Option<Capture>> {
@@ -224,9 +293,19 @@ pub struct UncoveredPath {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum CaptureResult {
-    Pinned { commit: String },
-    Oversized { files: Vec<NewFile>, total_bytes: u64 },
-    Uncovered { paths: Vec<UncoveredPath> },
+    Pinned {
+        commit: String,
+        /// For a capture outside any task: the paths that differ from its base.
+        #[serde(default)]
+        changed: Vec<String>,
+    },
+    Oversized {
+        files: Vec<NewFile>,
+        total_bytes: u64,
+    },
+    Uncovered {
+        paths: Vec<UncoveredPath>,
+    },
 }
 
 /// Publishes what the store did with a capture (step ③). A pinned candidate ends its attempt and
@@ -249,20 +328,25 @@ impl Command for FinishCapture {
             return Err(Error::rejected("not_pending", format!("capture {} is finished", capture.id)));
         }
         let (state, commit, detail) = match &self.result {
-            CaptureResult::Pinned { commit } => ("pinned", Some(commit.as_str()), None),
+            // Changes outside any task are kept from being written over: they wait for the user.
+            CaptureResult::Pinned { commit, changed } if capture.task_id.is_none() && !changed.is_empty() => {
+                ("pinned", Some(commit.as_str()), Some(json!({ "changed": changed })))
+            }
+            CaptureResult::Pinned { commit, .. } => ("pinned", Some(commit.as_str()), None),
             CaptureResult::Oversized { files, total_bytes } => {
                 ("oversized", None, Some(json!({ "files": files, "total_bytes": total_bytes })))
             }
             CaptureResult::Uncovered { paths } => ("uncovered", None, Some(json!({ "paths": paths }))),
         };
+        let outside = (state == "pinned" && detail.is_some()).then_some("pending");
         cx.tx.execute(
-            "UPDATE capture SET state = ?2, commit_id = ?3, detail = ?4, finished_at = ?5 WHERE id = ?1",
-            params![capture.id, state, commit, detail.as_ref().map(Value::to_string), cx.now],
+            "UPDATE capture SET state = ?2, commit_id = ?3, detail = ?4, finished_at = ?5, outside = ?6 WHERE id = ?1",
+            params![capture.id, state, commit, detail.as_ref().map(Value::to_string), cx.now, outside],
         )?;
         cx.emit(
             "capture.finished",
             &capture.id,
-            json!({ "role": capture.role, "state": state, "kind": capture.kind }),
+            json!({ "role": capture.role, "state": state, "kind": capture.kind, "outside": outside }),
         )?;
 
         if capture.kind != CaptureKind::Candidate || !matches!(self.result, CaptureResult::Pinned { .. }) {

@@ -268,6 +268,89 @@ async fn search_finds_the_threads_text_in_order() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// The scenario of #14: the user adds to a task while its executor's turn runs, and that turn
+/// reports done. The addition is not lost outside the task: acceptance waits for the user's
+/// decision, and sending the task back delivers it in the task.
+#[tokio::test]
+async fn a_message_added_while_the_executor_finishes_stays_with_its_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let mut gui = Client::connect(&backend).await;
+    let args = json!({ "request_id": "r1", "title": "首版", "body": "FAKE:wait=1500 FAKE:done FAKE:text=first", "criteria": "-", "executor": "Malkuth" });
+    let task = gui.command("create_task", args).await.unwrap()["id"].as_str().unwrap().to_owned();
+    gui.event("turn.running").await;
+    let added =
+        json!({ "request_id": "m1", "role": "Malkuth", "task_id": task, "body": "补充：FAKE:done FAKE:text=second" });
+    gui.command("send_message", added).await.unwrap();
+    gui.event("task.accepting").await;
+
+    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
+    assert_eq!(snapshot["tasks"][0]["undelivered_messages"], 1, "{snapshot}");
+    let integration = snapshot["project"]["integration"].clone();
+    let detail = gui.call("task", json!({ "task_id": task })).await.unwrap();
+    assert!(detail["undelivered_messages"][0]["body"].as_str().unwrap().contains("补充"));
+    let accept = |request: &str, verification: &Value| json!({ "request_id": request, "task_id": task, "verification_id": verification, "criteria_version": 1, "expected_integration": integration });
+    let refused = gui.command("accept", accept("a1", &detail["verifications"][0]["id"])).await.unwrap_err();
+    assert_eq!(refused["code"], "undelivered_messages");
+
+    gui.command("send_back", json!({ "request_id": "b1", "task_id": task, "reason": "按补充改" })).await.unwrap();
+    gui.event("task.accepting").await;
+    let detail = gui.call("task", json!({ "task_id": task })).await.unwrap();
+    assert_eq!(detail["undelivered_messages"], json!([]));
+    gui.command("accept", accept("a2", &detail["verifications"][1]["id"])).await.unwrap();
+    gui.event("preview.written").await;
+    assert_eq!(std::fs::read_to_string(user_repo(dir.path()).join("work.txt")).unwrap(), "second");
+    let outside: i64 = backend
+        .project
+        .db
+        .read(|c| Ok(c.query_row("SELECT COUNT(*) FROM turn WHERE task_id IS NULL", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(outside, 0, "no turn ran outside the task");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// A turn outside any task that changes files: its done does nothing and says so, the changes wait
+/// for the user, and a task made from them carries them to the user's repository (#14).
+#[tokio::test]
+async fn changes_outside_any_task_can_become_a_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let mut gui = Client::connect(&backend).await;
+    let message = json!({ "request_id": "m1", "role": "Malkuth", "body": "FAKE:done FAKE:text=outside" });
+    gui.command("send_message", message).await.unwrap();
+    gui.event("capture.finished").await;
+
+    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
+    let attention = &snapshot["attention"][0];
+    assert_eq!(attention["kind"], "outside_changes", "{snapshot}");
+    assert_eq!(attention["capture"]["detail"]["changed"], json!(["work.txt"]));
+    let thread = gui.call("thread", json!({ "role": "Malkuth" })).await.unwrap();
+    let call = thread["items"].as_array().unwrap().iter().find(|i| i["kind"] == "mcp_call").unwrap();
+    assert_eq!(thread["commands"][call["command_id"].as_str().unwrap()]["result"], "no_task");
+
+    let adopt = json!({
+        "request_id": "t1",
+        "capture_id": attention["capture"]["id"],
+        "title": "把改动做完",
+        "body": "FAKE:done FAKE:nowrite",
+        "criteria": "-",
+    });
+    let task = gui.command("adopt_outside_changes", adopt).await.unwrap()["id"].as_str().unwrap().to_owned();
+    gui.event("task.accepting").await;
+    let detail = gui.call("task", json!({ "task_id": task })).await.unwrap();
+    let accept = json!({
+        "request_id": "a1",
+        "task_id": task,
+        "verification_id": detail["verifications"][0]["id"],
+        "criteria_version": 1,
+        "expected_integration": snapshot["project"]["integration"],
+    });
+    gui.command("accept", accept).await.unwrap();
+    gui.event("preview.written").await;
+    assert_eq!(std::fs::read_to_string(user_repo(dir.path()).join("work.txt")).unwrap(), "outside");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// A client that falls further behind than the push buffer is told to take a new snapshot rather
 /// than silently missing pushes (frontend.md §3).
 #[tokio::test]

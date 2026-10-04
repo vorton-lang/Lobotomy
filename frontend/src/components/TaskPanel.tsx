@@ -12,7 +12,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const detail = useStore((s) => s.taskDetail);
   const task = useStore((s) => s.snapshot?.tasks.find((t) => t.id === taskId));
   const integration = useStore((s) => s.snapshot?.project?.integration);
-  const [sendingBack, setSendingBack] = useState(false);
+  // The reason to start the send-back dialog with, or `null` while it is closed.
+  const [sendingBack, setSendingBack] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   if (!task) return null;
   const close = () => selectTask(null);
@@ -23,15 +24,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   // A verification of an earlier round stays visible, but never as the current result (#13).
   const verifiedRound = loaded?.attempts.find((a) => a.id === verification?.attempt_id)?.seq;
   const earlier = !!verification && verification.attempt_id !== latest?.id;
+  const acceptable = task.phase === 'accepting' && verification?.state === 'passed';
+  // Messages the executor never got hold acceptance until the user decides about them (#14).
+  const undelivered = loaded?.undelivered_messages ?? [];
 
-  // Accepting names the verification, the criteria version and the integration head the user saw;
-  // the backend refuses if any moved (harness-adapter.md §4.2).
-  const accept = () =>
+  // Accepting names the verification, the criteria version, the integration head and the
+  // undelivered messages the user saw; the backend refuses if any differ (harness-adapter.md §4.2).
+  const accept = (dropping: string[]) =>
     run('accept', {
       task_id: task.id,
       verification_id: verification?.id,
       criteria_version: task.criteria_version,
       expected_integration: integration,
+      dropping,
     });
 
   return (
@@ -44,12 +49,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         </button>
       </header>
       <div className="actions">
-        {task.phase === 'accepting' && verification?.state === 'passed' && (
+        {acceptable && loaded && undelivered.length === 0 && (
           <>
-            <button className="primary" onClick={accept}>
+            <button className="primary" onClick={() => accept([])}>
               验收
             </button>
-            <button onClick={() => setSendingBack(true)}>退回…</button>
+            <button onClick={() => setSendingBack('')}>退回…</button>
           </>
         )}
         {!['done', 'abandoned'].includes(task.phase) && (
@@ -65,6 +70,23 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       ) : (
         <div className="panel-body">
           <p className="now">{now(task.phase, latest?.seq, verification && !earlier ? verification.state : null)}</p>
+          {acceptable && undelivered.length > 0 && (
+            <section className="undelivered">
+              <h3>还有 {undelivered.length} 条消息没有交给执行者</h3>
+              <p className="muted">它们排在执行者交出候选成果之后，候选成果没有处理它们。验收后，它们不会再投递。</p>
+              {undelivered.map((m) => (
+                <div key={m.id} className="quote">
+                  <Markdown text={m.body} />
+                </div>
+              ))}
+              <div className="actions">
+                <button className="primary" onClick={() => setSendingBack('请按我补充的要求修改（见上面的消息）。')}>
+                  退回并交给执行者…
+                </button>
+                <button onClick={() => accept(undelivered.map((m) => m.id))}>验收，不再投递这些消息</button>
+              </div>
+            </section>
+          )}
           <section>
             <h3>你的原话</h3>
             <Markdown text={loaded.task.body || '（无）'} />
@@ -107,7 +129,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           <History detail={loaded} />
         </div>
       )}
-      {sendingBack && <SendBack taskId={task.id} onClose={() => setSendingBack(false)} />}
+      {sendingBack !== null && <SendBack taskId={task.id} initial={sendingBack} onClose={() => setSendingBack(null)} />}
       {editing && criteria && <EditCriteria taskId={task.id} version={criteria.version} text={criteria.text} onClose={() => setEditing(false)} />}
     </div>
   );
@@ -173,8 +195,8 @@ function History({ detail }: { detail: TaskDetail }) {
   );
 }
 
-function SendBack({ taskId, onClose }: { taskId: string; onClose: () => void }) {
-  const [reason, setReason] = useState('');
+function SendBack({ taskId, initial, onClose }: { taskId: string; initial: string; onClose: () => void }) {
+  const [reason, setReason] = useState(initial);
   return (
     <Modal title="退回候选成果" onClose={onClose}>
       <label>

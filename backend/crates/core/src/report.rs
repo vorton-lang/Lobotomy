@@ -37,6 +37,9 @@ pub enum ReportEffect {
     /// The turn has ended, or belongs to an attempt that is no longer open. A late call never
     /// advances state (data-model.md §3.1).
     Late,
+    /// The turn belongs to no task: there is nothing for `done` or a question to advance. What
+    /// the turn changed waits for the user (harness-adapter.md §3, #14).
+    NoTask,
 }
 
 impl Command for OrgReport {
@@ -61,8 +64,12 @@ impl Command for OrgReport {
                 cx.emit("report.progress", &turn.id, json!({ "role": role, "title": self.title }))?;
                 return Ok(ReportEffect::Recorded);
             }
+            // A blocking question or `done` needs the task in execution in this attempt.
+            None if turn.task_id.is_none() => {
+                cx.emit("report.no_task", &turn.id, json!({ "status": self.status }))?;
+                return Ok(ReportEffect::NoTask);
+            }
             None => {
-                // A blocking question or `done` needs the task in execution in this attempt.
                 cx.emit("report.late", &turn.id, json!({ "status": self.status }))?;
                 return Ok(ReportEffect::Late);
             }

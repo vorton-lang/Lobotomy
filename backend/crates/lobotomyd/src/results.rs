@@ -16,8 +16,7 @@ use lobotomy_core::item::externalize;
 use lobotomy_core::project::{Check, ProjectConfig, config_version, current_config, require_project};
 use lobotomy_core::task::CodeStart;
 use lobotomy_core::verify::{
-    CheckOutcome, FinishPreview, FinishVerification, PreviewJob, PreviewResult, latest_candidate_commit,
-    verification_plan,
+    CheckOutcome, FinishPreview, FinishVerification, PreviewJob, PreviewResult, verification_plan, work_so_far,
 };
 use lobotomy_core::workspace::{ReplaceWorkspace, Workspace, WorkspaceReady, current_workspace, load_workspace};
 use lobotomy_harness::process::{self, Spec};
@@ -142,7 +141,13 @@ pub async fn capture(project: Arc<Project>, capture: Capture) -> anyhow::Result<
         blocking(move || workspace(&p, &ws).capture(&p.store, &c.base, &scope(&config), guard.as_ref(), leave, &c.id))
             .await??;
     let result = match captured {
-        Captured::Pinned { commit } => CaptureResult::Pinned { commit },
+        // What a turn outside any task changed waits for the user (#14).
+        Captured::Pinned { commit } if capture.task_id.is_none() => {
+            let (p, base, c) = (project.clone(), capture.base.clone(), commit.clone());
+            let changed = blocking(move || p.store.changed_paths(&base, &c)).await??;
+            CaptureResult::Pinned { commit, changed }
+        }
+        Captured::Pinned { commit } => CaptureResult::Pinned { commit, changed: vec![] },
         Captured::Oversized { files, total_bytes } => {
             CaptureResult::Oversized { files: serde_json::from_value(serde_json::to_value(files)?)?, total_bytes }
         }
@@ -311,12 +316,13 @@ pub async fn preview(project: Arc<Project>, job: PreviewJob) -> anyhow::Result<(
     Ok(())
 }
 
-/// Where a reopened task's next attempt starts: its last candidate rebased onto the integration
-/// version (data-model.md §4.6). `None` when the task never produced a candidate.
+/// Where a task's next attempt starts when it has work already: its last candidate, or the changes
+/// it was made from, rebased onto the integration version (data-model.md §4.6). `None` for a task
+/// without either.
 pub async fn code_start(project: &Arc<Project>, task_id: &str) -> anyhow::Result<Option<CodeStart>> {
     let id = task_id.to_owned();
     let found = db(project, move |db| {
-        db.read(|c| match latest_candidate_commit(c, &id)? {
+        db.read(|c| match work_so_far(c, &id)? {
             Some(candidate) => Ok(Some((candidate, require_project(c)?.integration))),
             None => Ok(None),
         })

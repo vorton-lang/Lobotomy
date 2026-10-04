@@ -145,7 +145,16 @@ const DECISION_LABEL: Record<string, string> = {
   reopen: '你重开了任务',
   approve_new_files: '你放行了新增文件',
   discard_uncaptured: '你丢弃了未能采集的内容',
+  adopt_outside_changes: '你用任务之外的改动建立了这个任务',
 };
+
+/** What a closing decision let go: the user's messages the executor never got (#14). */
+function droppedNote(detail: Record<string, unknown>): string {
+  const dropped = Array.isArray(detail.dropped_messages) ? (detail.dropped_messages as { body: string }[]) : [];
+  if (dropped.length === 0) return '';
+  const quoted = dropped.map((m) => `「${m.body.length > 40 ? `${m.body.slice(0, 40)}…` : m.body}」`).join('');
+  return `；${dropped.length} 条消息没有投递：${quoted}`;
+}
 
 export interface TimelineEntry {
   at: number;
@@ -165,7 +174,7 @@ export function timeline(detail: TaskDetail): TimelineEntry[] {
   for (const c of detail.criteria) if (c.version > 1) add(c.created_at, 0, `完成条件改为第 ${c.version} 版`);
   for (const d of detail.decisions) {
     const reason = typeof d.detail.reason === 'string' && d.detail.reason ? `：${d.detail.reason}` : '';
-    add(d.created_at, 0, `${DECISION_LABEL[d.kind] ?? d.kind}${reason}`);
+    add(d.created_at, 0, `${DECISION_LABEL[d.kind] ?? d.kind}${reason}${droppedNote(d.detail)}`);
   }
   for (const v of detail.verifications) {
     add(v.created_at, 0, `第 ${round(v.attempt_id)} 轮的候选成果开始验证，基于集成版本 ${shortSha(v.base)}`);
