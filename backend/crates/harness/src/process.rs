@@ -58,12 +58,16 @@ impl Spawned {
 pub fn spawn(spec: &Spec<'_>) -> io::Result<Spawned> {
     let mut cmd = Command::new(spec.program);
     cmd.args(spec.args);
-    start(cmd, spec)
+    start(cmd, spec, false)
 }
 
 /// Runs a command line through the platform's shell, `cmd.exe` on Windows and `sh` elsewhere,
 /// in a process of its own like a CLI. For the project's check commands (harness-adapter.md
 /// §4.2); `spec.program` and `spec.args` are ignored.
+///
+/// [`Spawned::reap`] ends everything the command started, on every platform: a check left
+/// running would hold the output pipes open and keep writing to the verification site (#12). On
+/// Windows the job does it; elsewhere the command gets its own process group, which is killed.
 pub fn spawn_shell(command: &str, spec: &Spec<'_>) -> io::Result<Spawned> {
     #[cfg(windows)]
     let cmd = {
@@ -78,10 +82,12 @@ pub fn spawn_shell(command: &str, spec: &Spec<'_>) -> io::Result<Spawned> {
         cmd.arg("-c").arg(command);
         cmd
     };
-    start(cmd, spec)
+    start(cmd, spec, true)
 }
 
-fn start(mut cmd: Command, spec: &Spec<'_>) -> io::Result<Spawned> {
+/// `own_group`: on Unix, the process leads a new process group that reaping kills. Harness CLIs
+/// do not get one; they clean up after themselves (harness-adapter.md §1.8).
+fn start(mut cmd: Command, spec: &Spec<'_>, own_group: bool) -> io::Result<Spawned> {
     for name in spec.env_remove {
         cmd.env_remove(name);
     }
@@ -90,10 +96,10 @@ fn start(mut cmd: Command, spec: &Spec<'_>) -> io::Result<Spawned> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    imp::prepare(&mut cmd);
+    imp::prepare(&mut cmd, own_group);
     let mut child = cmd.spawn()?;
     let pid = child.id().ok_or_else(|| io::Error::other("the process exited before it started"))?;
-    match imp::adopt(&child, pid) {
+    match imp::adopt(&child, pid, own_group) {
         Ok((guard, process_start)) => Ok(Spawned { child, pid, process_start, guard }),
         Err(e) => {
             // It never ran on Windows: it was still suspended.
@@ -206,11 +212,12 @@ mod imp {
         }
     }
 
-    pub fn prepare(cmd: &mut Command) {
+    /// Every process gets a job of its own; the job covers what `own_group` asks for elsewhere.
+    pub fn prepare(cmd: &mut Command, _own_group: bool) {
         cmd.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     }
 
-    pub fn adopt(child: &Child, _pid: u32) -> io::Result<(Guard, i64)> {
+    pub fn adopt(child: &Child, _pid: u32, _own_group: bool) -> io::Result<(Guard, i64)> {
         let process = child.raw_handle().ok_or_else(|| io::Error::other("no process handle"))? as HANDLE;
         let job = kill_on_close_job()?;
         check(unsafe { AssignProcessToJobObject(job.0, process) })?;
@@ -323,7 +330,10 @@ mod imp {
 
     use tokio::process::{Child, Command};
 
-    pub struct Guard;
+    /// Kills the process group on drop, if the process leads one.
+    pub struct Guard {
+        group: Option<libc::pid_t>,
+    }
 
     impl Guard {
         pub fn resume(&mut self, _pid: u32) -> io::Result<()> {
@@ -331,7 +341,19 @@ mod imp {
         }
     }
 
-    pub fn prepare(cmd: &mut Command) {
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if let Some(group) = self.group {
+                // ESRCH means the group is already gone.
+                unsafe { libc::killpg(group, libc::SIGKILL) };
+            }
+        }
+    }
+
+    pub fn prepare(cmd: &mut Command, own_group: bool) {
+        if own_group {
+            cmd.process_group(0);
+        }
         let parent = std::process::id() as libc::pid_t;
         // Ask the kernel to send SIGTERM when the thread that started us exits. If the backend
         // died before this ran, exit now (harness-adapter.md §1.8).
@@ -348,8 +370,9 @@ mod imp {
         }
     }
 
-    pub fn adopt(_child: &Child, pid: u32) -> io::Result<(Guard, i64)> {
-        Ok((Guard, start_time(pid)?))
+    pub fn adopt(_child: &Child, pid: u32, own_group: bool) -> io::Result<(Guard, i64)> {
+        // With `process_group(0)` the group id is the child's pid.
+        Ok((Guard { group: own_group.then_some(pid as libc::pid_t) }, start_time(pid)?))
     }
 
     /// Field 22 of /proc/<pid>/stat: start time in clock ticks after boot.

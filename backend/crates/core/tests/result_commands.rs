@@ -412,6 +412,53 @@ fn after_abandoning_the_slot_is_reset_once_its_last_turn_is_captured() {
     assert_eq!((ws.target.as_str(), ws.head.as_str()), (BASE, BASE));
 }
 
+/// #12: B is accepted while A's preview is being written; A's receipt must not drop B's preview.
+#[test]
+fn an_older_preview_finishing_keeps_the_newer_one() {
+    let db = db();
+    let (a, _) = candidate(&db);
+    let va = verify(&db, &a, "accepted-A", vec![], vec![]);
+    accept(&db, "a1", &a, &va, BASE).unwrap();
+    let in_flight = db.read(next_preview).unwrap().unwrap();
+
+    let b = create(&db, "c2");
+    start(&db, &b);
+    let t = register(&db);
+    report_done(&db, &t.turn_id);
+    end_turn(&db, &t.turn_id);
+    pin_captures(&db);
+    let vb = verify(&db, &b, "accepted-B", vec![], vec![]);
+    accept(&db, "a2", &b, &vb, "accepted-A").unwrap();
+    db.execute(&Caller::Runtime, &FinishPreview { outbox_id: in_flight.outbox_id, result: PreviewResult::Written })
+        .unwrap();
+
+    assert_eq!(db.read(load_project).unwrap().unwrap().previewed, "accepted-A");
+    let next = db.read(next_preview).unwrap().expect("B's preview still runs");
+    assert_eq!((next.target.as_str(), next.previewed.as_str()), ("accepted-B", "accepted-A"));
+    db.execute(&Caller::Runtime, &FinishPreview { outbox_id: next.outbox_id, result: PreviewResult::Written }).unwrap();
+    assert_eq!(db.read(load_project).unwrap().unwrap().previewed, "accepted-B");
+    assert_eq!(db.read(next_preview).unwrap(), None);
+}
+
+#[test]
+fn a_verification_passes_only_when_every_check_ran() {
+    let db = db();
+    let config = ProjectConfig {
+        checks: vec![
+            Check { command: "cargo build".into(), timeout_secs: 60 },
+            Check { command: "cargo test".into(), timeout_secs: 60 },
+        ],
+        ..Default::default()
+    };
+    db.execute(&Caller::User, &EditProjectConfig { request_id: "p1".into(), expected_version: 1, config }).unwrap();
+    let (task, commit) = candidate(&db);
+    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
+    // Only the first check ran, for example because the task left verification meanwhile.
+    let finish = FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![check(0)], blobs: vec![] };
+    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: task.clone(), reason: String::new() }).unwrap();
+    assert_eq!(db.execute(&Caller::Runtime, &finish).unwrap(), VerificationState::Failed);
+}
+
 #[test]
 fn the_preview_is_written_once_for_the_latest_version_and_stops_on_divergence() {
     let db = db();

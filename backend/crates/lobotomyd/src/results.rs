@@ -161,7 +161,11 @@ pub async fn verify(project: Arc<Project>, verification_id: String) -> anyhow::R
     let composed = blocking(move || p.store.compose(&pl.candidate, &pl.base, &pl.message, &author, &pin)).await??;
 
     let mut checks = Vec::new();
-    if composed.conflicts.is_empty() {
+    // One verification at a time owns the site, from writing it until the processes of its last
+    // check have ended: a check of an abandoned task that is still running must not write into
+    // the next task's site (#12).
+    let site = if composed.conflicts.is_empty() { Some(project.verify_site.lock().await) } else { None };
+    if site.is_some() && still_verifying(&project, &verification_id).await? {
         let (p, pl, commit) = (project.clone(), plan.clone(), composed.commit.clone());
         blocking(move || -> anyhow::Result<()> {
             let site = lobotomy_store::Workspace::new(p.verify_dir(), p.verify_state_dir());
@@ -180,6 +184,11 @@ pub async fn verify(project: Arc<Project>, verification_id: String) -> anyhow::R
         })
         .await??;
         for check in &plan.config.checks {
+            // A task that left verification, such as one abandoned, starts no further checks.
+            // The checks that did not run keep the verification from passing.
+            if !still_verifying(&project, &verification_id).await? {
+                break;
+            }
             let outcome = run_check(&project, check, &project.verify_dir()).await?;
             let passed = outcome.passed();
             checks.push(outcome);
@@ -188,6 +197,7 @@ pub async fn verify(project: Arc<Project>, verification_id: String) -> anyhow::R
             }
         }
     }
+    drop(site);
     let p = project.clone();
     let (checks, blobs) = blocking(move || {
         let mut blobs = Vec::new();
@@ -204,6 +214,18 @@ pub async fn verify(project: Arc<Project>, verification_id: String) -> anyhow::R
     let finish = FinishVerification { verification_id, commit: composed.commit, conflicts: composed.conflicts, checks, blobs };
     runtime(&project, finish).await?;
     Ok(())
+}
+
+/// Whether the verification's task still waits for it.
+async fn still_verifying(project: &Arc<Project>, verification_id: &str) -> anyhow::Result<bool> {
+    let id = verification_id.to_owned();
+    db(project, move |db| {
+        db.read(|c| {
+            let v = lobotomy_core::verify::load_verification(c, &id)?;
+            Ok(lobotomy_core::task::load_task(c, &v.task_id)?.phase == lobotomy_core::task::Phase::Verifying)
+        })
+    })
+    .await
 }
 
 /// Runs one check command in the verification site, with the same environment trimming as a
@@ -296,7 +318,9 @@ pub async fn code_start(project: &Arc<Project>, task_id: &str) -> anyhow::Result
     let Some((candidate, integration)) = found else {
         return Ok(None);
     };
-    let pin = format!("start-{task_id}-{integration}");
+    // The pin names every input, so the same inputs give the same commit and a newer candidate a
+    // new one (#12).
+    let pin = format!("start-{task_id}-{candidate}-{integration}");
     let (p, base) = (project.clone(), integration.clone());
     let composed = blocking(move || p.store.compose(&candidate, &base, "code start", &Identity::runtime(), &pin)).await??;
     Ok(Some(CodeStart { commit: composed.commit, base: integration, conflicts: composed.conflicts }))

@@ -29,6 +29,9 @@ pub struct Project {
     pub jobs: Mutex<HashSet<String>>,
     /// Store work that failed, by key, with the reason. It waits for the user's retry.
     pub failed: Mutex<HashMap<String, String>>,
+    /// The verification site is one directory: a verification holds this from writing it until
+    /// the processes of its last check have ended (#12).
+    pub verify_site: tokio::sync::Mutex<()>,
     /// Wakes the scheduler after a change.
     pub wake: Notify,
 }
@@ -55,6 +58,7 @@ impl Project {
             running: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashSet::new()),
             failed: Mutex::new(HashMap::new()),
+            verify_site: tokio::sync::Mutex::new(()),
             wake: Notify::new(),
         })
     }

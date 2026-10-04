@@ -257,7 +257,10 @@ impl Command for FinishVerification {
             )?;
         }
         let failed_check = self.checks.iter().find(|c| !c.passed());
-        let state = if self.conflicts.is_empty() && failed_check.is_none() {
+        // Checks stop after the first failure, or when the task leaves verification; a
+        // verification passes only when every configured check ran and passed.
+        let all_ran = self.checks.len() >= config_version(cx.tx, v.config_version)?.checks.len();
+        let state = if self.conflicts.is_empty() && failed_check.is_none() && all_ran {
             VerificationState::Passed
         } else {
             VerificationState::Failed
@@ -296,21 +299,25 @@ impl Command for FinishVerification {
                 self.conflicts.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n")
             )
         } else {
-            let check = failed_check.expect("a failed verification without conflicts has a failed check");
-            let why = match (check.timed_out, check.exit_code) {
-                (true, _) => "超时".to_owned(),
-                (false, Some(code)) => format!("退出码为 {code}"),
-                (false, None) => "被终止".to_owned(),
-            };
             let moved = if rebased.is_some() {
                 "\n\n集成版本在你开始这项任务之后有了新的提交，工作目录已更新为基于它的结果，HEAD 指向新的集成版本。"
             } else {
                 ""
             };
-            format!(
-                "候选成果没有通过验证：检查命令 `{}` {why}。输出的最后部分：\n```\n{}\n```{moved}\n\n请修复后再次报告 done。",
-                check.command, check.tail
-            )
+            match failed_check {
+                Some(check) => {
+                    let why = match (check.timed_out, check.exit_code) {
+                        (true, _) => "超时".to_owned(),
+                        (false, Some(code)) => format!("退出码为 {code}"),
+                        (false, None) => "被终止".to_owned(),
+                    };
+                    format!(
+                        "候选成果没有通过验证：检查命令 `{}` {why}。输出的最后部分：\n```\n{}\n```{moved}\n\n请修复后再次报告 done。",
+                        check.command, check.tail
+                    )
+                }
+                None => format!("候选成果没有通过验证：检查命令没有全部运行。{moved}\n\n请再次报告 done。"),
+            }
         };
         reenter(cx, &task, rebased, &body)?;
         Ok(state)
@@ -516,7 +523,7 @@ pub fn next_preview(conn: &Connection) -> Result<Option<PreviewJob>> {
     };
     let row: Option<(String, String)> = conn
         .query_row(
-            "SELECT id, payload FROM outbox WHERE kind = 'preview' AND state = 'pending' ORDER BY created_at DESC, id DESC LIMIT 1",
+            "SELECT id, payload FROM outbox WHERE kind = 'preview' AND state = 'pending' ORDER BY rowid DESC LIMIT 1",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -538,7 +545,7 @@ pub fn next_preview(conn: &Connection) -> Result<Option<PreviewJob>> {
 pub fn preview_stopped(conn: &Connection) -> Result<Option<String>> {
     Ok(conn
         .query_row(
-            "SELECT receipt FROM outbox WHERE kind = 'preview' AND state = 'stopped' ORDER BY created_at DESC LIMIT 1",
+            "SELECT receipt FROM outbox WHERE kind = 'preview' AND state = 'stopped' ORDER BY rowid DESC LIMIT 1",
             [],
             |r| r.get(0),
         )
@@ -580,10 +587,12 @@ impl Command for FinishPreview {
                     "UPDATE outbox SET state = 'done', receipt = ?2, done_at = ?3 WHERE id = ?1",
                     params![self.outbox_id, target, cx.now],
                 )?;
-                // Older pending previews are covered by this one.
+                // Previews of older versions are covered by this one. A preview of a newer
+                // version, accepted while this one was being written, still has to run (#12).
                 cx.tx.execute(
                     "UPDATE outbox SET state = 'superseded', done_at = ?2
-                     WHERE kind = 'preview' AND state IN ('pending', 'stopped') AND id <> ?1",
+                     WHERE kind = 'preview' AND state IN ('pending', 'stopped')
+                       AND rowid < (SELECT rowid FROM outbox WHERE id = ?1)",
                     params![self.outbox_id, cx.now],
                 )?;
                 cx.tx.execute("UPDATE project SET previewed = ?1", [&target])?;
@@ -620,7 +629,7 @@ impl Command for RetryPreview {
         let id: String = cx
             .tx
             .query_row(
-                "SELECT id FROM outbox WHERE kind = 'preview' AND state = 'stopped' ORDER BY created_at DESC LIMIT 1",
+                "SELECT id FROM outbox WHERE kind = 'preview' AND state = 'stopped' ORDER BY rowid DESC LIMIT 1",
                 [],
                 |r| r.get(0),
             )
