@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
-use lobotomy_core::id::now_ms;
 use lobotomy_core::quota::{CheckOutcome, Domain, HostDb};
 use lobotomy_harness::codex;
 use lobotomy_harness::event::Event;
@@ -33,8 +32,8 @@ pub struct HarnessConfig {
     /// The program and arguments that send Ctrl+C to a pid (harness-adapter.md §1.8).
     pub interrupt_helper: Vec<String>,
     pub codex_reasoning_effort: Option<String>,
-    /// A quota check that has not finished by then counts as rejected without a reset time, so
-    /// the domain waits for the user's retry (data-model.md §8.4). A normal check takes seconds.
+    /// A quota check that has not finished by then counts as rejected without a reset time; the
+    /// domain stays blocked (data-model.md §8.4). A normal check takes seconds.
     pub probe_timeout: Duration,
 }
 
@@ -95,15 +94,10 @@ impl Host {
         Ok(self.db.domain(harness)?.is_blocked())
     }
 
-    /// The user's retry: cancels the planned check and checks now (data-model.md §8.4).
+    /// The user's retry: one quota check for the domain, with the result recorded
+    /// (data-model.md §8.4). The only way a blocked domain opens again. A check already in
+    /// progress is not repeated; the current state is returned instead.
     pub async fn retry(self: &Arc<Self>, harness: &str) -> anyhow::Result<Domain> {
-        self.db.cancel_planned_check(harness)?;
-        self.check(harness).await
-    }
-
-    /// Runs one quota check for the domain and records the result. A check already in progress
-    /// is not repeated; the current state is returned instead.
-    pub async fn check(self: &Arc<Self>, harness: &str) -> anyhow::Result<Domain> {
         let Some(_mark) = CheckingMark::acquire(&self.checking, harness) else {
             return Ok(self.db.domain(harness)?);
         };
@@ -112,7 +106,7 @@ impl Host {
             CheckOutcome::Rejected { resets_at: None }
         });
         tracing::info!(harness, ?outcome, "quota check");
-        Ok(self.db.record_check(harness, &outcome, now_ms())?)
+        Ok(self.db.record_check(harness, &outcome)?)
     }
 
     async fn probe(&self, harness: &str) -> anyhow::Result<CheckOutcome> {
@@ -156,8 +150,8 @@ impl Host {
         if !completed && let Ok(Ok(tail)) = tokio::time::timeout(Duration::from_secs(5), stderr_tail).await {
             tracing::warn!(harness, stderr = tail, "quota check did not complete");
         }
-        // Codex's rejection format is not known yet, so a failed check carries no reset time and
-        // the domain waits for the user (data-model.md §8.3, §8.4).
+        // Codex's rejection format is not known yet, so a failed check carries no reset time
+        // (data-model.md §8.3).
         Ok(if completed { CheckOutcome::Passed } else { CheckOutcome::Rejected { resets_at: None } })
     }
 }

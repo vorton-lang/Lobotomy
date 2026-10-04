@@ -1,6 +1,8 @@
 use lobotomy_core::item::{BlobStore, NewItem, STORAGE_THRESHOLD, externalize, record_item};
 use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
-use lobotomy_core::task::{CreateTask, SendMessage, StartAttempt, load_task, open_attempt, queued_messages};
+use lobotomy_core::task::{
+    Abandon, CreateTask, Reopen, SendMessage, StartAttempt, load_task, open_attempt, queued_messages,
+};
 use lobotomy_core::turn::{
     Continue, EndTurn, Failure, FailureKind, InputDelivered, MarkUnfinishedUnknown, NewNativeSession, Outcome,
     RegisterTurn, SessionIdentified, TurnLaunched, TurnRegistered, TurnState, current_session, load_turn,
@@ -71,7 +73,7 @@ fn registering_a_turn_binds_the_brief_and_opens_a_session() {
     assert_eq!(turn.task_id.as_deref(), Some(task.as_str()));
     assert!(turn.input.contains("实现 adapter") && turn.input.contains("测试通过"), "{}", turn.input);
     assert!(db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty());
-    assert!(db.read(|c| current_session(c, ROLE)).unwrap().is_some());
+    assert!(db.read(|c| current_session(c, ROLE, Some(&task))).unwrap().is_some());
     assert_eq!(db.read(|c| turn_by_token(c, &t.token)).unwrap().unwrap().id, t.turn_id);
 }
 
@@ -151,23 +153,143 @@ fn a_quota_failure_is_named_in_the_continue_note() {
     let failure = Failure { kind: FailureKind::Quota, message: "limit".into(), resets_at: Some(1) };
     db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id, outcome: Outcome::Failed, failure: Some(failure) })
         .unwrap();
-    let next = db.execute(&Caller::Runtime, &Continue { request_id: "auto-1".into(), role: ROLE.into() }).unwrap();
+    // A quota failure holds the role like any failure; only the user continues (data-model.md §8.5).
+    send(&db, "m1", "额度恢复了");
+    assert_eq!(rejection(register(&db)), "held");
+    let by_runtime = db.execute(&Caller::Runtime, &Continue { request_id: "k0".into(), role: ROLE.into() });
+    assert_eq!(rejection(by_runtime), "forbidden");
+    let next = db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: ROLE.into() }).unwrap();
     assert!(db.read(|c| load_turn(c, &next.turn_id)).unwrap().input.contains("额度不足"));
 }
 
 #[test]
 fn a_new_native_session_releases_the_hold_and_resends_the_brief() {
     let db = db();
-    started_task(&db);
+    let task = started_task(&db);
     let t = register(&db).unwrap();
     end(&db, &t.turn_id, Outcome::Interrupted);
-    let old = db.read(|c| current_session(c, ROLE)).unwrap().unwrap();
+    let old = db.read(|c| current_session(c, ROLE, Some(&task))).unwrap().unwrap();
     db.execute(&Caller::User, &NewNativeSession { request_id: "n1".into(), role: ROLE.into() }).unwrap();
-    let new = db.read(|c| current_session(c, ROLE)).unwrap().unwrap();
+    let new = db.read(|c| current_session(c, ROLE, Some(&task))).unwrap().unwrap();
     assert_ne!(old.id, new.id);
     let next = register(&db).unwrap();
     let input = db.read(|c| load_turn(c, &next.turn_id)).unwrap().input;
     assert!(input.contains("（新会话）") && input.contains("实现 adapter"), "{input}");
+}
+
+fn create_named(db: &Db, request_id: &str, title: &str) -> String {
+    db.execute(
+        &Caller::User,
+        &CreateTask {
+            request_id: request_id.into(),
+            title: title.into(),
+            body: "原话".into(),
+            criteria: "测试通过".into(),
+            executor: ROLE.into(),
+        },
+    )
+    .unwrap()
+    .id
+}
+
+fn abandon(db: &Db, request_id: &str, task: &str) {
+    db.execute(&Caller::User, &Abandon { request_id: request_id.into(), task_id: task.into(), reason: String::new() })
+        .unwrap();
+}
+
+#[test]
+fn abandoning_after_an_abnormal_turn_lets_the_next_task_run_in_a_fresh_session() {
+    // Issue #11.
+    for outcome in [Outcome::Interrupted, Outcome::Failed] {
+        let db = db();
+        let a = started_task(&db);
+        let b = create_named(&db, "c2", "下一个任务");
+        let t = register(&db).unwrap();
+        end(&db, &t.turn_id, outcome);
+        abandon(&db, "x1", &a);
+        assert!(db.read(|c| current_session(c, ROLE, Some(&a))).unwrap().is_none(), "A's session ended");
+
+        db.execute(&Caller::Runtime, &StartAttempt { task_id: b.clone() }).unwrap();
+        let next = register(&db).unwrap();
+        let next = db.read(|c| load_turn(c, &next.turn_id)).unwrap();
+        assert_eq!(next.task_id.as_deref(), Some(b.as_str()));
+        assert_ne!(next.native_session_id, t_session(&db, &t.turn_id), "B runs in a fresh session");
+        // A's abnormal turn is not B's to continue.
+        end(&db, &next.id, Outcome::Completed);
+        let again = db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: ROLE.into() });
+        assert_eq!(rejection(again), "nothing_to_continue");
+    }
+}
+
+fn t_session(db: &Db, turn_id: &str) -> String {
+    db.read(|c| load_turn(c, turn_id)).unwrap().native_session_id
+}
+
+#[test]
+fn a_reopened_task_starts_in_a_fresh_session() {
+    let db = db();
+    let a = started_task(&db);
+    let t = register(&db).unwrap();
+    end(&db, &t.turn_id, Outcome::Interrupted);
+    abandon(&db, "x1", &a);
+    db.execute(&Caller::User, &Reopen { request_id: "o1".into(), task_id: a.clone() }).unwrap();
+    db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() }).unwrap();
+    let next = register(&db).unwrap();
+    assert_ne!(t_session(&db, &next.turn_id), t_session(&db, &t.turn_id));
+}
+
+#[test]
+fn a_running_turn_of_an_abandoned_task_blocks_the_next_task() {
+    let db = db();
+    let a = started_task(&db);
+    let b = create_named(&db, "c2", "下一个任务");
+    let t = register(&db).unwrap();
+    // A's CLI still runs when A is abandoned.
+    abandon(&db, "x1", &a);
+    db.execute(&Caller::Runtime, &StartAttempt { task_id: b }).unwrap();
+    assert_eq!(rejection(register(&db)), "turn_unfinished");
+    // The database allows one unfinished turn per role, whatever the session.
+    let second = db.read(|c| {
+        Ok(c.execute(
+            "INSERT INTO native_session (id, role, harness, started_at) VALUES ('ns_other', 'Malkuth', 'codex', 0);
+             ",
+            [],
+        )
+        .and_then(|_| {
+            c.execute(
+                "INSERT INTO turn (id, role, native_session_id, token, input, state, registered_at)
+                 VALUES ('turn_dup', 'Malkuth', 'ns_other', 'tok_dup', '', 'registered', 0)",
+                [],
+            )
+        }))
+    });
+    assert!(second.unwrap().is_err());
+    // Once A's turn ends, B runs.
+    end(&db, &t.turn_id, Outcome::Completed);
+    register(&db).unwrap();
+}
+
+#[test]
+fn an_abnormal_turn_of_an_ended_attempt_does_not_hold_the_next_attempt() {
+    let db = db();
+    let task = started_task(&db);
+    let t = register(&db).unwrap();
+    db.execute(&Caller::Runtime, &SessionIdentified { turn_id: t.turn_id.clone(), native_id: "thread-1".into() })
+        .unwrap();
+    report(&db, &t.turn_id, ReportStatus::Done, None).unwrap();
+    // The turn reported done, then ended abnormally; its capture became the candidate.
+    end(&db, &t.turn_id, Outcome::Interrupted);
+    // Verification failed: the attempt ends with its candidate and a new one opens. The commands
+    // for this arrive with increment 3, so the rows are written directly.
+    db.read(|c| {
+        c.execute("UPDATE attempt SET ended_at = 1, end_reason = 'candidate' WHERE task_id = ?1", [&task])?;
+        c.execute("INSERT INTO attempt (id, task_id, seq, started_at) VALUES ('att_2', ?1, 2, 2)", [&task])?;
+        Ok(())
+    })
+    .unwrap();
+    send(&db, "m1", "检查没有通过");
+    let next = register(&db).unwrap();
+    assert_eq!(t_session(&db, &next.turn_id), t_session(&db, &t.turn_id), "same task, same session");
 }
 
 #[test]

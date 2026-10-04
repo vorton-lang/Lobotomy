@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use common::*;
 use lobotomy_core::id::now_ms;
-use lobotomy_core::task::{CreateTask, SendMessage, SetPaused, StartAttempt, load_task, open_attempt};
+use lobotomy_core::task::{Abandon, CreateTask, SendMessage, StartAttempt, load_task, open_attempt};
 use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, TurnState};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::Backend;
@@ -224,36 +224,55 @@ async fn a_blocked_quota_domain_starts_nothing_until_a_retry_passes() {
 }
 
 #[tokio::test]
-async fn a_quota_failed_role_continues_after_recovery_unless_paused() {
+async fn after_recovery_a_quota_failed_role_waits_for_the_user() {
     let dir = tempfile::tempdir().unwrap();
-    let task = {
+    {
         // The last turn failed for quota and blocked the domain.
         let project = open_project(dir.path(), fake_codex());
         let task = create_task(&project.db, "FAKE:done");
-        project.db.execute(&Caller::Runtime, &StartAttempt { task_id: task.clone() }).unwrap();
+        project.db.execute(&Caller::Runtime, &StartAttempt { task_id: task }).unwrap();
         let turn = project.db.execute(&Caller::Runtime, &RegisterTurn { role: "Malkuth".into() }).unwrap();
         let failure = Failure { kind: FailureKind::Quota, message: "limit".into(), resets_at: None };
         let end = EndTurn { turn_id: turn.turn_id, outcome: Outcome::Failed, failure: Some(failure) };
         project.db.execute(&Caller::Runtime, &end).unwrap();
         project.host.db.block("codex", None, "limit", now_ms()).unwrap();
-        task
-    };
+    }
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
     let failed = last(&db).unwrap();
-    db.execute(&Caller::User, &SetPaused { request_id: "p1".into(), task_id: task.clone(), paused: true }).unwrap();
 
-    backend.project.host.retry("codex").await.unwrap();
+    // The user's retry opens the domain; the runtime does not continue the role on its own.
+    assert!(!backend.project.host.retry("codex").await.unwrap().is_blocked());
     settle(&backend).await;
-    assert_eq!(last(&db).unwrap().id, failed.id, "a paused task does not continue on its own");
+    assert_eq!(last(&db).unwrap().id, failed.id, "no automatic continue (data-model.md §8.5)");
 
-    db.execute(&Caller::User, &SetPaused { request_id: "p2".into(), task_id: task, paused: false }).unwrap();
+    db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
     backend.project.wake.notify_one();
-    let next = wait_for("the automatic continue", || {
+    let next = wait_for("the continued turn", || {
         last(&db).filter(|t| t.id != failed.id && t.state == TurnState::Ended)
     })
     .await;
     assert!(next.input.contains("额度不足"), "{}", next.input);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// After a failed turn, abandoning the task lets the next task run, in a fresh session (#11).
+#[tokio::test]
+async fn abandoning_a_failed_task_lets_the_next_one_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    let a = create_task(&db, "FAKE:fail");
+    let failed = ended_turn(&db).await;
+    assert_eq!(failed.outcome, Some(Outcome::Failed));
+    let b = create_task(&db, "FAKE:done");
+    db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: a, reason: String::new() }).unwrap();
+    backend.project.wake.notify_one();
+
+    let next = wait_for("B's turn", || last(&db).filter(|t| t.id != failed.id && t.state == TurnState::Ended)).await;
+    assert_eq!(next.task_id.as_deref(), Some(b.as_str()));
+    assert_eq!(next.outcome, Some(Outcome::Completed));
+    assert_ne!(next.native_id, failed.native_id, "B runs in a fresh harness session");
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
@@ -279,8 +298,8 @@ async fn a_quota_check_reads_stderr_and_can_run_again() {
     }
 }
 
-/// A check that does not finish times out, leaves the domain waiting for the user, and does not
-/// keep later retries from running (#10).
+/// A check that does not finish times out, leaves the domain blocked, and does not keep later
+/// retries from running (#10).
 #[tokio::test]
 async fn a_hanging_quota_check_times_out() {
     let dir = tempfile::tempdir().unwrap();
@@ -291,8 +310,7 @@ async fn a_hanging_quota_check_times_out() {
     for _ in 0..2 {
         let started = Instant::now();
         let domain = host.retry("codex").await.unwrap();
-        assert!(domain.is_blocked());
-        assert_eq!(domain.next_check_at, None, "no automatic check after a timeout");
+        assert!(domain.is_blocked(), "a timed-out check leaves the domain blocked");
         assert!(started.elapsed() >= Duration::from_secs(2), "the retry ran a check of its own");
     }
 }

@@ -24,9 +24,11 @@
 | 层 | 持有者 | 资源 | 取得 | 释放 |
 |---|---|---|---|---|
 | 任务层 | 任务 | role 及其槽位 | 任务开始执行时 | 任务完成或放弃时 |
-| turn 层 | turn | native session 的运行权 | 登记 turn 时 | turn 结束时。结果为 unknown 时，对账结束后才释放 |
+| turn 层 | turn | role 的运行权 | 登记 turn 时 | turn 结束时。结果为 unknown 时，对账结束后才释放 |
 
 v1 中 role 与槽位一一固定，因此任务层不会出现"取得了 role，却没有取得工作目录"的半占用（[#1](https://github.com/vorton-lang/Lobotomy/issues/1)）。Reviewer 没有固定槽位，审查现场在固定的候选成果上单独物化（harness-adapter.md §3）。
+
+**语义更新**（[#11](https://github.com/vorton-lang/Lobotomy/issues/11)，2026-10-04）：turn 层原来是"native session 的运行权"。native session 改为按任务划分（§4.1）后，按 session 的屏障挡不住这种情况：放弃 A 时 A 的 CLI 仍在运行，B 用新 session 在同一个槽位里启动第二个 CLI。因此改为 role 的运行权。
 
 ### 唯一约束
 
@@ -34,7 +36,7 @@ v1 中 role 与槽位一一固定，因此任务层不会出现"取得了 role�
 
 - 每个 task 最多一个未关闭的 attempt。
 - 每个 role 最多被一个任务占用。
-- 每个 native session 最多一个未结束的 turn。已登记、运行中、unknown 都算未结束。
+- 每个 role 最多一个未结束的 turn，无论在哪个 native session 中。已登记、运行中、unknown 都算未结束。
 
 ## 3. turn 与消息投递
 
@@ -110,6 +112,15 @@ completed 只表示 turn 正常结束，不表示任务完成。任务完成取�
 
 turn 是执行单位：一个进程、一个 MCP token，对账按 turn 进行。attempt 是业务单位：一次执行交出一份候选成果，证据与验收针对它。
 
+**native session 按任务划分**（[#11](https://github.com/vorton-lang/Lobotomy/issues/11)，用户确认，2026-10-04）：
+
+- 执行者在任务的第一个 turn 时新开 native session，任务关闭（完成或放弃）时结束它。任务有明确的边界，上一个任务的上下文对下一个任务基本没有帮助。
+- 同一任务的多个 attempt（验证失败、退回）沿用同一个 session。上一轮做了什么、为什么被打回，对修改有用。
+- 重开的任务新开 session（§4.6）。
+- 不属于任何任务的消息（role 空闲时用户直接发送）使用 role 的一个独立 session。
+- 用户随时可以手动新建 native session。
+- 异常后停下（harness-adapter.md §1.7）只针对当前 attempt 内的异常 turn。上一个 attempt 已经结束时，采集或用户已经推进了工作，它的异常 turn 不再挡住新 attempt；"继续"也只能作用于当前 attempt。这样新任务、重开和新 attempt 都不会被旧的异常状态阻塞。
+
 ### 4.2 离开执行阶段后的消息
 
 任务离开执行阶段后（验证、审查、验收），发给执行者的消息进入收件箱排队。任务回到执行或关闭时，运行时再投递。
@@ -147,7 +158,7 @@ turn 是执行单位：一个进程、一个 MCP token，对账按 turn 进行�
 - 代码起点：最后一份候选成果 rebase 到当前集成版本；没有候选成果时，从当前集成版本开始。对已完成的任务，两者相同。
 - 继承：任务 ID、当前完成条件版本、审查预算（不重置，roles-and-tasks.md §2.2）。
 - 不继承：检查结果、审查结论。
-- native session 按 role 管理，重开时不更换。轮换仍由用户手动进行。
+- **语义更新**：原来写的是"native session 按 role 管理，重开时不更换"。现在任务关闭时它的 session 已经结束，重开时新开 session（§4.1）。新 session 收到任务说明，槽位物化为上面的代码起点，agent 从代码状态接手。
 
 ## 5. 副作用与回执
 
@@ -278,20 +289,18 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 
 ### 8.4 恢复检查
 
-- **有重置时间时**，运行时在重置时间过后 1 分钟检查一次，不在重置时刻立即检查。延迟可配置。
-- **检查仍被拒时**，如果返回了晚于当前时间的新重置时间，运行时按新时间再加 1 分钟检查；否则按没有重置时间处理。这一条防止在原地反复检查。
-- **没有重置时间时**，运行时不做猜测性的检查，等待用户手动重试。
-- **用户手动重试优先于自动检查。** 用户随时可以重试：运行时立即检查一次，并取消已计划的自动检查；检查后按结果重新计划。同一额度域同时最多进行一次检查。
+**语义更新**（[#11](https://github.com/vorton-lang/Lobotomy/issues/11) 讨论，用户确认，2026-10-04）：恢复统一由用户手动触发。原来的"重置时间过后 1 分钟自动检查"已删除，以减少维护面。
+
+- 运行时不计划、不进行自动检查。受阻的额度域只在用户手动重试时检查。
+- 用户重试时，运行时立即检查一次。通过则额度域回到正常；仍被拒则保持受阻，并记下新的重置时间用于显示。同一额度域同时最多进行一次检查。
 - 检查使用一次最小的独立调用，带不保存会话的参数（Claude `--no-session-persistence`，Codex `exec --ephemeral`）。检查不经过任何 role 的 native session，也不在用户的会话历史中留下记录。
-- 检查调用有超时，默认 2 分钟，可配置。超时按"仍被拒、重置时间未知"处理：额度域保持受阻，等待用户手动重试（[#10](https://github.com/vorton-lang/Lobotomy/issues/10)，用户确认，2026-10-04）。
+- 检查调用有超时，默认 2 分钟，可配置。超时按"仍被拒"处理，额度域保持受阻（[#10](https://github.com/vorton-lang/Lobotomy/issues/10)，用户确认，2026-10-04）。
 
 ### 8.5 恢复后
 
-- 检查通过后，额度域回到正常，调度照常进行。
-- 上一个 turn 因额度失败的 role，运行时自动开始一个继续 turn。输入是一段说明（上一个 turn 因额度不足失败，请检查 cwd 后继续），其后是排队的消息。
-- 理由：额度域恢复后，同域其他 role 的工作照常调度，单独停下因额度失败的 role 没有意义（用户确认，2026-10-04）。这与 §3.3 中被中断的 turn 不同：额度失败由 CLI 明确报告，状态清楚。
+- 检查通过后，额度域回到正常，同域 role 的排队工作照常调度。
+- **语义更新**：原来"上一个 turn 因额度失败的 role，运行时自动开始继续 turn"已删除（用户确认，2026-10-04）。因额度失败的 role 与其他失败一样停下，由用户选择"继续"。继续时，输入以一段说明开头（上一个 turn 因额度不足而失败，请先检查工作目录），其后是排队的消息。
 - 失败 turn 的输入不重发（§3.4）。8.3 的实测中，Claude 在报错前已把输入写入会话文件，resume 后模型可以看到它。
-- 用户暂停仍然有效：额度恢复不解除用户暂停（roles-and-tasks.md §2.2），暂停中的 role 不自动继续。
 
 ### 8.6 不自动换用
 
@@ -299,7 +308,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 
 ### 8.7 GUI
 
-- 受影响的 role 在 Workboard 上显示额度状态，例如"额度不足（Claude）· 14:00 重置 · 14:01 自动重试"，或"额度不足（Claude）· 重置时间未知 · 等待手动重试"。
+- 受影响的 role 在 Workboard 上显示额度状态，例如"额度不足（Claude）· 14:00 重置 · 等待手动重试"，或"额度不足（Claude）· 重置时间未知 · 等待手动重试"。
 - 额度状态与"等你决定"分开显示。
 - 确定性的 GUI 控制照常可用（roles-and-tasks.md §1.4）。
 
@@ -317,8 +326,8 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | attempt | attempt_id | task、序号、代码起点、结束原因 | 每个 task 最多一个未关闭的 attempt |
 | role | 名字 | 类型、harness、模型、槽位 | v1 为静态配置 |
 | occupancy | role | 占用它的 task | 每个 role 最多被一个任务占用 |
-| native_session | session_id（运行时生成） | role、harness 原生 ID（可后补）、开始与结束时间 | — |
-| turn | turn_id | role、native session、task 与 attempt（可空）、现场 generation、MCP token、状态与结果、失败原因、pid 与进程启动时间、原始输出文件 | 每个 native session 最多一个未结束的 turn；token 唯一 |
+| native_session | session_id（运行时生成） | role、所属任务（可空）、harness 原生 ID（可后补）、开始与结束时间 | 每个 role 每个任务最多一个当前 session（§4.1） |
+| turn | turn_id | role、native session、task 与 attempt（可空）、现场 generation、MCP token、状态与结果、失败原因、pid 与进程启动时间、原始输出文件 | 每个 role 最多一个未结束的 turn；token 唯一 |
 | message | message_id | 目标 role、来源、正文、到达顺序、状态、绑定的 turn | 每个 role 内按到达顺序排列 |
 | workspace | workspace_id | 种类（槽位、验证现场、审查现场、隔离）、路径、generation、目标提交、状态 | 每个路径同时最多一个就绪的 generation |
 | capture | capture_id | 种类（turn 结束采集、候选成果、中断现场）、turn、attempt、基线、采集范围、状态（意图、已 pin、未覆盖、被体积护栏挡下）、commit_id、未覆盖或超限的文件清单 | 每个 turn 最多一次采集 |
@@ -329,7 +338,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | integration | 单行 | 当前集成版本头、revision；发布记录 | 发布使用 CAS |
 | outbox | outbox_id | 种类、载荷、状态、回执 | 幂等键唯一 |
 | notification_intent | 状态键 | 内容引用、是否已显示 | 每个状态键一条 |
-| quota_domain | (harness, 账户) | 状态、重置时间、下次检查时间、最近观测及其时间 | — |
+| quota_domain | (harness, 账户) | 状态、重置时间、最近观测及其时间 | — |
 | thread | thread_id | role | 每个 role 一个 |
 | item | item_id | thread、turn、Thread 序号、种类、小内容或文件引用、命令记录引用 | Thread 内序号唯一 |
 | command_record | command_id | 命令、调用者、幂等键、参数、结果、时间 | (调用者, 幂等键) 唯一 |
@@ -351,18 +360,18 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | 建任务 | — | task、完成条件 v1；任务排队 | — |
 | 修改完成条件 | 任务未关闭；预期版本等于当前版本 | 新版本；任务在执行阶段时，写入发给执行者的消息（§4.4） | — |
 | 发消息 | — | message（排队） | — |
-| 验收 | 阶段为验收；候选成果、完成条件版本、集成版本头都等于当前值 | 验收决定、集成版本头 CAS、任务关闭、释放占用、预览 outbox | 物化预览 |
+| 验收 | 阶段为验收；候选成果、完成条件版本、集成版本头都等于当前值 | 验收决定、集成版本头 CAS、任务关闭、释放占用、结束任务的 native session、预览 outbox | 物化预览 |
 | 退回 | 阶段为验收 | 决定、新 attempt、发给执行者的消息（附理由） | 必要时物化槽位（§4.3） |
-| 放弃 | 任务未关闭 | 决定、关闭 attempt、任务关闭、释放占用 | — |
+| 放弃 | 任务未关闭 | 决定、关闭 attempt、任务关闭、释放占用、结束任务的 native session | — |
 | 重开 | 任务已关闭 | 决定、任务排队、新 attempt 的代码起点（§4.6） | — |
 | 暂停、恢复 | — | 暂停标记 | — |
 | 调整队列 | 任务在排队 | 队列顺序 | — |
-| 继续 | role 上一个 turn 为 interrupted 或 failed | 登记 turn：继续说明加排队的消息 | 启动 CLI |
+| 继续 | 当前 attempt 的最后一个 turn 为 interrupted 或 failed（§4.1） | 登记 turn：继续说明加排队的消息 | 启动 CLI |
 | 新建 native session | role 没有未结束的 turn | native session 记录 | — |
 | 终止残留进程 | turn 为 unknown 且进程仍在运行 | 终止意图 | 终止进程，之后按 §3.3 对账 |
 | 丢弃未覆盖内容 | 采集状态为"未覆盖" | 决定；采集记为完成 | 之后槽位可以复用 |
 | 放行新增文件 | 采集被体积护栏挡下 | 决定 | 按原清单继续采集与 pin |
-| 额度重试 | 额度域受阻 | 检查意图；取消已计划的自动检查（§8.4） | 立即进行一次检查调用 |
+| 额度重试 | 额度域受阻；没有正在进行的检查 | 检查结果；通过时额度域回到正常（§8.4） | 立即进行一次检查调用 |
 | 重试预览 | 预览物化已停止 | 物化意图 | 物化预览（先检查主仓库是否与上次预览一致） |
 
 **role（经 MCP，按 turn 的 token 识别）**
@@ -378,14 +387,13 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 | 命令 | 前置条件 | 同一事务写入 | 幂等键 | 副作用 |
 |---|---|---|---|---|
 | 开始 attempt | 执行者没有被占用；队首任务未暂停；额度域未受阻 | 占用、attempt、需要时的物化意图 | (task, attempt 序号) | 物化槽位 |
-| 登记 turn | 有排队消息或待开始的执行；native session 没有未结束的 turn；额度域未受阻；未暂停；发给执行者的消息只在执行阶段投递（§4.2） | turn、token、绑定的消息 | turn_id | 启动 CLI |
+| 登记 turn | 有排队消息或待开始的执行；role 没有未结束的 turn；当前 attempt 的最后一个 turn 不是异常结束；额度域未受阻；未暂停；发给执行者的消息只在执行阶段投递（§4.2） | turn、token、绑定的消息；需要时新开当前任务的 native session（§4.1） | turn_id | 启动 CLI |
 | 记录 turn 进展 | — | 状态、pid、native session ID、结果；额度失败时额度域受阻 | (turn_id, 状态) | 系统故障通知意图 |
 | 对账 | turn 为 unknown | turn 结果、释放运行权 | turn_id | 可能接着采集 |
 | 采集 | turn 已结束；CLI 已退出 | capture 状态、pin。候选成果 pin 成功时任务进入验证；被体积护栏挡下时，候选成果的采集写入发给执行者的消息 | capture_id | jj 采集与 pin（#6 §2） |
 | 验证 | 有候选成果 | verification、check_run；通过时进入验收；不通过时开新 attempt 并写入消息 | (候选成果, 集成版本头, 检查配置) | 物化验证现场、运行检查 |
 | 物化现场 | 旧内容已采集 | generation、就绪状态 | (workspace, generation) | 写目录；隔离并删除隔离目录 |
 | 物化预览 | 主仓库工作区等于上次物化的版本 | 回执：预览到达的版本 | 目标集成版本 | 写主仓库 |
-| 额度检查 | 额度域受阻；已到计划时间（重置时间加 1 分钟）；没有正在进行的检查 | 检查结果、下次检查时间；恢复时额度域回到正常，并为因额度失败且未暂停的 role 登记继续 turn | (额度域, 计划时间) | 一次最小检查调用 |
 | 清扫 | — | 回收记录 | — | 删除已满足回收条件的文件 |
 
 ### 9.3 留到后续里程碑

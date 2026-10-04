@@ -11,6 +11,7 @@ use crate::id::{new_id, now_ms};
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_turns.sql"),
+    include_str!("../migrations/0003_session_per_task.sql"),
 ];
 
 /// One project's database.

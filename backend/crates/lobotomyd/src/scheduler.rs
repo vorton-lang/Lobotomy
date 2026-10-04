@@ -7,13 +7,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lobotomy_core::id::now_ms;
 use lobotomy_core::role::list_roles;
 use lobotomy_core::task::{StartAttempt, next_queued_task, occupant};
-use lobotomy_core::turn::{
-    Continue, EndTurn, FailureKind, MarkUnfinishedUnknown, Outcome, RegisterTurn, Turn, TurnState, last_turn,
-    turns_in_state,
-};
+use lobotomy_core::turn::{EndTurn, MarkUnfinishedUnknown, Outcome, RegisterTurn, TurnState, turns_in_state};
 use lobotomy_harness::process;
 use tokio_util::sync::CancellationToken;
 
@@ -49,30 +45,20 @@ pub async fn run(project: Arc<Project>, shutdown: CancellationToken) {
 
 async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
     reconcile(project).await?;
-    check_quota(project)?;
     let roles = db(project, |db| db.read(list_roles)).await?;
     for role in roles {
-        // A blocked quota domain starts nothing new; running turns end on their own
-        // (data-model.md §8.3).
+        // A blocked quota domain starts nothing new; running turns end on their own. Only the
+        // user's retry opens the domain again (data-model.md §8.3, §8.4).
         if project.host.is_blocked(&role.harness)? {
             continue;
         }
         let name = role.name.clone();
-        let (busy, next, last) = db(project, move |db| {
-            db.read(|c| Ok((occupant(c, &name)?.is_some(), next_queued_task(c, &name)?, last_turn(c, &name)?)))
+        let (busy, next) = db(project, move |db| {
+            db.read(|c| Ok((occupant(c, &name)?.is_some(), next_queued_task(c, &name)?)))
         })
         .await?;
         if !busy && let Some(task) = next {
             ignore_rejection(runtime(project, StartAttempt { task_id: task.id }).await)?;
-        }
-        // After the quota recovers, a role whose last turn failed for quota continues on its
-        // own. A user pause still holds: continue is then rejected (data-model.md §8.5).
-        if let Some(last) = last.filter(failed_for_quota) {
-            let resume = Continue { request_id: format!("quota-continue-{}", last.id), role: role.name.clone() };
-            if let Some(turn) = ignore_rejection(runtime(project, resume).await)? {
-                launch(project, turn.turn_id);
-            }
-            continue;
         }
         if let Some(turn) = ignore_rejection(runtime(project, RegisterTurn { role: role.name.clone() }).await)? {
             launch(project, turn.turn_id);
@@ -83,25 +69,6 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
         if !project.host.is_blocked(&turn.harness)? {
             launch(project, turn.id);
         }
-    }
-    Ok(())
-}
-
-fn failed_for_quota(turn: &Turn) -> bool {
-    turn.outcome == Some(Outcome::Failed) && turn.failure.as_ref().is_some_and(|f| f.kind == FailureKind::Quota)
-}
-
-/// Starts the planned quota checks that are due (data-model.md §8.4). A check runs on its own
-/// task and wakes the scheduler when it is done.
-fn check_quota(project: &Arc<Project>) -> anyhow::Result<()> {
-    for domain in project.host.db.due(now_ms())? {
-        let project = project.clone();
-        tokio::spawn(async move {
-            if let Err(e) = project.host.check(&domain.harness).await {
-                tracing::error!(harness = domain.harness, error = format!("{e:#}"), "quota check failed");
-            }
-            project.wake.notify_one();
-        });
     }
     Ok(())
 }

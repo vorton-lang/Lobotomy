@@ -487,6 +487,8 @@ impl Command for Abandon {
             params![task.id, cx.now],
         )?;
         cx.tx.execute("DELETE FROM occupancy WHERE task_id = ?1", [&task.id])?;
+        // A closed task's session ends; a reopened task starts a fresh one (#11).
+        crate::turn::end_task_sessions(cx, &task.id)?;
         cx.tx.execute(
             "UPDATE task SET phase = 'abandoned', closed_at = ?2, queue_pos = NULL WHERE id = ?1",
             params![task.id, cx.now],

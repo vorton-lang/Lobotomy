@@ -10,7 +10,9 @@ use serde_json::json;
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::id::new_id;
-use crate::task::{self, Message, Phase, brief, load_task, occupant, open_attempt, queue_message, queued_messages};
+use crate::task::{
+    Attempt, Message, Phase, Task, brief, load_task, occupant, open_attempt, queue_message, queued_messages,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -180,14 +182,25 @@ pub fn turns_in_state(conn: &Connection, state: TurnState) -> Result<Vec<Turn>> 
     query_turns(conn, "WHERE t.state = ?1 ORDER BY t.registered_at, t.id", [state.as_str()])
 }
 
-/// The latest turn of the role's current native session.
+/// The latest turn of the role, in any session.
 pub fn last_turn(conn: &Connection, role: &str) -> Result<Option<Turn>> {
+    Ok(query_turns(conn, "WHERE t.role = ?1 ORDER BY t.registered_at DESC, t.id DESC LIMIT 1", [role])?.pop())
+}
+
+/// The latest turn of a native session.
+pub fn last_turn_in(conn: &Connection, session_id: &str) -> Result<Option<Turn>> {
     Ok(query_turns(
         conn,
-        "WHERE s.role = ?1 AND s.ended_at IS NULL ORDER BY t.registered_at DESC, t.id DESC LIMIT 1",
-        [role],
+        "WHERE t.native_session_id = ?1 ORDER BY t.registered_at DESC, t.id DESC LIMIT 1",
+        [session_id],
     )?
     .pop())
+}
+
+/// The role's unfinished turn. A role has at most one, whatever the session, because it has one
+/// slot (data-model.md §2).
+pub fn unfinished_turn(conn: &Connection, role: &str) -> Result<Option<Turn>> {
+    Ok(query_turns(conn, "WHERE t.role = ?1 AND t.state <> 'ended' LIMIT 1", [role])?.pop())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -195,15 +208,28 @@ pub struct NativeSession {
     pub id: String,
     pub role: String,
     pub harness: String,
+    /// The task the session belongs to; `None` for messages outside any task.
+    pub task_id: Option<String>,
     pub native_id: Option<String>,
 }
 
-pub fn current_session(conn: &Connection, role: &str) -> Result<Option<NativeSession>> {
+/// The role's current session for a task, or for work outside any task when `task_id` is `None`.
+/// Each task gets a fresh session; it ends when the task closes (#11).
+pub fn current_session(conn: &Connection, role: &str, task_id: Option<&str>) -> Result<Option<NativeSession>> {
     Ok(conn
         .query_row(
-            "SELECT id, role, harness, native_id FROM native_session WHERE role = ?1 AND ended_at IS NULL",
-            [role],
-            |r| Ok(NativeSession { id: r.get(0)?, role: r.get(1)?, harness: r.get(2)?, native_id: r.get(3)? }),
+            "SELECT id, role, harness, task_id, native_id FROM native_session
+             WHERE role = ?1 AND task_id IS ?2 AND ended_at IS NULL",
+            params![role, task_id],
+            |r| {
+                Ok(NativeSession {
+                    id: r.get(0)?,
+                    role: r.get(1)?,
+                    harness: r.get(2)?,
+                    task_id: r.get(3)?,
+                    native_id: r.get(4)?,
+                })
+            },
         )
         .optional()?)
 }
@@ -214,15 +240,43 @@ fn role_harness(conn: &Connection, role: &str) -> Result<String> {
         .ok_or_else(|| Error::rejected("unknown_role", format!("no role {role}")))
 }
 
-fn start_session(cx: &mut Cx<'_>, role: &str) -> Result<NativeSession> {
+fn start_session(cx: &mut Cx<'_>, role: &str, task_id: Option<&str>) -> Result<NativeSession> {
     let harness = role_harness(cx.tx, role)?;
     let id = new_id("ns");
     cx.tx.execute(
-        "INSERT INTO native_session (id, role, harness, started_at) VALUES (?1, ?2, ?3, ?4)",
-        params![id, role, harness, cx.now],
+        "INSERT INTO native_session (id, role, harness, task_id, started_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, role, harness, task_id, cx.now],
     )?;
-    cx.emit("native_session.started", &id, json!({ "role": role }))?;
-    Ok(NativeSession { id, role: role.to_owned(), harness, native_id: None })
+    cx.emit("native_session.started", &id, json!({ "role": role, "task_id": task_id }))?;
+    Ok(NativeSession { id, role: role.to_owned(), harness, task_id: task_id.map(str::to_owned), native_id: None })
+}
+
+/// Ends the sessions of a closing task (#11). A turn still running in one of them runs to its
+/// end; its late reports change nothing.
+pub(crate) fn end_task_sessions(cx: &mut Cx<'_>, task_id: &str) -> Result<()> {
+    let ids: Vec<String> = {
+        let mut stmt = cx.tx.prepare("SELECT id FROM native_session WHERE task_id = ?1 AND ended_at IS NULL")?;
+        stmt.query_map([task_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+    };
+    for id in &ids {
+        cx.tx.execute("UPDATE native_session SET ended_at = ?2 WHERE id = ?1", params![id, cx.now])?;
+        cx.emit("native_session.ended", id, json!({ "task_id": task_id }))?;
+    }
+    Ok(())
+}
+
+/// What the role works on: the occupying task and its open attempt, or nothing.
+fn current_work(conn: &Connection, role: &str) -> Result<(Option<Task>, Option<Attempt>)> {
+    let Some(task_id) = occupant(conn, role)? else {
+        return Ok((None, None));
+    };
+    let task = load_task(conn, &task_id)?;
+    let attempt = open_attempt(conn, &task.id)?;
+    Ok((Some(task), attempt))
+}
+
+fn is_abnormal(turn: &Turn) -> bool {
+    turn.state == TurnState::Ended && matches!(turn.outcome, Some(Outcome::Interrupted | Outcome::Failed))
 }
 
 /// The text written to the CLI's stdin: the bound messages in arrival order.
@@ -254,19 +308,42 @@ pub struct TurnRegistered {
 /// §9.2 "登记 turn"). `continue_note` comes from the continue command, which may follow a turn
 /// that did not end normally; the note opens the input, before the queued messages.
 fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<TurnRegistered> {
-    let continuing = continue_note.is_some();
-    let session = match current_session(cx.tx, role)? {
+    if let Some(running) = unfinished_turn(cx.tx, role)? {
+        return Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", running.id)));
+    }
+    let (task, attempt) = current_work(cx.tx, role)?;
+    if let Some(task) = &task {
+        // Outside execution, messages to the executor wait (data-model.md §4.2).
+        if task.phase != Phase::Executing {
+            return Err(Error::rejected("not_executing", format!("task {} is {}", task.id, task.phase.as_str())));
+        }
+        if task.paused {
+            return Err(Error::rejected("paused", format!("task {} is paused", task.id)));
+        }
+        let attempt = attempt
+            .as_ref()
+            .ok_or_else(|| Error::rejected("no_attempt", format!("task {} has no open attempt", task.id)))?;
+        // After `done` the work waits for its capture (harness-adapter.md §4.1).
+        if let Some(done) = &attempt.done_turn_id {
+            return Err(Error::rejected("awaiting_capture", format!("turn {done} reported done")));
+        }
+    }
+    let task_id = task.map(|t| t.id);
+    let attempt_id = attempt.map(|a| a.id);
+
+    let session = match current_session(cx.tx, role, task_id.as_deref())? {
         Some(session) => session,
-        None => start_session(cx, role)?,
+        None => start_session(cx, role, task_id.as_deref())?,
     };
-    if let Some(last) = last_turn(cx.tx, role)? {
-        if last.state != TurnState::Ended {
-            return Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", last.id)));
-        }
-        // After an abnormal turn the role waits for the user's choice (harness-adapter.md §1.7).
-        if !continuing && last.outcome != Some(Outcome::Completed) {
-            return Err(Error::rejected("held", format!("{role}'s last turn {} did not complete", last.id)));
-        }
+    // After an abnormal turn of the current attempt the role waits for the user's choice
+    // (harness-adapter.md §1.7). A turn of an attempt that has ended does not hold: the capture or
+    // the user has already moved the work on (#11).
+    if let Some(last) = last_turn_in(cx.tx, &session.id)?
+        && continue_note.is_none()
+        && is_abnormal(&last)
+        && last.attempt_id == attempt_id
+    {
+        return Err(Error::rejected("held", format!("{role}'s last turn {} did not complete", last.id)));
     }
     // A completed turn without a recorded session id would make the next turn start a fresh
     // harness session, silently losing the context. The role stops; a new native session is the
@@ -284,27 +361,6 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
             return Err(Error::rejected("session_unidentified", format!("session {} has no harness id", session.id)));
         }
     }
-
-    let (task_id, attempt_id) = match occupant(cx.tx, role)? {
-        Some(task_id) => {
-            let task = load_task(cx.tx, &task_id)?;
-            // Outside execution, messages to the executor wait (data-model.md §4.2).
-            if task.phase != Phase::Executing {
-                return Err(Error::rejected("not_executing", format!("task {} is {}", task.id, task.phase.as_str())));
-            }
-            if task.paused {
-                return Err(Error::rejected("paused", format!("task {} is paused", task.id)));
-            }
-            let attempt = open_attempt(cx.tx, &task.id)?
-                .ok_or_else(|| Error::rejected("no_attempt", format!("task {} has no open attempt", task.id)))?;
-            // After `done` the work waits for its capture (harness-adapter.md §4.1).
-            if let Some(done) = &attempt.done_turn_id {
-                return Err(Error::rejected("awaiting_capture", format!("turn {done} reported done")));
-            }
-            (Some(task.id), Some(attempt.id))
-        }
-        None => (None, None),
-    };
 
     let messages = queued_messages(cx.tx, role)?;
     let input = match (continue_note, messages.is_empty()) {
@@ -493,9 +549,10 @@ impl Command for MarkUnfinishedUnknown {
 
 // ---- user commands ----
 
-/// Starts a turn after one that did not end normally. The input starts with a note, followed by
-/// the queued messages (data-model.md §9.2 "继续"; harness-adapter.md §1.7). The runtime issues
-/// it too, after a quota recovery (data-model.md §8.5).
+/// Starts a turn after one of the current attempt that did not end normally. The input starts
+/// with a note, followed by the queued messages (data-model.md §9.2 "继续"; harness-adapter.md
+/// §1.7). Only the user issues it; the runtime never continues on its own, quota failures
+/// included (data-model.md §8.5).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Continue {
     pub request_id: String,
@@ -511,21 +568,20 @@ impl Command for Continue {
     }
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<TurnRegistered> {
-        caller.require_user_or_runtime()?;
-        let last = last_turn(cx.tx, &self.role)?
-            .ok_or_else(|| Error::rejected("nothing_to_continue", format!("{} has no turn", self.role)))?;
-        let why = match (last.state, last.outcome) {
-            (TurnState::Ended, Some(Outcome::Interrupted)) => "被中断",
-            (TurnState::Ended, Some(Outcome::Failed)) => match last.failure.as_ref().map(|f| f.kind) {
-                Some(FailureKind::Quota) => "因额度不足而失败",
-                _ => "失败",
-            },
-            _ => {
-                return Err(Error::rejected(
-                    "nothing_to_continue",
-                    format!("{}'s last turn {} is not interrupted or failed", self.role, last.id),
-                ));
-            }
+        caller.require_user()?;
+        // Only an abnormal turn of the current work can be continued (#11).
+        let (task, attempt) = current_work(cx.tx, &self.role)?;
+        let session = current_session(cx.tx, &self.role, task.as_ref().map(|t| t.id.as_str()))?;
+        let last = match &session {
+            Some(session) => last_turn_in(cx.tx, &session.id)?,
+            None => None,
+        }
+        .filter(|last| is_abnormal(last) && last.attempt_id == attempt.map(|a| a.id))
+        .ok_or_else(|| Error::rejected("nothing_to_continue", format!("{} has no turn to continue", self.role)))?;
+        let why = match last.failure.as_ref().map(|f| f.kind) {
+            _ if last.outcome == Some(Outcome::Interrupted) => "被中断",
+            Some(FailureKind::Quota) => "因额度不足而失败",
+            _ => "失败",
         };
         let note = format!("上一个 turn {why}。请先检查当前工作目录的状态，再继续工作。");
         register(cx, &self.role, Some(&note))
@@ -551,22 +607,19 @@ impl Command for NewNativeSession {
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
         caller.require_user()?;
         role_harness(cx.tx, &self.role)?;
-        if let Some(last) = last_turn(cx.tx, &self.role)?
-            && last.state != TurnState::Ended
-        {
-            return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", self.role, last.id)));
+        if let Some(running) = unfinished_turn(cx.tx, &self.role)? {
+            return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", self.role, running.id)));
         }
-        if let Some(session) = current_session(cx.tx, &self.role)? {
+        let (task, attempt) = current_work(cx.tx, &self.role)?;
+        let task_id = task.as_ref().map(|t| t.id.as_str());
+        if let Some(session) = current_session(cx.tx, &self.role, task_id)? {
             cx.tx.execute("UPDATE native_session SET ended_at = ?2 WHERE id = ?1", params![session.id, cx.now])?;
             cx.emit("native_session.ended", &session.id, json!({ "role": self.role }))?;
         }
-        start_session(cx, &self.role)?;
-        if let Some(task_id) = occupant(cx.tx, &self.role)? {
-            let task = load_task(cx.tx, &task_id)?;
-            if let Some(attempt) = task::open_attempt(cx.tx, &task.id)? {
-                let body = format!("（新会话）{}", brief(cx.tx, &task, attempt.seq)?);
-                queue_message(cx, &self.role, &Caller::Runtime, Some(&task.id), &body)?;
-            }
+        start_session(cx, &self.role, task_id)?;
+        if let (Some(task), Some(attempt)) = (&task, &attempt) {
+            let body = format!("（新会话）{}", brief(cx.tx, task, attempt.seq)?);
+            queue_message(cx, &self.role, &Caller::Runtime, Some(&task.id), &body)?;
         }
         Ok(())
     }

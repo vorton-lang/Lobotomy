@@ -46,13 +46,6 @@ impl Caller {
             other => Err(Error::rejected("forbidden", format!("{} may not run this command", other.scope()))),
         }
     }
-
-    pub fn require_user_or_runtime(&self) -> Result<()> {
-        match self {
-            Caller::User | Caller::Runtime => Ok(()),
-            other => Err(Error::rejected("forbidden", format!("{} may not run this command", other.scope()))),
-        }
-    }
 }
 
 /// A domain command (data-model.md §1).
