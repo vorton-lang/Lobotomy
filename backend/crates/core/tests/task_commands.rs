@@ -161,10 +161,11 @@ fn editing_criteria_during_execution_messages_the_executor() {
         &EditCriteria { request_id: "e1".into(), task_id: a.clone(), expected_version: 1, text: "新的条件".into() },
     )
     .unwrap();
+    // The brief from the attempt start, then the update.
     let inbox = db.read(|c| queued_messages(c, "Malkuth")).unwrap();
-    assert_eq!(inbox.len(), 1);
-    assert!(inbox[0].body.contains("第 2 版"));
-    assert_eq!(inbox[0].task_id.as_deref(), Some(a.as_str()));
+    assert_eq!(inbox.len(), 2);
+    assert!(inbox[1].body.contains("第 2 版"));
+    assert_eq!(inbox[1].task_id.as_deref(), Some(a.as_str()));
 }
 
 #[test]
@@ -304,5 +305,5 @@ fn every_change_lands_in_the_event_log_in_order() {
             Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
         })
         .unwrap();
-    assert_eq!(kinds, ["task.created", "attempt.started"]);
+    assert_eq!(kinds, ["task.created", "message.queued", "attempt.started"]);
 }

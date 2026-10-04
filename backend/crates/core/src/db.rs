@@ -2,13 +2,16 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::id::{new_id, now_ms};
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_turns.sql"),
+];
 
 /// One project's database.
 ///
@@ -38,19 +41,25 @@ impl Db {
 
     /// Runs a command in one transaction and records it in the command log.
     pub fn execute<C: Command>(&self, caller: &Caller, cmd: &C) -> Result<C::Output> {
+        self.execute_recorded(caller, cmd).map(|(out, _)| out)
+    }
+
+    /// Like `execute`, and also returns the id of the command record. A repeated command returns
+    /// the id of the first record.
+    pub fn execute_recorded<C: Command>(&self, caller: &Caller, cmd: &C) -> Result<(C::Output, String)> {
         let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let scope = caller.scope();
 
         if let Some(key) = cmd.idem_key() {
-            let prior: Option<(String, String, String)> = tx
+            let prior: Option<(String, String, String, String)> = tx
                 .query_row(
-                    "SELECT name, args, result FROM command_record WHERE caller = ?1 AND idem_key = ?2",
+                    "SELECT id, name, args, result FROM command_record WHERE caller = ?1 AND idem_key = ?2",
                     params![scope, key],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .optional()?;
-            if let Some((name, args, result)) = prior {
+            if let Some((id, name, args, result)) = prior {
                 // A retry must be the same command with the same arguments. Anything else that
                 // reuses the key is rejected, so it can neither run nor receive another
                 // command's result.
@@ -66,25 +75,37 @@ impl Db {
                         format!("key {key} was already used by {name} with other arguments"),
                     ));
                 }
-                return Ok(serde_json::from_str(&result)?);
+                return Ok((serde_json::from_str(&result)?, id));
             }
         }
 
         let now = now_ms();
         let out = cmd.apply(caller, &mut Cx::new(&tx, now))?;
+        let id = new_id("cmd");
         tx.execute(
-            "INSERT INTO command_record (id, name, caller, idem_key, args, result, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO command_record (id, name, caller, idem_key, args, result, created_at, turn_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                new_id("cmd"),
+                id,
                 C::NAME,
                 scope,
                 cmd.idem_key(),
                 serde_json::to_string(cmd)?,
                 serde_json::to_string(&out)?,
-                now
+                now,
+                caller.turn_id()
             ],
         )?;
+        tx.commit()?;
+        Ok((out, id))
+    }
+
+    /// Writes records that are not business state, such as transcript items, in one
+    /// transaction without a command record (data-model.md §7.2).
+    pub fn write<T>(&self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let out = f(&tx)?;
         tx.commit()?;
         Ok(out)
     }

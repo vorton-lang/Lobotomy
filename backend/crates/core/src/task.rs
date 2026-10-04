@@ -117,10 +117,56 @@ pub fn occupant(conn: &Connection, role: &str) -> Result<Option<String>> {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Attempt {
+    pub id: String,
+    pub task_id: String,
+    pub seq: i64,
+    pub done_turn_id: Option<String>,
+}
+
+/// The task's open attempt, if any (data-model.md §4.1).
+pub fn open_attempt(conn: &Connection, task_id: &str) -> Result<Option<Attempt>> {
+    Ok(conn
+        .query_row(
+            "SELECT id, task_id, seq, done_turn_id FROM attempt WHERE task_id = ?1 AND ended_at IS NULL",
+            [task_id],
+            |r| Ok(Attempt { id: r.get(0)?, task_id: r.get(1)?, seq: r.get(2)?, done_turn_id: r.get(3)? }),
+        )
+        .optional()?)
+}
+
+pub fn criteria_text(conn: &Connection, task_id: &str, version: i64) -> Result<String> {
+    Ok(conn.query_row(
+        "SELECT text FROM criteria_version WHERE task_id = ?1 AND version = ?2",
+        params![task_id, version],
+        |r| r.get(0),
+    )?)
+}
+
+/// The task as the executor first sees it: the user's words and the current criteria. Sent when
+/// an attempt starts and when the role starts a new native session mid-attempt.
+pub fn brief(conn: &Connection, task: &Task, attempt_seq: i64) -> Result<String> {
+    let criteria = criteria_text(conn, &task.id, task.criteria_version)?;
+    Ok(format!(
+        "任务：{title}（{id}，第 {attempt_seq} 轮执行）\n\n\
+         用户原话：\n{body}\n\n\
+         完成条件（第 {version} 版）：\n{criteria}\n\n\
+         完成后调用 org_report，status 为 done。遇到需要用户决定的问题时，调用 org_report，status 为 blocked，\
+         并在 blocked_on 中写明问题。",
+        title = task.title,
+        id = task.id,
+        body = task.body,
+        version = task.criteria_version,
+    ))
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Message {
     pub id: String,
     pub seq: i64,
     pub role: String,
+    /// The caller scope that sent it: `user`, `runtime` or `role:<name>`.
+    pub source: String,
     pub task_id: Option<String>,
     pub body: String,
 }
@@ -128,10 +174,18 @@ pub struct Message {
 /// Messages waiting in a role's inbox, in arrival order (data-model.md §3.4).
 pub fn queued_messages(conn: &Connection, role: &str) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(
-        "SELECT id, seq, role, task_id, body FROM message WHERE role = ?1 AND state = 'queued' ORDER BY seq",
+        "SELECT id, seq, role, source, task_id, body FROM message
+         WHERE role = ?1 AND state = 'queued' ORDER BY seq",
     )?;
     let rows = stmt.query_map([role], |r| {
-        Ok(Message { id: r.get(0)?, seq: r.get(1)?, role: r.get(2)?, task_id: r.get(3)?, body: r.get(4)? })
+        Ok(Message {
+            id: r.get(0)?,
+            seq: r.get(1)?,
+            role: r.get(2)?,
+            source: r.get(3)?,
+            task_id: r.get(4)?,
+            body: r.get(5)?,
+        })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
@@ -460,8 +514,9 @@ impl Command for Reopen {
 
 // ---- runtime commands ----
 
-/// Starts a new attempt: occupies the executor and moves the task into execution
-/// (data-model.md §2, §4.1). Quota and materialization preconditions arrive with later increments.
+/// Starts a new attempt: occupies the executor, moves the task into execution and puts the brief
+/// in the executor's inbox (data-model.md §2, §4.1; roles-and-tasks.md §2.2). Quota and
+/// materialization preconditions arrive with later increments.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StartAttempt {
     pub task_id: String,
@@ -505,6 +560,8 @@ impl Command for StartAttempt {
         )?;
         cx.tx.execute("UPDATE task SET phase = 'executing', queue_pos = NULL WHERE id = ?1", [&task.id])?;
         bump_revision(cx, &task.id)?;
+        let brief = brief(cx.tx, &task, seq)?;
+        queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), &brief)?;
         cx.emit("attempt.started", &task.id, json!({ "attempt_id": attempt_id, "seq": seq }))?;
         Ok(AttemptStarted { attempt_id, seq })
     }

@@ -25,6 +25,14 @@ impl Caller {
         }
     }
 
+    /// The turn a role command came from.
+    pub fn turn_id(&self) -> Option<&str> {
+        match self {
+            Caller::Role { turn_id, .. } => Some(turn_id),
+            _ => None,
+        }
+    }
+
     pub fn require_user(&self) -> Result<()> {
         match self {
             Caller::User => Ok(()),
@@ -35,6 +43,13 @@ impl Caller {
     pub fn require_runtime(&self) -> Result<()> {
         match self {
             Caller::Runtime => Ok(()),
+            other => Err(Error::rejected("forbidden", format!("{} may not run this command", other.scope()))),
+        }
+    }
+
+    pub fn require_user_or_runtime(&self) -> Result<()> {
+        match self {
+            Caller::User | Caller::Runtime => Ok(()),
             other => Err(Error::rejected("forbidden", format!("{} may not run this command", other.scope()))),
         }
     }
