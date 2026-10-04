@@ -126,3 +126,29 @@ test('search goes to a match pages back', async ({ page }) => {
   await expect(bar).toBeHidden();
   expect(await page.evaluate(() => CSS.highlights.has('search-current'))).toBe(false);
 });
+
+// On a slow machine an older page arrives later than the next render. Scrolling up must still
+// load page after page to the start (the baseline found it stuck at the top in CI).
+test('scrolling up on a slow machine loads every older page', async ({ page }) => {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  await open(page);
+  const reached = await page.evaluate(
+    (marker) =>
+      new Promise<boolean>((resolve) => {
+        const thread = document.querySelector('.thread') as HTMLElement;
+        const start = performance.now();
+        const step = () => {
+          if (thread.textContent?.includes(marker)) resolve(true);
+          else if (performance.now() - start > 60_000) resolve(false);
+          else {
+            thread.scrollTop -= 1500;
+            requestAnimationFrame(step);
+          }
+        };
+        step();
+      }),
+    '任务：写 work.txt（第 1 轮执行）',
+  );
+  expect(reached).toBe(true);
+});

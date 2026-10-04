@@ -123,3 +123,10 @@ jobs:
         with:
           name: bench-${{ matrix.os }}
           path: frontend/bench-results/latest.json
+      - name: Keep Playwright's traces of failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-failures-${{ matrix.os }}
+          path: frontend/test-results/
+          if-no-files-found: ignore

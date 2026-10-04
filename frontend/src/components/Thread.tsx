@@ -25,9 +25,14 @@ export function Thread() {
   useLayoutEffect(() => {
     if (atEnd.current && rows.length > 0) list.current?.scrollToIndex(rows.length - 1, { align: 'end' });
   }, [rows.length]);
+  // While an older page loads, the list keeps the visible rows in place as items arrive above
+  // them (`shift`). Only the oldest item changing says the page is in: other changes, such as a
+  // live item, may come first, and on a slow machine the page always comes later than the next
+  // render. Ending the shift early left the list at its top with nothing more to load.
+  const oldest = thread.items[0]?.id;
   useEffect(() => {
-    if (prepending) setPrepending(false);
-  }, [rows, prepending]);
+    setPrepending(false);
+  }, [oldest]);
 
   // Search: scroll to the current match once its page is loaded, and mark the matches.
   const search = useStore((s) => s.search);
