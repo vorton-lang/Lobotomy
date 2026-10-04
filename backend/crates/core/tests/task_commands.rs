@@ -4,9 +4,8 @@ use lobotomy_core::task::{
 };
 use lobotomy_core::{Caller, Db};
 
-fn db() -> Db {
-    Db::open_in_memory().unwrap()
-}
+mod common;
+use common::{db, rejection, start};
 
 fn create(db: &Db, request_id: &str, title: &str) -> String {
     db.execute(
@@ -25,10 +24,6 @@ fn create(db: &Db, request_id: &str, title: &str) -> String {
 
 fn task(db: &Db, id: &str) -> lobotomy_core::task::Task {
     db.read(|c| load_task(c, id)).unwrap()
-}
-
-fn rejection<T: std::fmt::Debug>(r: lobotomy_core::Result<T>) -> &'static str {
-    r.unwrap_err().code().expect("expected a rejection")
 }
 
 #[test]
@@ -66,7 +61,7 @@ fn only_the_user_can_create_tasks_and_only_the_runtime_starts_attempts() {
     );
     assert_eq!(rejection(r), "forbidden");
     let id = create(&db, "r2", "t");
-    assert_eq!(rejection(db.execute(&Caller::User, &StartAttempt { task_id: id })), "forbidden");
+    assert_eq!(rejection(db.execute(&Caller::User, &StartAttempt { task_id: id, code_start: None })), "forbidden");
 }
 
 #[test]
@@ -90,14 +85,14 @@ fn starting_an_attempt_occupies_the_executor() {
     let db = db();
     let a = create(&db, "r1", "a");
     let b = create(&db, "r2", "b");
-    let started = db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() }).unwrap();
+    let started = start(&db, &a);
     assert_eq!(started.seq, 1);
     assert_eq!(task(&db, &a).phase, Phase::Executing);
     assert_eq!(db.read(|c| occupant(c, "Malkuth")).unwrap(), Some(a.clone()));
     // The executor is busy, so the second task cannot start.
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: b })), "role_busy");
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: b, code_start: None })), "role_busy");
     // A task in execution cannot start another attempt.
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a })), "not_queued");
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a, code_start: None })), "not_queued");
 }
 
 #[test]
@@ -105,7 +100,7 @@ fn the_database_allows_one_open_attempt_per_task_and_one_occupant_per_role() {
     let db = db();
     let a = create(&db, "r1", "a");
     let b = create(&db, "r2", "b");
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() }).unwrap();
+    start(&db, &a);
     db.read(|c| {
         let second_open = c.execute(
             "INSERT INTO attempt (id, task_id, seq, started_at) VALUES ('att_dup', ?1, 2, 0)",
@@ -125,9 +120,9 @@ fn paused_tasks_do_not_start() {
     let db = db();
     let a = create(&db, "r1", "a");
     db.execute(&Caller::User, &SetPaused { request_id: "p1".into(), task_id: a.clone(), paused: true }).unwrap();
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() })), "paused");
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone(), code_start: None })), "paused");
     db.execute(&Caller::User, &SetPaused { request_id: "p2".into(), task_id: a.clone(), paused: false }).unwrap();
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a }).unwrap();
+    start(&db, &a);
 }
 
 #[test]
@@ -155,7 +150,7 @@ fn editing_criteria_checks_the_expected_version() {
 fn editing_criteria_during_execution_messages_the_executor() {
     let db = db();
     let a = create(&db, "r1", "a");
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() }).unwrap();
+    start(&db, &a);
     db.execute(
         &Caller::User,
         &EditCriteria { request_id: "e1".into(), task_id: a.clone(), expected_version: 1, text: "新的条件".into() },
@@ -256,7 +251,7 @@ fn moving_in_the_queue_reuses_existing_positions() {
     let c = create(&db, "r3", "c");
     let d = create(&db, "r4", "d");
     // A leaves the queue, so positions start at 2.
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a }).unwrap();
+    start(&db, &a);
     db.execute(&Caller::User, &MoveInQueue { request_id: "q1".into(), task_id: d.clone(), to_index: 0 }).unwrap();
     assert_eq!(queue_state(&db, &[&d, &b, &c]), [(2, 2), (3, 2), (4, 2)]);
 }
@@ -265,7 +260,7 @@ fn moving_in_the_queue_reuses_existing_positions() {
 fn abandoning_closes_the_attempt_and_releases_the_executor() {
     let db = db();
     let a = create(&db, "r1", "a");
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() }).unwrap();
+    start(&db, &a);
     db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: a.clone(), reason: "方向错了".into() })
         .unwrap();
     let t = task(&db, &a);
@@ -286,11 +281,11 @@ fn reopening_queues_the_task_and_the_next_attempt_gets_a_new_number() {
     let db = db();
     let a = create(&db, "r1", "a");
     assert_eq!(rejection(db.execute(&Caller::User, &Reopen { request_id: "o0".into(), task_id: a.clone() })), "not_closed");
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() }).unwrap();
+    start(&db, &a);
     db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: a.clone(), reason: String::new() }).unwrap();
     db.execute(&Caller::User, &Reopen { request_id: "o1".into(), task_id: a.clone() }).unwrap();
     assert_eq!(task(&db, &a).phase, Phase::Queued);
-    let second = db.execute(&Caller::Runtime, &StartAttempt { task_id: a }).unwrap();
+    let second = start(&db, &a);
     assert_eq!(second.seq, 2);
 }
 
@@ -298,12 +293,15 @@ fn reopening_queues_the_task_and_the_next_attempt_gets_a_new_number() {
 fn every_change_lands_in_the_event_log_in_order() {
     let db = db();
     let a = create(&db, "r1", "a");
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a }).unwrap();
+    db.execute(&Caller::Runtime, &StartAttempt { task_id: a, code_start: None }).unwrap();
     let kinds: Vec<String> = db
         .read(|c| {
             let mut stmt = c.prepare("SELECT kind FROM event ORDER BY seq")?;
             Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
         })
         .unwrap();
-    assert_eq!(kinds, ["task.created", "message.queued", "attempt.started"]);
+    assert_eq!(
+        kinds,
+        ["project.onboarded", "task.created", "workspace.materializing", "message.queued", "attempt.started"]
+    );
 }

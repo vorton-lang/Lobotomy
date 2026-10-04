@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 lobotomy-core.workspace = true
 lobotomy-harness.workspace = true
+lobotomy-store.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 http.workspace = true

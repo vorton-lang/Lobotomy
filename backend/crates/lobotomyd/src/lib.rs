@@ -3,7 +3,9 @@
 pub mod capability;
 pub mod host;
 pub mod mcp;
+pub mod onboard;
 pub mod project;
+pub mod results;
 pub mod runner;
 pub mod scheduler;
 

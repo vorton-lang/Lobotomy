@@ -12,7 +12,7 @@ use lobotomyd::capability::REMOVED_VARS;
 use serde_json::Value;
 
 fn seen_env(cwd: &Path) -> Value {
-    serde_json::from_str(&std::fs::read_to_string(cwd.join("last-env.json")).unwrap()).unwrap()
+    serde_json::from_str(&std::fs::read_to_string(diag(cwd).join("last-env.json")).unwrap()).unwrap()
 }
 
 #[tokio::test]

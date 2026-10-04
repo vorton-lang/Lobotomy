@@ -110,11 +110,13 @@ pub struct Turn {
     pub registered_at: i64,
     pub started_at: Option<i64>,
     pub ended_at: Option<i64>,
+    /// The slot generation the turn runs in (harness-adapter.md §3).
+    pub workspace_id: Option<String>,
 }
 
 const TURN_SELECT: &str = "SELECT t.id, t.role, s.harness, t.native_session_id, s.native_id, t.task_id, t.attempt_id,
        t.token, t.input, t.state, t.outcome, t.failure, t.pid, t.process_start, t.done_at,
-       t.registered_at, t.started_at, t.ended_at
+       t.registered_at, t.started_at, t.ended_at, t.workspace_id
      FROM turn t JOIN native_session s ON s.id = t.native_session_id";
 
 struct TurnRow {
@@ -145,6 +147,7 @@ fn turn_from_row(r: &Row<'_>) -> rusqlite::Result<TurnRow> {
             registered_at: r.get(15)?,
             started_at: r.get(16)?,
             ended_at: r.get(17)?,
+            workspace_id: r.get(18)?,
         },
         state: r.get(9)?,
         outcome: r.get(10)?,
@@ -311,6 +314,16 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
     if let Some(running) = unfinished_turn(cx.tx, role)? {
         return Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", running.id)));
     }
+    // The last turn's scene is captured before the next turn touches the slot, and turns only run
+    // in a slot that holds its target (harness-adapter.md §3, §4.1).
+    crate::capture::require_no_pending_capture(cx.tx, role)?;
+    let workspace_id = match crate::workspace::role_slot(cx.tx, role)? {
+        Some(slot) => match crate::workspace::current_workspace(cx.tx, &slot)? {
+            Some(ws) if ws.state == crate::workspace::WorkspaceState::Ready => Some(ws.id),
+            _ => return Err(Error::rejected("slot_not_ready", format!("slot {slot} of {role} is not ready"))),
+        },
+        None => None,
+    };
     let (task, attempt) = current_work(cx.tx, role)?;
     if let Some(task) = &task {
         // Outside execution, messages to the executor wait (data-model.md §4.2).
@@ -374,9 +387,10 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
     let turn_id = new_id("turn");
     let token = new_id("tok");
     cx.tx.execute(
-        "INSERT INTO turn (id, role, native_session_id, task_id, attempt_id, token, input, state, registered_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'registered', ?8)",
-        params![turn_id, role, session.id, task_id, attempt_id, token, input, cx.now],
+        "INSERT INTO turn (id, role, native_session_id, task_id, attempt_id, token, input, state, registered_at,
+                           workspace_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'registered', ?8, ?9)",
+        params![turn_id, role, session.id, task_id, attempt_id, token, input, cx.now, workspace_id],
     )?;
     for m in &messages {
         cx.tx.execute("UPDATE message SET state = 'bound', turn_id = ?2 WHERE id = ?1", params![m.id, turn_id])?;
@@ -491,8 +505,8 @@ impl Command for SessionIdentified {
     }
 }
 
-/// Ends a turn and releases the native session's run right (data-model.md §3.2). Ending an
-/// ended turn again changes nothing.
+/// Ends a turn, releases the role's run right and records the intent to capture the slot
+/// (data-model.md §3.2; harness-adapter.md §4.1). Ending an ended turn again changes nothing.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EndTurn {
     pub turn_id: String,
@@ -520,6 +534,7 @@ impl Command for EndTurn {
             &turn.id,
             json!({ "role": turn.role, "outcome": self.outcome, "failure": self.failure }),
         )?;
+        crate::capture::intend(cx, &turn, self.outcome)?;
         Ok(())
     }
 }

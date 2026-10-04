@@ -2,11 +2,13 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lobotomy_core::task::CreateTask;
+use lobotomy_core::task::{CreateTask, Phase, StartAttempt, load_task};
 use lobotomy_core::turn::{Turn, TurnState, last_turn};
+use lobotomy_core::workspace::materializing;
 use lobotomy_core::{Caller, Db};
 use lobotomyd::Backend;
 use lobotomyd::host::{HarnessConfig, Host};
@@ -39,9 +41,38 @@ pub fn real_codex() -> HarnessConfig {
     }
 }
 
-pub fn open_project(dir: &Path, harness: HarnessConfig) -> Project {
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// The user's repository: one commit on `main`.
+pub fn user_repo(dir: &Path) -> PathBuf {
+    let repo = dir.join("repo");
+    if !repo.exists() {
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "--quiet", "--initial-branch", "main"]);
+        git(&repo, &["config", "user.name", "Test User"]);
+        git(&repo, &["config", "user.email", "user@example.com"]);
+        git(&repo, &["config", "core.autocrlf", "false"]);
+        std::fs::write(repo.join("README.md"), "# project\n").unwrap();
+        std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "--quiet", "-m", "initial"]);
+    }
+    repo
+}
+
+/// A project connected to the user's repository in `dir`; the same directory opens the same
+/// project again.
+pub async fn open_project(dir: &Path, harness: HarnessConfig) -> Arc<Project> {
     let host = Arc::new(Host::open(&host_dir(dir), harness).unwrap());
-    Project::open(&dir.join("project"), host).unwrap()
+    let project = Arc::new(Project::open(&dir.join("project"), host).unwrap());
+    if project.db.read(lobotomy_core::project::load_project).unwrap().is_none() {
+        lobotomyd::onboard::onboard(&project, &user_repo(dir)).await.unwrap();
+    }
+    project
 }
 
 pub fn host_dir(dir: &Path) -> PathBuf {
@@ -49,7 +80,11 @@ pub fn host_dir(dir: &Path) -> PathBuf {
 }
 
 pub async fn start(dir: &Path) -> Backend {
-    Backend::start(Arc::new(open_project(dir, fake_codex())), 0).await.unwrap()
+    start_with(dir, fake_codex()).await
+}
+
+pub async fn start_with(dir: &Path, harness: HarnessConfig) -> Backend {
+    Backend::start(open_project(dir, harness).await, 0).await.unwrap()
 }
 
 pub fn create_task(db: &Db, body: &str) -> String {
@@ -65,6 +100,15 @@ pub fn create_task(db: &Db, body: &str) -> String {
     )
     .unwrap()
     .id
+}
+
+/// What the scheduler does when the role is free: starts the attempt and writes the slot. For
+/// setting up "the last run" without a running backend.
+pub async fn start_attempt(project: &Arc<Project>, task: &str) {
+    project.db.execute(&Caller::Runtime, &StartAttempt { task_id: task.into(), code_start: None }).unwrap();
+    for ws in project.db.read(materializing).unwrap() {
+        lobotomyd::results::materialize(project.clone(), ws).await.unwrap();
+    }
 }
 
 pub fn last(db: &Db) -> Option<Turn> {
@@ -86,8 +130,20 @@ pub async fn ended_turn(db: &Db) -> Turn {
     wait_for("the turn to end", || last(db).filter(|t| t.state == TurnState::Ended)).await
 }
 
+pub async fn phase(db: &Db, task: &str, phase: Phase) {
+    wait_for(&format!("task {task} to be {}", phase.as_str()), || {
+        (db.read(|c| load_task(c, task)).unwrap().phase == phase).then_some(())
+    })
+    .await
+}
+
 pub fn slot(dir: &Path) -> PathBuf {
     dir.join("project").join("slots").join("worker")
+}
+
+/// Where the fake CLI leaves its diagnostics: inside `.git` in a slot, so captures skip them.
+pub fn diag(dir: &Path) -> PathBuf {
+    if dir.join(".git").exists() { dir.join(".git") } else { dir.to_path_buf() }
 }
 
 /// Lets the scheduler run a few rounds.

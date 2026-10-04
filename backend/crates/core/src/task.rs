@@ -234,7 +234,13 @@ fn next_queue_pos(cx: &Cx<'_>, executor: &str) -> Result<i64> {
     )?)
 }
 
-fn record_decision(cx: &Cx<'_>, kind: &str, task_id: &str, caller: &Caller, detail: serde_json::Value) -> Result<String> {
+pub(crate) fn record_decision(
+    cx: &Cx<'_>,
+    kind: &str,
+    task_id: Option<&str>,
+    caller: &Caller,
+    detail: serde_json::Value,
+) -> Result<String> {
     let id = new_id("dec");
     cx.tx.execute(
         "INSERT INTO decision (id, kind, task_id, actor, detail, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -481,7 +487,7 @@ impl Command for Abandon {
         caller.require_user()?;
         let task = load_task(cx.tx, &self.task_id)?;
         require_open(&task)?;
-        record_decision(cx, "abandon", &task.id, caller, json!({ "reason": self.reason }))?;
+        record_decision(cx, "abandon", Some(&task.id), caller, json!({ "reason": self.reason }))?;
         cx.tx.execute(
             "UPDATE attempt SET ended_at = ?2, end_reason = 'abandoned' WHERE task_id = ?1 AND ended_at IS NULL",
             params![task.id, cx.now],
@@ -521,7 +527,7 @@ impl Command for Reopen {
         if !task.phase.is_closed() {
             return Err(Error::rejected("not_closed", format!("task {} is {}", task.id, task.phase.as_str())));
         }
-        record_decision(cx, "reopen", &task.id, caller, json!({}))?;
+        record_decision(cx, "reopen", Some(&task.id), caller, json!({}))?;
         let pos = next_queue_pos(cx, &task.executor)?;
         cx.tx.execute(
             "UPDATE task SET phase = 'queued', closed_at = NULL, queue_pos = ?2 WHERE id = ?1",
@@ -535,12 +541,25 @@ impl Command for Reopen {
 
 // ---- runtime commands ----
 
-/// Starts a new attempt: occupies the executor, moves the task into execution and puts the brief
-/// in the executor's inbox (data-model.md §2, §4.1; roles-and-tasks.md §2.2). Quota and
-/// materialization preconditions arrive with later increments.
+/// Starts a new attempt: occupies the executor, moves the task into execution, plans the slot at
+/// the attempt's code start and puts the brief in the executor's inbox (data-model.md §2, §4.1,
+/// §4.6; roles-and-tasks.md §2.2). The slot goes to this work only once its current content is
+/// captured (harness-adapter.md §3).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StartAttempt {
     pub task_id: String,
+    /// For a reopened task with an earlier candidate: that candidate rebased onto the
+    /// integration version, which the runtime prepares in the store first (data-model.md §4.6).
+    /// Every other attempt starts from the integration version.
+    pub code_start: Option<CodeStart>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeStart {
+    pub commit: String,
+    /// The integration version it was rebased onto.
+    pub base: String,
+    pub conflicts: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -565,6 +584,22 @@ impl Command for StartAttempt {
         if let Some(other) = occupant(cx.tx, &task.executor)? {
             return Err(Error::rejected("role_busy", format!("{} is occupied by {other}", task.executor)));
         }
+        // The slot is about to be rewritten: nothing may run in it, and what is there must be
+        // captured.
+        if let Some(turn) = crate::turn::unfinished_turn(cx.tx, &task.executor)? {
+            return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", task.executor, turn.id)));
+        }
+        crate::capture::require_captured(cx.tx, &task.executor)?;
+        let project = crate::project::require_project(cx.tx)?;
+        let earlier = crate::verify::latest_candidate_commit(cx.tx, &task.id)?;
+        let start = match (&earlier, &self.code_start) {
+            (Some(_), Some(start)) if start.base == project.integration => start.clone(),
+            (Some(_), _) => {
+                return Err(Error::rejected("code_start_needed", "rebase the earlier candidate onto the integration version"));
+            }
+            (None, _) => CodeStart { commit: project.integration.clone(), base: project.integration.clone(), conflicts: vec![] },
+        };
+
         let seq: i64 = cx.tx.query_row(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1",
             [&task.id],
@@ -572,8 +607,8 @@ impl Command for StartAttempt {
         )?;
         let attempt_id = new_id("att");
         cx.tx.execute(
-            "INSERT INTO attempt (id, task_id, seq, started_at) VALUES (?1, ?2, ?3, ?4)",
-            params![attempt_id, task.id, seq, cx.now],
+            "INSERT INTO attempt (id, task_id, seq, started_at, code_start) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![attempt_id, task.id, seq, cx.now, start.commit],
         )?;
         cx.tx.execute(
             "INSERT INTO occupancy (role, task_id, since) VALUES (?1, ?2, ?3)",
@@ -581,7 +616,16 @@ impl Command for StartAttempt {
         )?;
         cx.tx.execute("UPDATE task SET phase = 'executing', queue_pos = NULL WHERE id = ?1", [&task.id])?;
         bump_revision(cx, &task.id)?;
-        let brief = brief(cx.tx, &task, seq)?;
+        if let Some(slot) = crate::workspace::role_slot(cx.tx, &task.executor)? {
+            crate::workspace::plan(cx, &slot, &start.commit, &start.base)?;
+        }
+        let mut brief = brief(cx.tx, &task, seq)?;
+        if !start.conflicts.is_empty() {
+            brief.push_str(&format!(
+                "\n\n这项任务重开时，上一次的候选成果与当前的集成版本冲突。工作目录中以下文件有冲突标记，请先解决：\n{}",
+                start.conflicts.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n")
+            ));
+        }
         queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), &brief)?;
         cx.emit("attempt.started", &task.id, json!({ "attempt_id": attempt_id, "seq": seq }))?;
         Ok(AttemptStarted { attempt_id, seq })

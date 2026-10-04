@@ -2,16 +2,20 @@
 //!
 //! Everything here belongs to one project instance; nothing is global (data-model.md §10).
 
+pub mod capture;
 pub mod command;
 pub mod db;
 pub mod error;
 pub mod id;
 pub mod item;
+pub mod project;
 pub mod quota;
 pub mod report;
 pub mod role;
 pub mod task;
 pub mod turn;
+pub mod verify;
+pub mod workspace;
 
 pub use command::{Caller, Command, Cx};
 pub use db::Db;

@@ -57,11 +57,35 @@ impl Spawned {
 /// Starts the CLI with piped stdio.
 pub fn spawn(spec: &Spec<'_>) -> io::Result<Spawned> {
     let mut cmd = Command::new(spec.program);
+    cmd.args(spec.args);
+    start(cmd, spec)
+}
+
+/// Runs a command line through the platform's shell, `cmd.exe` on Windows and `sh` elsewhere,
+/// in a process of its own like a CLI. For the project's check commands (harness-adapter.md
+/// §4.2); `spec.program` and `spec.args` are ignored.
+pub fn spawn_shell(command: &str, spec: &Spec<'_>) -> io::Result<Spawned> {
+    #[cfg(windows)]
+    let cmd = {
+        let mut cmd = Command::new("cmd.exe");
+        // `/s` makes cmd strip exactly the outer quotes and run the rest as typed.
+        cmd.args(["/d", "/s", "/c"]).raw_arg(format!("\"{command}\""));
+        cmd
+    };
+    #[cfg(not(windows))]
+    let cmd = {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(command);
+        cmd
+    };
+    start(cmd, spec)
+}
+
+fn start(mut cmd: Command, spec: &Spec<'_>) -> io::Result<Spawned> {
     for name in spec.env_remove {
         cmd.env_remove(name);
     }
-    cmd.args(spec.args)
-        .current_dir(spec.cwd)
+    cmd.current_dir(spec.cwd)
         .envs(spec.env.iter().map(|(k, v)| (OsStr::new(k), OsStr::new(v))))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

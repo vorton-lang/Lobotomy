@@ -11,6 +11,7 @@ use lobotomy_core::role::{Role, load_role};
 use lobotomy_core::turn::{
     EndTurn, Failure, FailureKind, InputDelivered, Outcome, SessionIdentified, Turn, TurnLaunched, load_turn,
 };
+use lobotomy_core::workspace::load_workspace;
 use lobotomy_core::{Caller, Command, Db};
 use lobotomy_harness::codex::{self, TurnArgs};
 use lobotomy_harness::event::{Event, Item, ItemKind};
@@ -122,9 +123,12 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
         return end(project, turn_id, Outcome::Failed, Some((FailureKind::Other, message))).await;
     }
 
-    let cwd = project.slot_dir(role.slot.as_deref().unwrap_or(&role.name));
+    // The slot was ready when the turn was registered (harness-adapter.md §3).
+    let workspace_id = turn.workspace_id.clone().with_context(|| format!("{} has no slot", role.name))?;
+    let workspace = db(project, move |db| db.read(|c| load_workspace(c, &workspace_id))).await?;
+    let cwd = project.slot_dir(&workspace.name);
     let gh = project.empty_gh_config_dir();
-    for dir in [&cwd, &gh, &project.data_dir.join("turns")] {
+    for dir in [&gh, &project.data_dir.join("turns")] {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
     let turn_args = TurnArgs {

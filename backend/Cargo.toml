@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/harness", "crates/lobotomyd"]
+members = ["crates/core", "crates/harness", "crates/lobotomyd", "crates/store"]
 
 [workspace.package]
 edition = "2024"
@@ -10,6 +10,7 @@ publish = false
 [workspace.dependencies]
 lobotomy-core = { path = "crates/core" }
 lobotomy-harness = { path = "crates/harness" }
+lobotomy-store = { path = "crates/store" }
 anyhow = "1"
 libc = "0.2"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }

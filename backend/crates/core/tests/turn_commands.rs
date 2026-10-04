@@ -8,18 +8,12 @@ use lobotomy_core::turn::{
     RegisterTurn, SessionIdentified, TurnLaunched, TurnRegistered, TurnState, current_session, load_turn,
     turn_by_token,
 };
+use lobotomy_core::verify::{CheckOutcome, FinishVerification, StartVerification};
 use lobotomy_core::{Caller, Db};
 use serde_json::json;
 
-const ROLE: &str = "Malkuth";
-
-fn db() -> Db {
-    Db::open_in_memory().unwrap()
-}
-
-fn rejection<T: std::fmt::Debug>(r: lobotomy_core::Result<T>) -> &'static str {
-    r.unwrap_err().code().expect("expected a rejection")
-}
+mod common;
+use common::{ROLE, db, pin_captures, rejection, start};
 
 /// Creates a task and starts its first attempt; the brief waits in the inbox.
 fn started_task(db: &Db) -> String {
@@ -36,7 +30,7 @@ fn started_task(db: &Db) -> String {
         )
         .unwrap()
         .id;
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: id.clone() }).unwrap();
+    start(db, &id);
     id
 }
 
@@ -52,8 +46,10 @@ fn send(db: &Db, request_id: &str, body: &str) {
     .unwrap();
 }
 
+/// Ends the turn and lets the store capture the slot.
 fn end(db: &Db, turn_id: &str, outcome: Outcome) {
     db.execute(&Caller::Runtime, &EndTurn { turn_id: turn_id.into(), outcome, failure: None }).unwrap();
+    pin_captures(db);
 }
 
 fn report(db: &Db, turn_id: &str, status: ReportStatus, blocked_on: Option<&str>) -> lobotomy_core::Result<ReportEffect> {
@@ -153,6 +149,7 @@ fn a_quota_failure_is_named_in_the_continue_note() {
     let failure = Failure { kind: FailureKind::Quota, message: "limit".into(), resets_at: Some(1) };
     db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id, outcome: Outcome::Failed, failure: Some(failure) })
         .unwrap();
+    pin_captures(&db);
     // A quota failure holds the role like any failure; only the user continues (data-model.md §8.5).
     send(&db, "m1", "额度恢复了");
     assert_eq!(rejection(register(&db)), "held");
@@ -209,7 +206,7 @@ fn abandoning_after_an_abnormal_turn_lets_the_next_task_run_in_a_fresh_session()
         abandon(&db, "x1", &a);
         assert!(db.read(|c| current_session(c, ROLE, Some(&a))).unwrap().is_none(), "A's session ended");
 
-        db.execute(&Caller::Runtime, &StartAttempt { task_id: b.clone() }).unwrap();
+        start(&db, &b);
         let next = register(&db).unwrap();
         let next = db.read(|c| load_turn(c, &next.turn_id)).unwrap();
         assert_eq!(next.task_id.as_deref(), Some(b.as_str()));
@@ -233,7 +230,7 @@ fn a_reopened_task_starts_in_a_fresh_session() {
     end(&db, &t.turn_id, Outcome::Interrupted);
     abandon(&db, "x1", &a);
     db.execute(&Caller::User, &Reopen { request_id: "o1".into(), task_id: a.clone() }).unwrap();
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() }).unwrap();
+    start(&db, &a);
     let next = register(&db).unwrap();
     assert_ne!(t_session(&db, &next.turn_id), t_session(&db, &t.turn_id));
 }
@@ -244,10 +241,10 @@ fn a_running_turn_of_an_abandoned_task_blocks_the_next_task() {
     let a = started_task(&db);
     let b = create_named(&db, "c2", "下一个任务");
     let t = register(&db).unwrap();
-    // A's CLI still runs when A is abandoned.
+    // A's CLI still runs when A is abandoned. B cannot take the slot while it runs.
     abandon(&db, "x1", &a);
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: b }).unwrap();
-    assert_eq!(rejection(register(&db)), "turn_unfinished");
+    let start_b = StartAttempt { task_id: b.clone(), code_start: None };
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &start_b)), "turn_unfinished");
     // The database allows one unfinished turn per role, whatever the session.
     let second = db.read(|c| {
         Ok(c.execute(
@@ -264,8 +261,9 @@ fn a_running_turn_of_an_abandoned_task_blocks_the_next_task() {
         }))
     });
     assert!(second.unwrap().is_err());
-    // Once A's turn ends, B runs.
+    // Once A's turn ends and its scene is captured, B starts and runs.
     end(&db, &t.turn_id, Outcome::Completed);
+    start(&db, &b);
     register(&db).unwrap();
 }
 
@@ -278,18 +276,27 @@ fn an_abnormal_turn_of_an_ended_attempt_does_not_hold_the_next_attempt() {
         .unwrap();
     report(&db, &t.turn_id, ReportStatus::Done, None).unwrap();
     // The turn reported done, then ended abnormally; its capture became the candidate.
-    end(&db, &t.turn_id, Outcome::Interrupted);
-    // Verification failed: the attempt ends with its candidate and a new one opens. The commands
-    // for this arrive with increment 3, so the rows are written directly.
-    db.read(|c| {
-        c.execute("UPDATE attempt SET ended_at = 1, end_reason = 'candidate' WHERE task_id = ?1", [&task])?;
-        c.execute("INSERT INTO attempt (id, task_id, seq, started_at) VALUES ('att_2', ?1, 2, 2)", [&task])?;
-        Ok(())
+    let [commit] = <[String; 1]>::try_from({
+        db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id.clone(), outcome: Outcome::Interrupted, failure: None })
+            .unwrap();
+        pin_captures(&db)
     })
     .unwrap();
-    send(&db, "m1", "检查没有通过");
+    // Verification failed: the attempt ended with its candidate and a new one opens.
+    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
+    let check = CheckOutcome {
+        command: "cargo test".into(),
+        exit_code: Some(101),
+        timed_out: false,
+        output: json!({ "text": "1 failed" }),
+        duration_ms: 10,
+        tail: "1 failed".into(),
+    };
+    let finish = FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![check], blobs: vec![] };
+    db.execute(&Caller::Runtime, &finish).unwrap();
     let next = register(&db).unwrap();
     assert_eq!(t_session(&db, &next.turn_id), t_session(&db, &t.turn_id), "same task, same session");
+    assert!(db.read(|c| load_turn(c, &next.turn_id)).unwrap().input.contains("cargo test"));
 }
 
 #[test]
@@ -324,7 +331,7 @@ fn startup_marks_unfinished_turns_unknown_until_reconciled() {
     started_task(&db);
     let t = register(&db).unwrap();
     let marked = db.execute(&Caller::Runtime, &MarkUnfinishedUnknown {}).unwrap();
-    assert_eq!(marked, [t.turn_id.clone()]);
+    assert_eq!(marked, [t.turn_id.as_str()]);
     send(&db, "m1", "还在吗");
     assert_eq!(rejection(register(&db)), "turn_unfinished");
     // Reconciliation found the CLI gone.
@@ -333,7 +340,7 @@ fn startup_marks_unfinished_turns_unknown_until_reconciled() {
 }
 
 #[test]
-fn done_is_recorded_once_and_holds_further_turns_until_capture() {
+fn done_is_recorded_once_and_its_capture_moves_the_task_to_verification() {
     let db = db();
     let task = started_task(&db);
     let t = register(&db).unwrap();
@@ -343,9 +350,15 @@ fn done_is_recorded_once_and_holds_further_turns_until_capture() {
     assert_eq!(attempt.done_turn_id.as_deref(), Some(t.turn_id.as_str()));
     db.execute(&Caller::Runtime, &SessionIdentified { turn_id: t.turn_id.clone(), native_id: "thread-1".into() })
         .unwrap();
-    end(&db, &t.turn_id, Outcome::Completed);
+    db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id.clone(), outcome: Outcome::Completed, failure: None })
+        .unwrap();
+    // Nothing runs in the slot before its scene is captured.
     send(&db, "m1", "还有一件事");
-    assert_eq!(rejection(register(&db)), "awaiting_capture");
+    assert_eq!(rejection(register(&db)), "capture_pending");
+    pin_captures(&db);
+    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Verifying);
+    assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap(), None, "the attempt ended with its candidate");
+    assert_eq!(rejection(register(&db)), "not_executing");
 }
 
 #[test]

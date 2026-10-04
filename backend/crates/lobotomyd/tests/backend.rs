@@ -8,14 +8,18 @@ use std::time::{Duration, Instant};
 
 use common::*;
 use lobotomy_core::id::now_ms;
-use lobotomy_core::task::{Abandon, CreateTask, SendMessage, StartAttempt, load_task, open_attempt};
+use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, current_config, load_project};
+use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, load_task, open_attempt};
 use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, TurnState};
+use lobotomy_core::verify::{Accept, RetryPreview, VerificationState, latest_verification, preview_stopped};
 use lobotomy_core::{Caller, Db};
-use lobotomyd::Backend;
 use lobotomyd::host::Host;
 
+/// The M1 chain: the user creates a task, Malkuth works in its slot and reports done, the runtime
+/// captures and verifies the candidate, the user accepts it, and the user's repository is
+/// fast-forwarded to the new integration version.
 #[tokio::test]
-async fn a_task_runs_to_done_through_mcp() {
+async fn a_task_runs_from_done_to_the_users_repository() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
@@ -25,12 +29,15 @@ async fn a_task_runs_to_done_through_mcp() {
     assert_eq!(turn.outcome, Some(Outcome::Completed));
     assert!(turn.done_at.is_some(), "org_report(done) reached the turn");
     assert!(turn.native_id.is_some(), "thread.started identified the session");
-    let attempt = db.read(|c| open_attempt(c, &task)).unwrap().unwrap();
-    assert_eq!(attempt.done_turn_id.as_deref(), Some(turn.id.as_str()));
     assert_eq!(std::fs::read_to_string(slot(dir.path()).join("work.txt")).unwrap(), "hi");
+    // The slot is a git clone at the integration version: the agent's git view shows its work.
+    let repo = user_repo(dir.path());
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(git(&slot(dir.path()), &["rev-parse", "HEAD"]), base);
+    assert_eq!(git(&slot(dir.path()), &["status", "--porcelain"]), "?? work.txt");
 
     // The role instructions and the per-turn MCP URL were passed.
-    let args = std::fs::read_to_string(slot(dir.path()).join("last-args.json")).unwrap();
+    let args = std::fs::read_to_string(diag(&slot(dir.path())).join("last-args.json")).unwrap();
     assert!(args.contains("你是 Malkuth") && args.contains(&turn.token), "{args}");
 
     // Items: the input, two messages and the tool call, which refers to its command record.
@@ -49,15 +56,166 @@ async fn a_task_runs_to_done_through_mcp() {
     // A clean turn leaves no raw output behind.
     assert!(!backend.project.raw_output_path(&turn.id, "jsonl").exists());
 
-    // After done the role waits for the capture; a new message does not start a turn.
+    // The capture became the candidate and passed verification.
+    phase(&db, &task, Phase::Accepting).await;
+    assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap(), None, "the attempt ended with its candidate");
+    let v = db.read(|c| latest_verification(c, &task)).unwrap().unwrap();
+    assert_eq!(v.state, VerificationState::Passed);
+    assert_eq!(v.base, base);
+
+    // While the task waits for acceptance, messages to the executor wait too.
     db.execute(
         &Caller::User,
         &SendMessage { request_id: "m1".into(), role: "Malkuth".into(), task_id: None, body: "还有一件事".into() },
     )
     .unwrap();
-    backend.project.wake.notify_one();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    settle(&backend).await;
     assert_eq!(last(&db).unwrap().id, turn.id);
+
+    let accept = Accept {
+        request_id: "a1".into(),
+        task_id: task.clone(),
+        verification_id: v.id.clone(),
+        criteria_version: 1,
+        expected_integration: base.clone(),
+    };
+    let published = db.execute(&Caller::User, &accept).unwrap();
+    backend.project.wake.notify_one();
+    wait_for("the preview", || (git(&repo, &["rev-parse", "HEAD"]) == published).then_some(())).await;
+    assert_eq!(std::fs::read_to_string(repo.join("work.txt")).unwrap(), "hi");
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+    assert_eq!(git(&repo, &["log", "-1", "--format=%an <%ae>"]), "Test User <user@example.com>");
+    let message = git(&repo, &["log", "-1", "--format=%B"]);
+    assert!(message.starts_with("测试任务\n\n完成\n\n写了 work.txt"), "{message}");
+    assert!(message.contains(&format!("Lobotomy-Task: {task}")) && message.contains("Lobotomy-Role: Malkuth"), "{message}");
+    assert_eq!(git(&repo, &["rev-parse", "HEAD~1"]), base, "one commit per accepted task");
+    wait_for("the preview to be recorded", || {
+        (db.read(load_project).unwrap().unwrap().previewed == published).then_some(())
+    })
+    .await;
+
+    // The task closed; the queued message now reaches the idle role.
+    phase(&db, &task, Phase::Done).await;
+    let next = wait_for("the next turn", || last(&db).filter(|t| t.id != turn.id && t.state == TurnState::Ended)).await;
+    assert_eq!(next.task_id, None);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+fn set_config(db: &Db, change: impl FnOnce(&mut ProjectConfig)) {
+    let (version, mut config) = db.read(current_config).unwrap();
+    change(&mut config);
+    db.execute(&Caller::User, &EditProjectConfig { request_id: format!("cfg-{version}"), expected_version: version, config })
+        .unwrap();
+}
+
+/// Checks run in the verification site on the candidate; a failing one sends it straight back to
+/// the executor with the output (harness-adapter.md §4.2).
+#[tokio::test]
+async fn checks_run_on_the_candidate_and_a_failure_goes_back_to_the_executor() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    set_config(&db, |config| {
+        config.checks = vec![
+            Check { command: r#"node -e "process.exit(require('fs').existsSync('work.txt') ? 0 : 1)""#.into(), timeout_secs: 60 },
+            Check { command: r#"node -e "console.log('two tests failed'); process.exit(3)""#.into(), timeout_secs: 60 },
+        ];
+    });
+    let task = create_task(&db, "FAKE:done");
+    let first = ended_turn(&db).await;
+
+    // The first check saw the candidate's file; the second failed, and its output went back.
+    let next = wait_for("the turn after the failed check", || {
+        last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)
+    })
+    .await;
+    assert!(next.input.contains("退出码为 3") && next.input.contains("two tests failed"), "{}", next.input);
+    assert_eq!(next.task_id.as_deref(), Some(task.as_str()));
+    assert_eq!(next.native_id, first.native_id, "the same session goes on");
+    let v = db.read(|c| latest_verification(c, &task)).unwrap().unwrap();
+    assert_eq!(v.state, VerificationState::Failed);
+    let runs: Vec<(i64, Option<i64>)> = db
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT seq, exit_code FROM check_run WHERE verification_id = ?1 ORDER BY seq")?;
+            Ok(stmt.query_map([&v.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    assert_eq!(runs, [(0, Some(0)), (1, Some(3))]);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// A check that runs too long is ended with what it started, and fails (harness-adapter.md §4.2).
+#[tokio::test]
+async fn a_check_that_runs_too_long_times_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    set_config(&db, |config| {
+        config.checks = vec![Check { command: r#"node -e "setTimeout(() => {}, 600000)""#.into(), timeout_secs: 2 }];
+    });
+    let task = create_task(&db, "FAKE:done");
+    let first = ended_turn(&db).await;
+    let next = wait_for("the turn after the timeout", || {
+        last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)
+    })
+    .await;
+    assert!(next.input.contains("超时"), "{}", next.input);
+    assert_eq!(db.read(|c| latest_verification(c, &task)).unwrap().unwrap().state, VerificationState::Failed);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// A done whose capture is over the guardrail goes back to the executor with the list; nothing
+/// was captured and the attempt goes on (harness-adapter.md §4.1).
+#[tokio::test]
+async fn an_oversized_done_goes_back_to_the_executor() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    set_config(&db, |config| config.max_new_files = 0);
+    let task = create_task(&db, "FAKE:done");
+    let first = ended_turn(&db).await;
+    let next = wait_for("the turn with the notice", || {
+        last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)
+    })
+    .await;
+    assert!(next.input.contains("work.txt") && next.input.contains("超过了项目设定的上限"), "{}", next.input);
+    let task_now = db.read(|c| load_task(c, &task)).unwrap();
+    assert_eq!(task_now.phase, Phase::Executing);
+    assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap().unwrap().seq, 1);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// The preview never writes over the user's changes: it stops, and the user retries after
+/// restoring the repository (harness-adapter.md §4.3).
+#[tokio::test]
+async fn the_preview_stops_on_local_changes_until_the_user_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    let repo = user_repo(dir.path());
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    let task = create_task(&db, "FAKE:done");
+    phase(&db, &task, Phase::Accepting).await;
+    std::fs::write(repo.join("notes.txt"), "mine").unwrap();
+    let v = db.read(|c| latest_verification(c, &task)).unwrap().unwrap();
+    let accept = Accept {
+        request_id: "a1".into(),
+        task_id: task.clone(),
+        verification_id: v.id,
+        criteria_version: 1,
+        expected_integration: base.clone(),
+    };
+    let published = db.execute(&Caller::User, &accept).unwrap();
+    backend.project.wake.notify_one();
+    let reason = wait_for("the preview to stop", || db.read(preview_stopped).unwrap()).await;
+    assert!(reason.contains("notes.txt"), "{reason}");
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), base, "nothing was written");
+    assert_eq!(std::fs::read_to_string(repo.join("notes.txt")).unwrap(), "mine");
+
+    std::fs::remove_file(repo.join("notes.txt")).unwrap();
+    db.execute(&Caller::User, &RetryPreview { request_id: "r1".into() }).unwrap();
+    backend.project.wake.notify_one();
+    wait_for("the preview", || (git(&repo, &["rev-parse", "HEAD"]) == published).then_some(())).await;
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
@@ -118,9 +276,9 @@ async fn a_turn_left_registered_by_the_last_run_is_reconciled_as_interrupted() {
     let dir = tempfile::tempdir().unwrap();
     {
         // The last run registered a turn and stopped before starting the CLI.
-        let project = open_project(dir.path(), fake_codex());
+        let project = open_project(dir.path(), fake_codex()).await;
         create_task(&project.db, "FAKE:done");
-        project.db.execute(&Caller::Runtime, &StartAttempt { task_id: next_task(&project.db) }).unwrap();
+        start_attempt(&project, &next_task(&project.db)).await;
         project.db.execute(&Caller::Runtime, &RegisterTurn { role: "Malkuth".into() }).unwrap();
     }
     let backend = start(dir.path()).await;
@@ -163,7 +321,7 @@ async fn a_large_field_is_stored_even_when_its_blob_cannot_be_written() {
 #[ignore = "runs a real Codex turn"]
 async fn a_real_codex_turn_reports_done() {
     let dir = tempfile::tempdir().unwrap();
-    let backend = Backend::start(Arc::new(open_project(dir.path(), real_codex())), 0).await.unwrap();
+    let backend = start_with(dir.path(), real_codex()).await;
     let db = backend.project.db.clone();
     db.execute(
         &Caller::User,
@@ -198,6 +356,10 @@ async fn a_real_codex_turn_reports_done() {
     assert!(items.iter().any(|(kind, id)| kind == "mcp_call" && id.is_some()), "the call refers to its command record");
     let hello = std::fs::read_to_string(slot(dir.path()).join("hello.txt")).unwrap();
     assert_eq!(hello.trim(), "hi");
+    // Codex leaves nothing else in the slot that a capture would pick up.
+    assert_eq!(git(&slot(dir.path()), &["status", "--porcelain", "--untracked-files=all"]), "?? hello.txt");
+    let task = turn.task_id.clone().unwrap();
+    phase(&db, &task, Phase::Accepting).await;
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
@@ -228,9 +390,9 @@ async fn after_recovery_a_quota_failed_role_waits_for_the_user() {
     let dir = tempfile::tempdir().unwrap();
     {
         // The last turn failed for quota and blocked the domain.
-        let project = open_project(dir.path(), fake_codex());
+        let project = open_project(dir.path(), fake_codex()).await;
         let task = create_task(&project.db, "FAKE:done");
-        project.db.execute(&Caller::Runtime, &StartAttempt { task_id: task }).unwrap();
+        start_attempt(&project, &task).await;
         let turn = project.db.execute(&Caller::Runtime, &RegisterTurn { role: "Malkuth".into() }).unwrap();
         let failure = Failure { kind: FailureKind::Quota, message: "limit".into(), resets_at: None };
         let end = EndTurn { turn_id: turn.turn_id, outcome: Outcome::Failed, failure: Some(failure) };

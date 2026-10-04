@@ -9,7 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{OptionalExtension, Transaction, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -29,7 +29,7 @@ pub struct BlobStore {
 }
 
 /// A file written to the blob store, waiting for its row.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Blob {
     pub hash: String,
     pub size: i64,
@@ -126,6 +126,17 @@ pub fn externalize(store: &BlobStore, content: &mut Value) -> Vec<Blob> {
     blobs
 }
 
+/// Inserts the rows of blobs [`externalize`] wrote, in the transaction that references them.
+pub fn record_blobs(tx: &Transaction<'_>, blobs: &[Blob], now: i64) -> Result<()> {
+    for blob in blobs {
+        tx.execute(
+            "INSERT OR IGNORE INTO blob (hash, size, head, tail, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![blob.hash, blob.size, blob.head, blob.tail, now],
+        )?;
+    }
+    Ok(())
+}
+
 /// One transcript item to store.
 #[derive(Clone, Debug)]
 pub struct NewItem<'a> {
@@ -172,12 +183,7 @@ pub fn record_item(tx: &Transaction<'_>, item: &NewItem<'_>, blobs: &[Blob], now
             return Ok(None);
         }
     }
-    for blob in blobs {
-        tx.execute(
-            "INSERT OR IGNORE INTO blob (hash, size, head, tail, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![blob.hash, blob.size, blob.head, blob.tail, now],
-        )?;
-    }
+    record_blobs(tx, blobs, now)?;
     let thread_id = thread_of(tx, item.role)?;
     let seq: i64 =
         tx.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM item WHERE thread_id = ?1", [&thread_id], |r| r.get(0))?;

@@ -10,14 +10,16 @@
 // Flags placed before Codex's own arguments change the process itself:
 //   --fake-stderr-flood  writes 4 MiB to stderr first and waits until it is read
 //   --fake-hang          never finishes on its own
-// Every run writes the environment it sees to last-env.json in its cwd.
+// Every run writes the environment it sees to last-env.json and its arguments to last-args.json,
+// inside .git when its cwd is a slot (so captures do not pick them up), else in its cwd.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 
 const args = process.argv.slice(2);
 const flags = new Set(args.filter(a => a.startsWith('--fake-')));
+const diag = fs.existsSync('.git') ? '.git/' : '';
 const watched = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_CONFIG_DIR'];
-fs.writeFileSync('last-env.json', JSON.stringify(Object.fromEntries(watched.map(k => [k, process.env[k] ?? null]))));
+fs.writeFileSync(`${diag}last-env.json`, JSON.stringify(Object.fromEntries(watched.map(k => [k, process.env[k] ?? null]))));
 const config = name => {
   const i = args.findIndex((a, j) => args[j - 1] === '-c' && a.startsWith(`${name}=`));
   return i < 0 ? undefined : JSON.parse(args[i].slice(name.length + 1));
@@ -25,7 +27,7 @@ const config = name => {
 const resumeAt = args.indexOf('resume');
 const threadId = resumeAt >= 0 ? args[resumeAt + 1] : crypto.randomUUID();
 const url = config('mcp_servers.lobotomy.url');
-fs.writeFileSync('last-args.json', JSON.stringify(args));
+fs.writeFileSync(`${diag}last-args.json`, JSON.stringify(args));
 
 const emit = event => process.stdout.write(JSON.stringify(event) + '\n');
 let input = '';
