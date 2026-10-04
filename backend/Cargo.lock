@@ -616,6 +616,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lobotomy-harness"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "windows-sys",
+]
+
+[[package]]
 name = "lobotomyd"
 version = "0.1.0"
 dependencies = [

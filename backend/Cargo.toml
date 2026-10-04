@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/lobotomyd"]
+members = ["crates/core", "crates/harness", "crates/lobotomyd"]
 
 [workspace.package]
 edition = "2024"
@@ -9,7 +9,9 @@ publish = false
 
 [workspace.dependencies]
 lobotomy-core = { path = "crates/core" }
+lobotomy-harness = { path = "crates/harness" }
 anyhow = "1"
+libc = "0.2"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 http = "1"
 rmcp = { version = "3.5", features = ["transport-streamable-http-server"] }
@@ -25,3 +27,10 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ulid = "3"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
