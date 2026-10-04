@@ -131,6 +131,8 @@ CI 中固定运行合成场景（参照 OpenHands 的 `BENCH_MESSAGES` 与 Goose
 
 测量输入延迟、主线程停顿、内存、状态滞后与重新同步情况。先建立基线，再据结果确定预算（#6 §5）。
 
+M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baseline.md)。仓库还没有 CI，目前在本机运行 `npm run bench`。
+
 ## 6. 未决
 
 - Thread 的单位、序号方案和 SQLite schema，在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论，结果写入 [data-model.md](data-model.md)。Thread 与会议的关系留到 M3。
@@ -174,6 +176,7 @@ CI 中固定运行合成场景（参照 OpenHands 的 `BENCH_MESSAGES` 与 Goose
 - 长输出只显示开头 6 行与结尾 18 行，全文在查看器中打开。输出块自身不再滚动，只有对话与任务面板滚动。
 
 **Electron**：`frontend/electron/`，按 §1 的启停方式实现。项目目录记在 host 目录的 `gui.json` 中。
+- 后端每次启动都换一个端口。窗口断线后，每次重连前都向主进程询问后端当前的地址：主进程读取 `backend.json` 并确认能连上。如果后端没有在运行，主进程不会启动它；要重新启动，由用户重开应用。
 
 **运行（从源码）**：
 
@@ -190,7 +193,10 @@ CI 中固定运行合成场景（参照 OpenHands 的 `BENCH_MESSAGES` 与 Goose
   - turn 失败后继续；继续的 turn 没有报告时出现"还没有完成"，在任务面板放弃；
 - Electron 外壳测试覆盖：没有项目时的接入、启动后端、退出时停止组织；
 - Electron 被强制结束后后端仍在运行：手动验证过（Windows）。
-- 断线重连后重新同步还没有自动测试。
+- 重连与重新同步：
+  - Electron 测试覆盖后端换端口重启后窗口自动重连；
+  - 后端测试覆盖读得慢的客户端收到 `resync`；
+  - 性能基线测量后端重启后 GUI 恢复的时间。
 
 **限制**：
 - 搜索与性能基线在第 5 个增量。

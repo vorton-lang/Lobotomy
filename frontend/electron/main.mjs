@@ -89,6 +89,15 @@ ipcMain.handle('lobotomy:connection', async () => {
   return { url: `ws://127.0.0.1:${port}/gui`, token: token() };
 });
 
+// While the window reconnects: a backend that restarted listens on another port. One that is not
+// running is not started here; the user decides that by restarting the app.
+ipcMain.handle('lobotomy:find', async () => {
+  const dir = projectDir();
+  const info = dir && readJson(path.join(dir, 'backend.json'));
+  if (!info || !(await reachable(info.port))) return null;
+  return { url: `ws://127.0.0.1:${info.port}/gui`, token: token() };
+});
+
 ipcMain.handle('lobotomy:chooseRepo', async () => {
   const result = await dialog.showOpenDialog(window, { title: '选择仓库', properties: ['openDirectory'] });
   if (result.canceled || result.filePaths.length === 0) return null;

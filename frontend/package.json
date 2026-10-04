@@ -11,7 +11,8 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "app": "vite build && electron .",
-    "app:dev": "electron . --dev"
+    "app:dev": "electron . --dev",
+    "bench": "vite build && playwright test -c bench/bench.config.ts"
   },
   "dependencies": {
     "@codemirror/state": "^6.7.6",

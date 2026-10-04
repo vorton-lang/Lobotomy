@@ -227,6 +227,31 @@ async fn a_turn_without_a_report_leaves_the_task_to_the_user() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// A client that falls further behind than the push buffer is told to take a new snapshot rather
+/// than silently missing pushes (frontend.md §3).
+#[tokio::test]
+async fn a_client_that_falls_behind_is_told_to_resync() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let mut gui = Client::connect(&backend).await;
+    gui.call("snapshot", json!({})).await.unwrap();
+    // The test's runtime has one thread: the session cannot forward any of these until the test
+    // awaits, so it falls behind by more than the buffer holds.
+    for seq in 0..lobotomyd::gui::PUSH_BUFFER + 100 {
+        let push = json!({ "type": "thread", "role": "Malkuth", "seq": seq }).to_string();
+        let _ = backend.project.gui_push.send(push.into());
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let message = tokio::time::timeout_at(deadline, gui.socket.next()).await.expect("no resync").unwrap().unwrap();
+        let Message::Text(text) = message else { continue };
+        if serde_json::from_str::<Value>(&text).unwrap()["type"] == "resync" {
+            break;
+        }
+    }
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 #[tokio::test]
 async fn the_gui_can_stop_the_backend() {
     let dir = tempfile::tempdir().unwrap();

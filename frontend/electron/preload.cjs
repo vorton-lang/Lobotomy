@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('lobotomy', {
   connection: () => ipcRenderer.invoke('lobotomy:connection'),
+  find: () => ipcRenderer.invoke('lobotomy:find'),
   chooseRepo: () => ipcRenderer.invoke('lobotomy:chooseRepo'),
   setAttention: (count) => ipcRenderer.send('lobotomy:attention', count),
   openExternal: (url) => ipcRenderer.send('lobotomy:openExternal', url),

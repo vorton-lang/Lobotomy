@@ -8,6 +8,7 @@
 //   FAKE:sleep  starts a turn and waits; Ctrl+C ends it without a turn end event
 //   FAKE:big    emits a command item with 200 KiB of output
 //   FAKE:refused  emits an org_report call that Codex refused, then completes the turn
+//   FAKE:many=…, FAKE:huge, …  synthetic turns for the performance baseline (fake-bench.mjs)
 //   otherwise   completes the turn with a message
 // Flags placed before Codex's own arguments change the process itself:
 //   --fake-stderr-flood  writes 4 MiB to stderr first and waits until it is read
@@ -18,6 +19,7 @@
 // inside .git when its cwd is a slot (so captures do not pick them up), else in its cwd.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { bench } from './fake-bench.mjs';
 
 const args = process.argv.slice(2);
 const flags = new Set(args.filter(a => a.startsWith('--fake-')));
@@ -61,6 +63,8 @@ if (input.includes('FAKE:sleep')) {
   await new Promise(r => setTimeout(r, 120_000));
   process.exit(0);
 }
+
+await bench(input, emit);
 
 if (input.includes('FAKE:big')) {
   const output = 'y'.repeat(200 * 1024);

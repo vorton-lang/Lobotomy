@@ -37,9 +37,14 @@ export class Connection {
   private attempts = 0;
   private closed = false;
 
+  /**
+   * `locate` finds the backend again before each reconnection: a restarted backend listens on a
+   * new port. Without it, or when it finds nothing, the last address is tried again.
+   */
   constructor(
-    private readonly url: string,
+    private url: string,
     private readonly events: ConnectionEvents,
+    private readonly locate?: () => Promise<string | null>,
   ) {}
 
   start() {
@@ -100,7 +105,11 @@ export class Connection {
       this.events.status('closed');
       if (this.closed) return;
       const delay = RETRY_MS[Math.min(this.attempts++, RETRY_MS.length - 1)];
-      setTimeout(() => this.open(), delay);
+      setTimeout(async () => {
+        const found = await this.locate?.().catch(() => null);
+        if (found) this.url = found;
+        if (!this.closed) this.open();
+      }, delay);
     };
   }
 }

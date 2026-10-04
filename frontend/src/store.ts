@@ -3,6 +3,7 @@
 
 import { create } from 'zustand';
 import { Connection, RequestFailed, type Status } from './api/connection';
+import { findBackend } from './bridge';
 import type { CommandRow, Item, LiveTurn, Message, Push, Snapshot, TaskDetail, ThreadPage, Turn } from './api/types';
 
 export interface ThreadState {
@@ -59,11 +60,15 @@ let connection: Connection | null = null;
 
 export function connect(url: string) {
   connection?.stop();
-  connection = new Connection(url, {
-    status: (status) => useStore.setState({ status }),
-    opened: () => void reloadAll(),
-    push: onPush,
-  });
+  connection = new Connection(
+    url,
+    {
+      status: (status) => useStore.setState({ status }),
+      opened: () => void reloadAll(),
+      push: onPush,
+    },
+    findBackend,
+  );
   connection.start();
 }
 
