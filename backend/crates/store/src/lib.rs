@@ -5,6 +5,7 @@
 //! git-backed jj store inside Lobotomy's data directory. Working directories are only execution
 //! sites. jj's types stay inside this crate; callers see commit ids as hex strings.
 
+mod eol;
 mod error;
 mod git;
 pub mod repo;

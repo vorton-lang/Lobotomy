@@ -57,6 +57,26 @@ impl<'a> Git<'a> {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
     }
 
+    /// Runs git with `input` on stdin and extra environment variables; returns raw stdout.
+    pub fn run_with_input(&self, args: &[&str], input: &[u8], env: &[(&str, &str)]) -> Result<Vec<u8>> {
+        use std::io::Write as _;
+        use std::process::Stdio;
+        let error = |message: String| Error::Git { args: args.join(" "), message };
+        let mut cmd = self.command(args);
+        cmd.envs(env.iter().copied()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| error(e.to_string()))?;
+        let mut stdin = child.stdin.take().expect("stdin is piped");
+        // Writing on another thread: git may fill stdout before it has read all of stdin.
+        let input = input.to_vec();
+        let writer = std::thread::spawn(move || stdin.write_all(&input));
+        let out = child.wait_with_output().map_err(|e| error(e.to_string()))?;
+        writer.join().expect("the stdin writer does not panic").map_err(|e| error(e.to_string()))?;
+        if !out.status.success() {
+            return Err(error(String::from_utf8_lossy(&out.stderr).trim().to_owned()));
+        }
+        Ok(out.stdout)
+    }
+
     /// Runs git where exit code 1 means "no such thing", as for `config` or `symbolic-ref -q`.
     pub fn optional(&self, args: &[&str]) -> Result<Option<String>> {
         let out = self.output(args)?;

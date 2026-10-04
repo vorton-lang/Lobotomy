@@ -1874,6 +1874,7 @@ dependencies = [
 name = "lobotomy-store"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gix",
  "jj-lib",
  "pollster",

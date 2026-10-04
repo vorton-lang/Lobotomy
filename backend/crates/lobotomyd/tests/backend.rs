@@ -55,8 +55,9 @@ async fn a_task_runs_from_done_to_the_users_repository() {
     assert!(command_id.as_deref().is_some_and(|id| id.starts_with("cmd_")));
     assert!(!content.contains("arguments"), "the call's arguments live in the command record only: {content}");
 
-    // A clean turn leaves no raw output behind.
-    assert!(!backend.project.raw_output_path(&turn.id, "jsonl").exists());
+    // A clean turn leaves no raw output behind. The runner deletes it after ending the turn.
+    let raw = backend.project.raw_output_path(&turn.id, "jsonl");
+    wait_for("the raw output to go", || (!raw.exists()).then_some(())).await;
 
     // The capture became the candidate and passed verification.
     phase(&db, &task, Phase::Accepting).await;
@@ -343,7 +344,9 @@ async fn a_large_field_is_stored_even_when_its_blob_cannot_be_written() {
         })
         .unwrap();
     assert_eq!(output.len(), 200 * 1024);
-    assert!(!backend.project.raw_output_path(&turn.id, "jsonl").exists(), "nothing is missing, so the raw output goes");
+    // Nothing is missing, so the raw output goes once the runner is done.
+    let raw = backend.project.raw_output_path(&turn.id, "jsonl");
+    wait_for("the raw output to go", || (!raw.exists()).then_some(())).await;
     backend.shutdown(Duration::from_secs(5)).await;
 }
 

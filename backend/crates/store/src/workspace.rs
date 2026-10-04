@@ -15,6 +15,7 @@ use jj_lib::working_copy::{SnapshotOptions, UntrackedReason};
 use pollster::FutureExt as _;
 use serde::{Deserialize, Serialize};
 
+use crate::eol;
 use crate::error::{Error, Result};
 use crate::git::Git;
 use crate::store::{Identity, Store, path_arg};
@@ -126,11 +127,15 @@ impl Workspace {
         let fresh = !self.path.join(".git").exists();
         if fresh {
             fs::create_dir_all(&self.path).map_err(Error::io(&self.path))?;
-            Git::at(&self.path).run(&["init", "--quiet", "--initial-branch", branch])?;
-            // Files are stored and written byte for byte. git must not convert line endings
-            // either, whatever the user's or the system's config says, or the agent's `git diff`
-            // would disagree with what is captured.
-            Git::at(&self.path).run(&["config", "core.autocrlf", "false"])?;
+            let git = Git::at(&self.path);
+            git.run(&["init", "--quiet", "--initial-branch", branch])?;
+            // Line endings follow the repository (see `eol`). git in the slot must apply the
+            // repository's `.gitattributes` and nothing from the machine, or the agent's `git
+            // diff` and `git checkout` would disagree with what is captured.
+            git.run(&["config", "core.autocrlf", "false"])?;
+            git.run(&["config", "core.eol", "lf"])?;
+            let no_attributes = self.path.join(".git").join("info").join("no-global-attributes");
+            git.run(&["config", "core.attributesFile", &path_arg(&no_attributes)])?;
             let alternates = self.path.join(".git").join("objects").join("info").join("alternates");
             let objects = store.git_dir().join("objects");
             fs::write(&alternates, format!("{}\n", path_arg(&objects))).map_err(Error::io(&alternates))?;
@@ -153,11 +158,13 @@ impl Workspace {
             fs::remove_file(&disk).map_err(Error::io(&disk))?;
         }
         let target = store.commit(target)?;
+        let before = tree_state.current_tree().clone();
         let checkout = tree_state.check_out(&target.tree()).map_err(Error::jj)?;
         tree_state.save().map_err(Error::jj)?;
         if checkout.skipped_files > 0 {
             return Err(Error::Blocked(checkout.skipped_files));
         }
+        eol::apply_to_worktree(store, &self.path, &before, &target.tree())?;
 
         let git = Git::at(&self.path);
         let reference = format!("refs/heads/{branch}");
@@ -214,6 +221,7 @@ impl Workspace {
             force_tracking_matcher: &matchers.force,
             max_new_file_size: u64::MAX,
         };
+        let before = tree_state.current_tree().clone();
         let (_, stats) = tree_state.snapshot(&options).block_on().map_err(Error::jj)?;
         if !leave.new_files
             && let Some((path, reason)) = stats.untracked_paths.iter().next()
@@ -235,6 +243,11 @@ impl Workspace {
             return Ok(Captured::Uncovered { paths });
         }
         let parent = store.commit(base)?;
+        let after = tree_state.current_tree().clone();
+        if let Some(normalized) = eol::normalize_capture(store, &self.path, &before, &after, &parent.tree())? {
+            // The rewritten files are read again at the next snapshot.
+            tree_state.reset(&normalized).block_on().map_err(Error::jj)?;
+        }
         let commit = store.write_commit(&parent, tree_state.current_tree().clone(), &format!("capture {pin}"), &Identity::runtime())?;
         store.pin(pin, &commit)?;
         tree_state.save().map_err(Error::jj)?;

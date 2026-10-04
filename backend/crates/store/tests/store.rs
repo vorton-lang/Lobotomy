@@ -31,6 +31,8 @@ fn fixture() -> Fixture {
     git(&user_repo, &["config", "user.email", "user@example.com"]);
     git(&user_repo, &["config", "core.autocrlf", "false"]);
     fs::write(user_repo.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    // A file the repository holds with CRLF, without declaring it.
+    fs::write(user_repo.join("win.txt"), "one\r\ntwo\r\n").unwrap();
     fs::write(user_repo.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
     fs::write(user_repo.join(".gitignore"), "target/\n").unwrap();
     git(&user_repo, &["add", "."]);
@@ -237,21 +239,71 @@ fn rematerializing_keeps_ignored_caches_and_drops_uncaptured_files() {
 }
 
 #[test]
-fn line_endings_are_captured_as_written() {
+fn undeclared_files_keep_the_line_endings_they_have_in_the_repository() {
     let f = fixture();
     let slot = f.workspace("worker");
     slot.materialize(&f.store, &f.head, &f.head, "main", &scope()).unwrap();
-    fs::write(slot.path.join("a.txt"), "one\r\ntwo\r\nthree\r\n").unwrap();
+    // A Windows tool rewrites an LF file with CRLF; a patch tool inserts an LF line into a CRLF
+    // file; a new file comes out with CRLF.
+    fs::write(slot.path.join("a.txt"), "one\r\nTWO\r\nthree\r\n").unwrap();
+    fs::write(slot.path.join("win.txt"), "one\r\ninserted\ntwo\r\n").unwrap();
+    fs::write(slot.path.join("new.txt"), "new\r\n").unwrap();
     let commit = capture(&f, &slot, &f.head, "cap_1");
+
     let check = f.workspace("verify");
     check.materialize(&f.store, &commit, &f.head, "main", &scope()).unwrap();
-    assert_eq!(fs::read(check.path.join("a.txt")).unwrap(), b"one\r\ntwo\r\nthree\r\n");
+    assert_eq!(fs::read(check.path.join("a.txt")).unwrap(), b"one\nTWO\nthree\n");
+    assert_eq!(fs::read(check.path.join("win.txt")).unwrap(), b"one\r\ninserted\r\ntwo\r\n");
+    assert_eq!(fs::read(check.path.join("new.txt")).unwrap(), b"new\n");
 
-    // The slot's git agrees, whatever the system's core.autocrlf says: `git diff` shows the
-    // change jj captured, and restoring a file through git writes the stored bytes back.
-    assert!(git(&slot.path, &["diff", "--stat"]).contains("a.txt"));
+    // The slot holds what was captured, so the agent's git shows only the real change.
+    assert_eq!(fs::read(slot.path.join("a.txt")).unwrap(), b"one\nTWO\nthree\n");
+    assert_eq!(git(&slot.path, &["diff", "--numstat", "--", "a.txt"]), "1\t1\ta.txt");
+    assert_eq!(git(&slot.path, &["diff", "--numstat", "--", "win.txt"]), "1\t0\twin.txt");
+    // Restoring through git writes the stored bytes, whatever the machine's git config says.
     git(&slot.path, &["checkout", "--", "a.txt"]);
     assert_eq!(fs::read(slot.path.join("a.txt")).unwrap(), b"one\ntwo\nthree\n");
+}
+
+#[test]
+fn declared_line_endings_follow_gitattributes() {
+    let f = fixture();
+    let slot = f.workspace("worker");
+    slot.materialize(&f.store, &f.head, &f.head, "main", &scope()).unwrap();
+    // The rules apply as soon as they are in the working tree, like .gitignore.
+    fs::write(slot.path.join(".gitattributes"), "* text=auto\n*.bat text eol=crlf\n*.dat -text\n").unwrap();
+    fs::write(slot.path.join("run.bat"), "@echo off\r\necho hi\r\n").unwrap();
+    fs::write(slot.path.join("raw.dat"), "x\r\ny\n").unwrap();
+    fs::write(slot.path.join("notes.txt"), "a\r\nb\r\n").unwrap();
+    let first = capture(&f, &slot, &f.head, "cap_1");
+    let declared = f.store.compose(&first, &f.head, "attributes", &Identity::runtime(), "ver_1").unwrap().commit;
+
+    // Stored: declared text with LF, -text as written.
+    let check = f.workspace("verify");
+    check.materialize(&f.store, &declared, &declared, "main", &scope()).unwrap();
+    assert_eq!(git(&check.path, &["show", "HEAD:run.bat"]), "@echo off\necho hi");
+    assert_eq!(git(&check.path, &["cat-file", "blob", "HEAD:notes.txt"]), "a\nb");
+    assert_eq!(fs::read(check.path.join("raw.dat")).unwrap(), b"x\r\ny\n");
+    // Written: eol=crlf files with CRLF, the rest as stored. git sees a clean tree.
+    assert_eq!(fs::read(check.path.join("run.bat")).unwrap(), b"@echo off\r\necho hi\r\n");
+    assert_eq!(fs::read(check.path.join("notes.txt")).unwrap(), b"a\nb\n");
+    assert_eq!(git(&check.path, &["status", "--porcelain"]), "");
+
+    // A turn that edits the .bat file with CRLF changes only the edited line in the result, and a
+    // capture that touches nothing changes nothing.
+    let next = f.workspace("next");
+    next.materialize(&f.store, &declared, &declared, "main", &scope()).unwrap();
+    let untouched = capture(&f, &next, &declared, "cap_2");
+    assert!(f.store.same_tree(&untouched, &declared).unwrap());
+    fs::write(next.path.join("run.bat"), "@echo off\r\necho bye\r\n").unwrap();
+    let edited = capture(&f, &next, &declared, "cap_3");
+    check.materialize(&f.store, &edited, &declared, "main", &scope()).unwrap();
+    assert_eq!(git(&check.path, &["diff", "--numstat", "HEAD"]), "1\t1\trun.bat");
+
+    // Restoring a declared text file through git in the slot writes LF on every machine.
+    fs::write(next.path.join("notes.txt"), "changed\n").unwrap();
+    git(&next.path, &["checkout", "--", "notes.txt"]);
+    assert_eq!(fs::read(next.path.join("notes.txt")).unwrap(), b"a\nb\n");
 }
 
 #[test]

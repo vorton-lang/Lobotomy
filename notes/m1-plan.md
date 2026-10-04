@@ -57,6 +57,6 @@ frontend/                Electron + React + TypeScript
      - 物化、采集、验证出错后停下，等用户重试；
      - 没有任务时，槽位跟随集成版本。
    - 待真实项目观察：体积护栏的阈值。
-   - 不转换换行符，槽位中的 git 也关闭 `autocrlf`（harness-adapter.md §3，用户确认）。
+   - 换行跟着仓库走：按 `.gitattributes` 与文件现有的换行，不受机器配置影响（harness-adapter.md §3，用户确认）。
 4. **GUI**：WebSocket 协议（快照加序号、增量、命令）；React 界面（建任务、Malkuth 的 Thread、候选成果的 diff、验收与退回、turn 与额度状态）；Electron 外壳。
 5. **端到端与性能基线**：用一个真实的小仓库走通 M1 链路；性能基线框架（frontend.md §5）。
