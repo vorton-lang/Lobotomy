@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lobotomy_core::task::{CreateTask, SendMessage, open_attempt};
-use lobotomy_core::turn::{Continue, Outcome, Turn, TurnState, last_turn};
+use lobotomy_core::id::now_ms;
+use lobotomy_core::task::{CreateTask, SendMessage, SetPaused, StartAttempt, load_task, open_attempt};
+use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, Turn, TurnState, last_turn};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::Backend;
-use lobotomyd::project::{HarnessConfig, Project};
+use lobotomyd::host::{HarnessConfig, Host};
+use lobotomyd::project::Project;
 
 fn fake_codex() -> HarnessConfig {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("fake-codex.mjs");
@@ -20,9 +22,13 @@ fn fake_codex() -> HarnessConfig {
     }
 }
 
+fn open_project(dir: &Path, harness: HarnessConfig) -> Project {
+    let host = Arc::new(Host::open(&dir.join("host"), harness).unwrap());
+    Project::open(&dir.join("project"), host).unwrap()
+}
+
 async fn start(dir: &Path) -> Backend {
-    let project = Arc::new(Project::open(dir, fake_codex()).unwrap());
-    Backend::start(project, 0).await.unwrap()
+    Backend::start(Arc::new(open_project(dir, fake_codex())), 0).await.unwrap()
 }
 
 fn create_task(db: &Db, body: &str) -> String {
@@ -60,7 +66,13 @@ async fn ended_turn(db: &Db) -> Turn {
 }
 
 fn slot(dir: &Path) -> PathBuf {
-    dir.join("slots").join("worker")
+    dir.join("project").join("slots").join("worker")
+}
+
+/// Lets the scheduler run a few rounds.
+async fn settle(backend: &Backend) {
+    backend.project.wake.notify_one();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 }
 
 #[tokio::test]
@@ -167,10 +179,10 @@ async fn a_turn_left_registered_by_the_last_run_is_reconciled_as_interrupted() {
     let dir = tempfile::tempdir().unwrap();
     {
         // The last run registered a turn and stopped before starting the CLI.
-        let project = Project::open(dir.path(), fake_codex()).unwrap();
+        let project = open_project(dir.path(), fake_codex());
         create_task(&project.db, "FAKE:done");
-        project.db.execute(&Caller::Runtime, &lobotomy_core::task::StartAttempt { task_id: next_task(&project.db) }).unwrap();
-        project.db.execute(&Caller::Runtime, &lobotomy_core::turn::RegisterTurn { role: "Malkuth".into() }).unwrap();
+        project.db.execute(&Caller::Runtime, &StartAttempt { task_id: next_task(&project.db) }).unwrap();
+        project.db.execute(&Caller::Runtime, &RegisterTurn { role: "Malkuth".into() }).unwrap();
     }
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
@@ -190,7 +202,7 @@ async fn a_real_codex_turn_reports_done() {
         interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
         codex_reasoning_effort: Some("low".into()),
     };
-    let backend = Backend::start(Arc::new(Project::open(dir.path(), harness).unwrap()), 0).await.unwrap();
+    let backend = Backend::start(Arc::new(open_project(dir.path(), harness)), 0).await.unwrap();
     let db = backend.project.db.clone();
     db.execute(
         &Caller::User,
@@ -214,7 +226,7 @@ async fn a_real_codex_turn_reports_done() {
     // Role sessions persist so they can resume; this one is a test, so keep it out of the
     // user's Codex history.
     if let Some(session) = &turn.native_id {
-        let deleted = std::process::Command::new(&backend.project.harness.codex[0])
+        let deleted = std::process::Command::new(&backend.project.host.harness.codex[0])
             .args(["delete", "--force", session])
             .output()
             .map(|out| out.status.success());
@@ -226,6 +238,77 @@ async fn a_real_codex_turn_reports_done() {
     let hello = std::fs::read_to_string(slot(dir.path()).join("hello.txt")).unwrap();
     assert_eq!(hello.trim(), "hi");
     backend.shutdown(Duration::from_secs(5)).await;
+}
+
+#[tokio::test]
+async fn a_blocked_quota_domain_starts_nothing_until_a_retry_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    let host = backend.project.host.clone();
+    // Unknown reset time: no automatic check is planned (data-model.md §8.4).
+    host.db.block("codex", None, "limit", now_ms()).unwrap();
+    let task = create_task(&db, "FAKE:done");
+    settle(&backend).await;
+    assert!(last(&db).is_none(), "no turn while the domain is blocked");
+    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Queued);
+
+    // The user's retry runs a check (the fake completes it) and opens the domain.
+    let domain = host.retry("codex").await.unwrap();
+    assert!(!domain.is_blocked());
+    backend.project.wake.notify_one();
+    let turn = ended_turn(&db).await;
+    assert_eq!(turn.outcome, Some(Outcome::Completed));
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+#[tokio::test]
+async fn a_quota_failed_role_continues_after_recovery_unless_paused() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = {
+        // The last turn failed for quota and blocked the domain.
+        let project = open_project(dir.path(), fake_codex());
+        let task = create_task(&project.db, "FAKE:done");
+        project.db.execute(&Caller::Runtime, &StartAttempt { task_id: task.clone() }).unwrap();
+        let turn = project.db.execute(&Caller::Runtime, &RegisterTurn { role: "Malkuth".into() }).unwrap();
+        let failure = Failure { kind: FailureKind::Quota, message: "limit".into(), resets_at: None };
+        let end = EndTurn { turn_id: turn.turn_id, outcome: Outcome::Failed, failure: Some(failure) };
+        project.db.execute(&Caller::Runtime, &end).unwrap();
+        project.host.db.block("codex", None, "limit", now_ms()).unwrap();
+        task
+    };
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    let failed = last(&db).unwrap();
+    db.execute(&Caller::User, &SetPaused { request_id: "p1".into(), task_id: task.clone(), paused: true }).unwrap();
+
+    backend.project.host.retry("codex").await.unwrap();
+    settle(&backend).await;
+    assert_eq!(last(&db).unwrap().id, failed.id, "a paused task does not continue on its own");
+
+    db.execute(&Caller::User, &SetPaused { request_id: "p2".into(), task_id: task, paused: false }).unwrap();
+    backend.project.wake.notify_one();
+    let next = wait_for("the automatic continue", || {
+        last(&db).filter(|t| t.id != failed.id && t.state == TurnState::Ended)
+    })
+    .await;
+    assert!(next.input.contains("额度不足"), "{}", next.input);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// The quota check call against the real Codex: `--ephemeral`, outside every role session.
+#[tokio::test]
+#[ignore = "runs a real Codex call"]
+async fn a_real_quota_check_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let harness = HarnessConfig {
+        codex: vec![lobotomy_harness::codex::locate().to_string_lossy().into_owned()],
+        interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
+        codex_reasoning_effort: None,
+    };
+    let host = Arc::new(Host::open(dir.path(), harness).unwrap());
+    host.db.block("codex", None, "test", now_ms()).unwrap();
+    assert!(!host.retry("codex").await.unwrap().is_blocked());
 }
 
 fn next_task(db: &Db) -> String {

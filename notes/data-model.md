@@ -404,6 +404,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
   - 系统通知的投递；
   - 后端的监听端口与 GUI 连接。
 - 多项目时，role（含 Manager）不跨项目共享，每个项目一套（用户确认，2026-10-04）。role 的 native session、Thread、槽位都属于项目实例。
+- **实现**（2026-10-04）：外层是 `Host` 对象，项目实例持有它的引用。外层状态存在独立的 `host.db` 中，目录默认为 `%LOCALAPPDATA%\Lobotomy`（Linux 为 `$XDG_STATE_HOME/lobotomy` 或 `~/.local/state/lobotomy`），可用 `--host-dir` 指定。目前存放额度域与 CLI 配置。"同一额度域同时最多一次检查"目前在进程内保证，多实例时再改为跨进程。
 
 ## 11. 未定
 

@@ -79,7 +79,7 @@ pub async fn interrupt(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<
         turn.interrupt_requested = true;
         turn.pid.context("the CLI has not started yet")?
     };
-    process::interrupt(pid, &project.harness.interrupt_helper).await?;
+    process::interrupt(pid, &project.host.harness.interrupt_helper).await?;
     Ok(())
 }
 
@@ -110,7 +110,17 @@ struct Observed {
 
 async fn end(project: &Arc<Project>, turn_id: &str, outcome: Outcome, failure: Option<(FailureKind, String)>) -> anyhow::Result<()> {
     let failure = failure.map(|(kind, message)| Failure { kind, message, resets_at: None });
-    runtime(project, EndTurn { turn_id: turn_id.to_owned(), outcome, failure }).await
+    let quota = failure.clone().filter(|f| f.kind == FailureKind::Quota);
+    runtime(project, EndTurn { turn_id: turn_id.to_owned(), outcome, failure }).await?;
+    // A quota rejection blocks the whole domain, not just this role (data-model.md §8.3).
+    if let Some(failure) = quota {
+        let id = turn_id.to_owned();
+        let harness = db(project, move |db| db.read(|c| load_turn(c, &id))).await?.harness;
+        if project.host.db.block(&harness, failure.resets_at, &failure.message, now_ms())? {
+            tracing::warn!(harness, message = failure.message, "quota domain blocked");
+        }
+    }
+    Ok(())
 }
 
 async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
@@ -131,11 +141,11 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let turn_args = TurnArgs {
         resume: turn.native_id.clone(),
         model: role.model.clone(),
-        reasoning_effort: project.harness.codex_reasoning_effort.clone(),
+        reasoning_effort: project.host.harness.codex_reasoning_effort.clone(),
         developer_instructions: instructions(&role),
         mcp_url: project.mcp_url(&turn.token),
     };
-    let (program, prefix) = project.harness.codex.split_first().context("no Codex program configured")?;
+    let (program, prefix) = project.host.harness.codex.split_first().context("no Codex program configured")?;
     let args: Vec<String> = prefix.iter().cloned().chain(turn_args.to_args()).collect();
     let env = capability_env(&gh);
     let spec = Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &env };

@@ -38,7 +38,7 @@ frontend/                Electron + React + TypeScript
 1. **数据层与命令框架**：workspace、后端进程骨架、项目实例；M1 用到的表与迁移；命令框架（command_record、幂等键、事务、全局事件序号）；任务相关命令（建任务、修改完成条件、发消息、暂停与恢复、调整队列、放弃、重开、开始 attempt）。用单元测试覆盖唯一约束、幂等与前置条件。
 2. **Codex adapter 与调度**：先用两家 CLI 对 rmcp 做契约测试，确认各自协商的协议版本、按 turn 的 token 能否取到、JSON 响应能否正常工作。然后实现登记 turn、启动 CLI（Windows 平台层）、事件解析为 item、turn 状态与对账；MCP 服务与 `org_report`；调度器（开始 attempt、绑定消息、登记 turn）；额度域。契约测试保留下来，每次 CLI 或 rmcp 升级后重跑。契约测试已完成，两家都通过（2026-10-04，结果见 harness-adapter.md §2）。
 
-   进度（2026-10-04）：已完成契约测试、native session 与 turn 的命令、`org_report`、item 与 blob 存储、Codex 参数与事件解析、Windows 平台层、turn runner、调度器与启动对账。测试用假 CLI 覆盖完成、失败后继续、中断、重启对账，另有一个真实 Codex turn 的测试（默认不运行）。剩下额度域。
+   进度（2026-10-04）：已完成契约测试、native session 与 turn 的命令、`org_report`、item 与 blob 存储、Codex 参数与事件解析、Windows 平台层、turn runner、调度器与启动对账。测试用假 CLI 覆盖完成、失败后继续、中断、重启对账，另有一个真实 Codex turn 的测试（默认不运行）。额度域也已完成：受阻时不开始 attempt、不登记 turn；按重置时间加 1 分钟检查；手动重试取消已计划的检查；恢复后因额度失败的 role 自动继续，用户暂停仍然有效。检查调用用 `codex exec --ephemeral`，已对真实 Codex 验证。Codex 被拒的形式仍未知，M1 中不会自动识别额度失败（data-model.md §8.3）。第 2 个增量完成。
 3. **成果与发布**：项目接入、槽位物化、每个 turn 的采集（范围规则、体积护栏）、pin；验证（rebase、验证现场、检查命令）；验收事务；预览物化。
 4. **GUI**：WebSocket 协议（快照加序号、增量、命令）；React 界面（建任务、Malkuth 的 Thread、候选成果的 diff、验收与退回、turn 与额度状态）；Electron 外壳。
 5. **端到端与性能基线**：用一个真实的小仓库走通 M1 链路；性能基线框架（frontend.md §5）。

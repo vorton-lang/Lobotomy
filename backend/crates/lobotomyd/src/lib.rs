@@ -1,5 +1,6 @@
 //! The Lobotomy backend: project instances and the services roles and the GUI call.
 
+pub mod host;
 pub mod mcp;
 pub mod project;
 pub mod runner;

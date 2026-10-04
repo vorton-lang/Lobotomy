@@ -1,6 +1,7 @@
 //! The Lobotomy backend process. v1 runs one project per instance (data-model.md §10).
 //!
-//! `lobotomyd --data-dir <dir> [--port <n>]` runs the backend.
+//! `lobotomyd --data-dir <dir> [--host-dir <dir>] [--port <n>]` runs the backend. The host
+//! directory holds state shared across projects (data-model.md §10).
 //! `lobotomyd ctrl-c <pid>` is the helper that sends Ctrl+C to a CLI's console
 //! (harness-adapter.md §1.8).
 
@@ -10,7 +11,8 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use lobotomyd::Backend;
-use lobotomyd::project::{HarnessConfig, Project};
+use lobotomyd::host::{HarnessConfig, Host};
+use lobotomyd::project::Project;
 use tracing_subscriber::EnvFilter;
 
 /// How long a normal shutdown waits for interrupted CLIs to exit.
@@ -27,28 +29,39 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
-    let (data_dir, port) = parse(&args)?;
+    let options = parse(&args)?;
     lobotomy_harness::process::isolate_std_handles();
-    tokio::runtime::Runtime::new()?.block_on(serve(data_dir, port))
+    tokio::runtime::Runtime::new()?.block_on(serve(options))
 }
 
-fn parse(args: &[String]) -> anyhow::Result<(PathBuf, u16)> {
-    let mut data_dir = None;
-    let mut port = 0;
+struct Options {
+    data_dir: PathBuf,
+    host_dir: PathBuf,
+    port: u16,
+}
+
+fn parse(args: &[String]) -> anyhow::Result<Options> {
+    let (mut data_dir, mut host_dir, mut port) = (None, None, 0);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--data-dir" => data_dir = it.next().map(PathBuf::from),
+            "--host-dir" => host_dir = it.next().map(PathBuf::from),
             "--port" => port = it.next().context("--port needs a value")?.parse()?,
             other => bail!("unknown argument {other}"),
         }
     }
-    let data_dir = data_dir.context("usage: lobotomyd --data-dir <dir> [--port <n>]")?;
-    Ok((data_dir, port))
+    let data_dir = data_dir.context("usage: lobotomyd --data-dir <dir> [--host-dir <dir>] [--port <n>]")?;
+    let host_dir = match host_dir {
+        Some(dir) => dir,
+        None => Host::default_dir()?,
+    };
+    Ok(Options { data_dir, host_dir, port })
 }
 
-async fn serve(data_dir: PathBuf, port: u16) -> anyhow::Result<()> {
-    let project = Arc::new(Project::open(&data_dir, HarnessConfig::detect()?)?);
+async fn serve(Options { data_dir, host_dir, port }: Options) -> anyhow::Result<()> {
+    let host = Arc::new(Host::open(&host_dir, HarnessConfig::detect()?)?);
+    let project = Arc::new(Project::open(&data_dir, host)?);
     let backend = Backend::start(project, port).await?;
     tracing::info!(data_dir = %data_dir.display(), addr = %backend.addr, "backend running");
     tokio::signal::ctrl_c().await?;

@@ -89,6 +89,33 @@ impl TurnArgs {
     }
 }
 
+/// A minimal call that only tells whether the quota admits a turn (data-model.md §8.4). It runs
+/// outside every role's session, and `--ephemeral` keeps it out of the user's history.
+pub fn probe_args() -> Vec<String> {
+    [
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--ignore-rules",
+        "--ignore-user-config",
+        "--disable",
+        "apps",
+        "--disable",
+        "computer_use",
+        "--disable",
+        "browser_use",
+        "-c",
+        "model_reasoning_effort=\"low\"",
+        "-",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+/// The input of [`probe_args`].
+pub const PROBE_INPUT: &str = "Reply with OK.";
+
 /// Parses one line of `codex exec --json`. The format is not a stable promise, so unknown types
 /// are kept, not rejected (harness-adapter.md §1.3 rule 7).
 pub fn parse_line(line: &str) -> Option<Event> {
