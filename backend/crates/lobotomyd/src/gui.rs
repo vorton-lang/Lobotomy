@@ -164,6 +164,7 @@ async fn session(socket: WebSocket, project: Arc<Project>) {
 pub async fn watch(project: Arc<Project>, shutdown: CancellationToken) {
     let mut last_seq = db(&project, |db| db.read(max_seq)).await.unwrap_or(0);
     let mut last_live = project.live_version.load(Ordering::Relaxed);
+    let mut last_items: HashMap<String, i64> = db(&project, |db| db.read(thread_heads)).await.unwrap_or_default();
     loop {
         tokio::select! {
             _ = tokio::time::sleep(WATCH_INTERVAL) => {}
@@ -177,6 +178,16 @@ pub async fn watch(project: Arc<Project>, shutdown: CancellationToken) {
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = format!("{e:#}"), "could not read the event log"),
+        }
+        // Transcript items are not business events; each thread's newest item tells the GUI to
+        // fetch what it has not seen.
+        if let Ok(heads) = db(&project, |db| db.read(thread_heads)).await {
+            for (role, seq) in &heads {
+                if last_items.get(role) != Some(seq) {
+                    let _ = project.gui_push.send(json!({ "type": "thread", "role": role, "seq": seq }).to_string().into());
+                }
+            }
+            last_items = heads;
         }
         let version = project.live_version.load(Ordering::Relaxed);
         if version != last_live {
@@ -193,6 +204,13 @@ struct EventRow {
     kind: String,
     entity: String,
     payload: Value,
+}
+
+/// The newest item of each role's thread.
+fn thread_heads(conn: &Connection) -> lobotomy_core::Result<HashMap<String, i64>> {
+    let mut stmt = conn.prepare("SELECT t.role, MAX(i.seq) FROM item i JOIN thread t ON t.id = i.thread_id GROUP BY t.role")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 fn max_seq(conn: &Connection) -> lobotomy_core::Result<i64> {
@@ -427,8 +445,11 @@ pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
 #[derive(Deserialize)]
 struct ThreadParams {
     role: String,
-    /// Items before this thread sequence number; the newest page when absent.
+    /// Items before this thread sequence number, for scrolling back.
     before: Option<i64>,
+    /// Items after this sequence number, oldest first, to catch up. Without `before` or `after`,
+    /// the newest page.
+    after: Option<i64>,
     limit: Option<i64>,
 }
 
@@ -462,13 +483,14 @@ struct CommandRow {
 
 fn thread_page(conn: &Connection, p: &ThreadParams) -> lobotomy_core::Result<Value> {
     let limit = p.limit.unwrap_or(PAGE).clamp(1, 500);
-    let mut stmt = conn.prepare(
+    let order = if p.after.is_some() { "ASC" } else { "DESC" };
+    let mut stmt = conn.prepare(&format!(
         "SELECT i.id, i.seq, i.turn_id, i.kind, i.content, i.command_id, i.created_at
          FROM item i JOIN thread t ON t.id = i.thread_id
-         WHERE t.role = ?1 AND (?2 IS NULL OR i.seq < ?2)
-         ORDER BY i.seq DESC LIMIT ?3",
-    )?;
-    let rows = stmt.query_map(params![p.role, p.before, limit], |r| {
+         WHERE t.role = ?1 AND (?2 IS NULL OR i.seq < ?2) AND (?3 IS NULL OR i.seq > ?3)
+         ORDER BY i.seq {order} LIMIT ?4"
+    ))?;
+    let rows = stmt.query_map(params![p.role, p.before, p.after, limit], |r| {
         Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, String>(4)?, r.get(5)?, r.get(6)?))
     })?;
     let mut items = Vec::new();
@@ -476,7 +498,9 @@ fn thread_page(conn: &Connection, p: &ThreadParams) -> lobotomy_core::Result<Val
         let (id, seq, turn_id, kind, content, command_id, created_at) = row?;
         items.push(ItemRow { id, seq, turn_id, kind, content: serde_json::from_str(&content)?, command_id, created_at });
     }
-    items.reverse();
+    if p.after.is_none() {
+        items.reverse();
+    }
     let has_more = match items.first() {
         Some(first) => conn
             .query_row(
@@ -509,7 +533,7 @@ fn thread_page(conn: &Connection, p: &ThreadParams) -> lobotomy_core::Result<Val
         }
     }
     // Messages still waiting for a turn belong at the end of the newest page.
-    let queued = if p.before.is_none() { messages_where(conn, "role = ?1 AND state = 'queued'", [&p.role])? } else { vec![] };
+    let queued = messages_where(conn, "role = ?1 AND state = 'queued'", [&p.role])?;
     Ok(json!({ "items": items, "has_more": has_more, "turns": turns, "messages": messages, "commands": commands, "queued": queued }))
 }
 

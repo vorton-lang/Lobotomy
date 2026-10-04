@@ -42,10 +42,16 @@ pub struct HarnessConfig {
 
 impl HarnessConfig {
     /// The real CLIs, with this executable as the interrupt helper.
+    /// `LOBOTOMY_CODEX`, a JSON array of program and arguments, replaces the located Codex. The
+    /// GUI's end-to-end tests put the fake CLI there.
     pub fn detect() -> anyhow::Result<Self> {
         let exe = std::env::current_exe().context("locating the backend executable")?;
+        let codex = match std::env::var("LOBOTOMY_CODEX") {
+            Ok(json) => serde_json::from_str(&json).context("LOBOTOMY_CODEX is not a JSON array of strings")?,
+            Err(_) => vec![codex::locate().to_string_lossy().into_owned()],
+        };
         Ok(Self {
-            codex: vec![codex::locate().to_string_lossy().into_owned()],
+            codex,
             interrupt_helper: vec![exe.to_string_lossy().into_owned(), "ctrl-c".into()],
             codex_reasoning_effort: None,
             probe_timeout: Duration::from_secs(120),

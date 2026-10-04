@@ -1,0 +1,110 @@
+// Malkuth's thread (frontend.md §2 "M1 的布局", §4.2): a virtualized list that loads older pages
+// when scrolled to the top and follows the end while the user is at the end.
+
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { VList, type VListHandle } from 'virtua';
+import { buildRows, clock, sourceLabel, turnOutcome, type Row } from '../format';
+import { loadOlder, useStore } from '../store';
+import { Markdown } from './common';
+import { ItemView, LiveItemView, RunningView } from './ItemView';
+
+const AT_END_SLACK = 48;
+
+export function Thread() {
+  const thread = useStore((s) => s.thread);
+  const live = useStore((s) => s.live);
+  const tasks = useStore((s) => s.snapshot?.tasks);
+  const rows = useMemo(() => buildRows(thread, live), [thread, live]);
+  const list = useRef<VListHandle>(null);
+  const atEnd = useRef(true);
+  const [prepending, setPrepending] = useState(false);
+  const loading = useRef(false);
+
+  // The list follows the end only while the user is there; scrolling is otherwise theirs.
+  useLayoutEffect(() => {
+    if (atEnd.current && rows.length > 0) list.current?.scrollToIndex(rows.length - 1, { align: 'end' });
+  }, [rows.length]);
+  useEffect(() => {
+    if (prepending) setPrepending(false);
+  }, [rows, prepending]);
+
+  const onScroll = (offset: number) => {
+    const handle = list.current;
+    if (!handle) return;
+    atEnd.current = offset + handle.viewportSize >= handle.scrollSize - AT_END_SLACK;
+    if (offset < 200 && thread.hasMore && !loading.current) {
+      loading.current = true;
+      setPrepending(true);
+      void loadOlder().finally(() => (loading.current = false));
+    }
+  };
+
+  if (!thread.loaded) return <div className="thread empty">正在加载对话…</div>;
+  if (rows.length === 0) {
+    return (
+      <div className="thread empty">
+        <p>还没有对话。在右侧建一个任务，或者直接给 Malkuth 发消息。</p>
+      </div>
+    );
+  }
+  const title = (taskId: string | null) => (taskId ? tasks?.find((t) => t.id === taskId)?.title : undefined);
+  return (
+    <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} keepMounted={[rows.length - 1]}>
+      {rows.map((row) => (
+        <div key={row.key} className="row">
+          <RowView row={row} title={title} commands={thread.commands} />
+        </div>
+      ))}
+    </VList>
+  );
+}
+
+function RowView({
+  row,
+  title,
+  commands,
+}: {
+  row: Row;
+  title: (taskId: string | null) => string | undefined;
+  commands: ReturnType<typeof useStore.getState>['thread']['commands'];
+}) {
+  switch (row.kind) {
+    case 'turn': {
+      const t = row.turn;
+      const name = title(t.task_id);
+      return (
+        <div className={`turn-divider ${t.outcome ?? t.state}`}>
+          <span>{clock(t.started_at ?? t.registered_at)}</span>
+          {name && <span>· {name}</span>}
+          <span>· {turnOutcome(t)}</span>
+          {t.failure && <span className="error">· {t.failure.message}</span>}
+        </div>
+      );
+    }
+    case 'message':
+      return <MessageView source={row.message.source} body={row.message.body} />;
+    case 'input':
+      return <MessageView source="runtime" body={row.turn.input.replace(/^【来自 [^】]*】\n/, '')} />;
+    case 'queued':
+      return <MessageView source={row.message.source} body={row.message.body} queued />;
+    case 'item':
+      return <ItemView item={row.item} commands={commands} />;
+    case 'live':
+      return <LiveItemView item={row.item} />;
+    case 'running':
+      return <RunningView since={row.since} />;
+  }
+}
+
+function MessageView({ source, body, queued }: { source: string; body: string; queued?: boolean }) {
+  const mine = source === 'user';
+  return (
+    <div className={`message ${mine ? 'mine' : source === 'runtime' ? 'runtime' : 'other'} ${queued ? 'queued' : ''}`}>
+      <div className="who">
+        {sourceLabel(source)}
+        {queued && <span className="muted"> · 排队中，下一个 turn 投递</span>}
+      </div>
+      <Markdown text={body} />
+    </div>
+  );
+}
