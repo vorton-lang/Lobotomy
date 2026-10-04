@@ -17,6 +17,7 @@ npm run bench
 - **被测对象**：前端用生产构建，由 `vite preview` 提供；后端是 release 构建，接假 Codex（`backend/crates/lobotomyd/tests/fixtures/fake-bench.mjs`）。数据都是合成的，内容固定，所以不同次运行的结果可以比较。
 - **浏览器**：Windows 上用本机 Edge，其他平台用 Playwright 自带的 Chromium（需要先运行 `npx playwright install chromium`）。两者都基于 Chromium，内存数据取自 DevTools 协议。默认无头运行。
 - **结果**：写入 `frontend/bench-results/`，不提交。参考数据记在本文 §3。
+- **CI**：每次推送到 main，在 Windows 和 Ubuntu 的 GitHub 托管机器上各运行一次（`.github/workflows/ci.yml`）。结果写在 job 的摘要里，并作为 artifact 保留；只记录，不设门槛。共享机器的数据波动大，所以 §3 的本机数据仍是参考。
 
 ## 2. 场景与指标
 
@@ -76,5 +77,4 @@ npm run bench
 | Claude 的流式文本 | M3 接入 Claude 后补上。Codex 的文本在完成时整块到达 |
 | 窗口中的按键到呈现 | 见 §4 |
 | 客户端读得慢时的重新同步 | 后端测试已覆盖：落后超过推送缓冲的客户端会收到 `resync`（`backend/crates/lobotomyd/tests/gui.rs`）。GUI 收到后重新取快照的耗时，与"刷新后再打开"相近，没有单独测 |
-| Linux 与 macOS 上的数据 | 框架的写法不依赖平台，但还没有在 Linux 或 macOS 上跑过。WSL 中没有浏览器所需的系统库，也没有安装权限 |
-| CI 中定期运行 | 仓库还没有 CI |
+| macOS 上的数据 | CI 只在 Windows 和 Ubuntu 上运行 |

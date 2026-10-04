@@ -13,7 +13,7 @@ export default defineConfig({
   reporter: 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
-    channel: process.env.BENCH_CHANNEL ?? (process.platform === 'win32' ? 'msedge' : undefined),
+    channel: process.platform === 'win32' ? 'msedge' : undefined,
   },
   webServer: {
     command: 'npx vite preview --host 127.0.0.1 --port 4173 --strictPort',

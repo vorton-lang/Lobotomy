@@ -1,0 +1,125 @@
+# Tests on Windows and Linux for every push and pull request; on main, also the performance
+# baseline, recorded without budgets (notes/perf-baseline.md).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      # Line endings follow the repository, not the machine.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Backend tests
+        working-directory: backend
+        run: cargo test --workspace --locked
+      - name: Clippy
+        working-directory: backend
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Frontend install
+        working-directory: frontend
+        run: npm ci
+      - name: Frontend typecheck, unit tests, build
+        working-directory: frontend
+        run: |
+          npm run typecheck
+          npm test
+          npx vite build
+      # The end-to-end tests use the debug backend the backend tests built.
+      - name: End-to-end (Windows, installed Edge)
+        if: runner.os == 'Windows'
+        working-directory: frontend
+        run: npx playwright test
+      - name: End-to-end (Linux, Playwright's Chromium, Electron under Xvfb)
+        if: runner.os == 'Linux'
+        working-directory: frontend
+        env:
+          # Ubuntu restricts the user namespaces Electron's sandbox needs.
+          ELECTRON_DISABLE_SANDBOX: '1'
+        run: |
+          npx playwright install --with-deps chromium
+          xvfb-run --auto-servernum npx playwright test
+      - name: Keep Playwright's traces of failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.os }}
+          path: frontend/test-results/
+          if-no-files-found: ignore
+
+  bench:
+    name: bench (${{ matrix.os }})
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          key: bench
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend install
+        working-directory: frontend
+        run: npm ci
+      - name: Browser (Linux)
+        if: runner.os == 'Linux'
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      # Builds the release backend and the production frontend, then runs the scenarios.
+      - name: Baseline
+        working-directory: frontend
+        run: npm run bench
+      - name: Summary
+        working-directory: frontend
+        shell: bash
+        run: node bench/summary.mjs >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.os }}
+          path: frontend/bench-results/latest.json
