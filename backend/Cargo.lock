@@ -612,6 +612,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "tracing",
  "ulid",
 ]
 

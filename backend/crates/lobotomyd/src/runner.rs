@@ -288,7 +288,7 @@ async fn store_with(
 ) -> anyhow::Result<()> {
     let (project, role, turn_id, kind) = (project.clone(), turn.role.clone(), turn.id.clone(), kind.to_owned());
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let blobs = externalize(&project.blobs, &mut content)?;
+        let blobs = externalize(&project.blobs, &mut content);
         let item = NewItem {
             role: &role,
             turn_id: &turn_id,

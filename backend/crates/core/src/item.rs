@@ -103,20 +103,27 @@ fn suffix(text: &str, max: usize) -> &str {
 /// Moves the large string fields of an item's content into the blob store. Each such field
 /// becomes `{"blob": hash, "size": n, "head": …, "tail": …}`. Runs before the transaction; pass
 /// the returned blobs to [`record_item`].
-pub fn externalize(store: &BlobStore, content: &mut Value) -> Result<Vec<Blob>> {
+///
+/// A field whose file cannot be written stays in the content, so the item is still stored, in
+/// order, with its full text; only reading that field is slower (#10).
+pub fn externalize(store: &BlobStore, content: &mut Value) -> Vec<Blob> {
     let mut blobs = Vec::new();
     if let Value::Object(fields) = content {
-        for value in fields.values_mut() {
+        for (name, value) in fields.iter_mut() {
             if let Value::String(text) = value
                 && text.len() > STORAGE_THRESHOLD
             {
-                let blob = store.put(text)?;
-                *value = json!({ "blob": blob.hash, "size": blob.size, "head": blob.head, "tail": blob.tail });
-                blobs.push(blob);
+                match store.put(text) {
+                    Ok(blob) => {
+                        *value = json!({ "blob": blob.hash, "size": blob.size, "head": blob.head, "tail": blob.tail });
+                        blobs.push(blob);
+                    }
+                    Err(e) => tracing::warn!(field = name, error = %e, "blob not written; the field stays in the database"),
+                }
             }
         }
     }
-    Ok(blobs)
+    blobs
 }
 
 /// One transcript item to store.

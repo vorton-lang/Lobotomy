@@ -5,6 +5,7 @@
 //   FAKE:done   writes work.txt, reports done, completes the turn
 //   FAKE:fail   reports a failed turn
 //   FAKE:sleep  starts a turn and waits; Ctrl+C ends it without a turn end event
+//   FAKE:big    emits a command item with 200 KiB of output
 //   otherwise   completes the turn with a message
 // Flags placed before Codex's own arguments change the process itself:
 //   --fake-stderr-flood  writes 4 MiB to stderr first and waits until it is read
@@ -47,6 +48,11 @@ if (input.includes('FAKE:sleep')) {
   emit({ type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: 'sleep', aggregated_output: '', exit_code: null, status: 'in_progress' } });
   await new Promise(r => setTimeout(r, 120_000));
   process.exit(0);
+}
+
+if (input.includes('FAKE:big')) {
+  const output = 'y'.repeat(200 * 1024);
+  emit({ type: 'item.completed', item: { id: 'item_1', type: 'command_execution', command: 'build', aggregated_output: output, exit_code: 0, status: 'completed' } });
 }
 
 if (input.includes('FAKE:done')) {

@@ -272,6 +272,19 @@ fn only_the_turns_own_role_can_report() {
 }
 
 #[test]
+fn a_field_whose_blob_cannot_be_written_stays_in_the_item() {
+    let dir = tempfile::tempdir().unwrap();
+    // A file where the blob directory should be: every blob write fails.
+    let blocked = dir.path().join("blobs");
+    std::fs::write(&blocked, "not a directory").unwrap();
+    let store = BlobStore::new(&blocked);
+    let output = "x".repeat(STORAGE_THRESHOLD + 1);
+    let mut content = json!({ "command": "cargo build", "output": output });
+    assert!(externalize(&store, &mut content).is_empty());
+    assert_eq!(content["output"], output, "the full text stays in the content");
+}
+
+#[test]
 fn items_get_thread_sequence_numbers_and_large_fields_go_to_blobs() {
     let db = db();
     started_task(&db);
@@ -281,7 +294,7 @@ fn items_get_thread_sequence_numbers_and_large_fields_go_to_blobs() {
 
     let small = json!({ "text": "好的" });
     let mut large = json!({ "command": "cargo build", "output": "x".repeat(STORAGE_THRESHOLD + 1) });
-    let blobs = externalize(&store, &mut large).unwrap();
+    let blobs = externalize(&store, &mut large);
     assert_eq!(blobs.len(), 1);
     assert_eq!(large["output"]["size"], STORAGE_THRESHOLD + 1);
     assert_eq!(store.read(&blobs[0].hash).unwrap().len(), STORAGE_THRESHOLD + 1);

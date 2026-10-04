@@ -131,6 +131,33 @@ async fn a_turn_left_registered_by_the_last_run_is_reconciled_as_interrupted() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// When the blob file cannot be written, the large field stays in the database: the item is
+/// stored complete and the turn ends cleanly (#10).
+#[tokio::test]
+async fn a_large_field_is_stored_even_when_its_blob_cannot_be_written() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("project")).unwrap();
+    std::fs::write(dir.path().join("project").join("blobs"), "not a directory").unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    create_task(&db, "FAKE:big");
+
+    let turn = ended_turn(&db).await;
+    assert_eq!(turn.outcome, Some(Outcome::Completed));
+    let output: String = db
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT json_extract(content, '$.output') FROM item WHERE turn_id = ?1 AND kind = 'command'",
+                [&turn.id],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(output.len(), 200 * 1024);
+    assert!(!backend.project.raw_output_path(&turn.id, "jsonl").exists(), "nothing is missing, so the raw output goes");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// One real Codex turn on the user's subscription: the role writes a file and reports done.
 #[tokio::test]
 #[ignore = "runs a real Codex turn"]
