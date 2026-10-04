@@ -40,5 +40,18 @@ frontend/                Electron + React + TypeScript
 
    进度（2026-10-04）：已完成契约测试、native session 与 turn 的命令、`org_report`、item 与 blob 存储、Codex 参数与事件解析、Windows 平台层、turn runner、调度器与启动对账。测试用假 CLI 覆盖完成、失败后继续、中断、重启对账，另有一个真实 Codex turn 的测试（默认不运行）。额度域也已完成：受阻时不开始 attempt、不登记 turn；恢复只由用户手动重试触发，因额度失败的 role 与其他失败一样等用户"继续"（#11 讨论后删除了自动检查与自动继续）。native session 改为按任务划分（#11）。检查调用用 `codex exec --ephemeral`，已对真实 Codex 验证。Codex 被拒的形式仍未知，M1 中不会自动识别额度失败（data-model.md §8.3）。第 2 个增量完成。
 3. **成果与发布**：项目接入、槽位物化、每个 turn 的采集（范围规则、体积护栏）、pin；验证（rebase、验证现场、检查命令）；验收事务；预览物化。
+
+   进度（2026-10-04）：第 3 个增量完成。
+   - 私有存储在 `backend/crates/store`：jj-lib 0.45.1 的 git backend，直接写提交，pin 是以记录 ID 命名的 ref。
+   - 槽位与验证现场都是借用私有存储对象的 git clone。物化前先快照，所以中断的检出原地重做即可补完（harness-adapter.md §3 语义更新）。
+   - 采集前的遍历负责体积护栏和 fail closed。
+   - 验证用 jj 的树合并做 rebase，检查命令经平台 shell 在 Job Object 中运行。
+   - 验收是一个 SQLite 事务；预览快进用户分支。
+   - 测试覆盖：
+     - store 的集成测试，使用真实 git 仓库；
+     - 命令层测试；
+     - 用假 CLI 的端到端测试：从建任务、`done`、验证、验收到用户仓库出现提交；检查失败与超时；超过体积护栏；预览遇到本地改动后停止，用户重试；
+     - 真实 Codex 的 turn 走到验收（默认不运行）。
+   - 待真实项目观察：体积护栏的阈值、换行符（harness-adapter.md §6）。
 4. **GUI**：WebSocket 协议（快照加序号、增量、命令）；React 界面（建任务、Malkuth 的 Thread、候选成果的 diff、验收与退回、turn 与额度状态）；Electron 外壳。
 5. **端到端与性能基线**：用一个真实的小仓库走通 M1 链路；性能基线框架（frontend.md §5）。
