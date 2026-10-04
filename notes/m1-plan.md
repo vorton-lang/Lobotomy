@@ -52,6 +52,7 @@ frontend/                Electron + React + TypeScript
      - 命令层测试；
      - 用假 CLI 的端到端测试：从建任务、`done`、验证、验收到用户仓库出现提交；检查失败与超时；超过体积护栏；预览遇到本地改动后停止，用户重试；
      - 真实 Codex 的 turn 走到验收（默认不运行）。
-   - 待真实项目观察：体积护栏的阈值、换行符（harness-adapter.md §6）。
+   - 待真实项目观察：体积护栏的阈值。
+   - 不转换换行符，槽位中的 git 也关闭 `autocrlf`（harness-adapter.md §3，用户确认）。
 4. **GUI**：WebSocket 协议（快照加序号、增量、命令）；React 界面（建任务、Malkuth 的 Thread、候选成果的 diff、验收与退回、turn 与额度状态）；Electron 外壳。
 5. **端到端与性能基线**：用一个真实的小仓库走通 M1 链路；性能基线框架（frontend.md §5）。

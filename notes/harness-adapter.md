@@ -216,6 +216,7 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
   - jj 的工作副本状态存放在 Lobotomy 的数据目录中，不在槽位里。
   - 槽位的分支名与用户仓库的分支相同。
   - 每次物化时，运行时先对目录做一次快照，快照不跟踪新文件；然后检出目标。结果是：被改动或缺失的已跟踪文件恢复为目标内容；没有被采集过的新文件被删除；被忽略的文件保留。
+  - **不转换换行符**（用户确认，2026-10-04）：jj 按原样保存与写出文件内容。槽位中的 git 设 `core.autocrlf=false`，覆盖用户与系统的配置。理由：Windows 上 Git 的系统配置常开着 `autocrlf=true`。实测（Git 2.49，Windows）在这种配置下，CRLF 的改动不出现在 `git diff` 中；`git checkout -- <文件>` 写回的是 CRLF，jj 会把它采集为每一行都改了。
 - **重新物化**只在三种情况下发生：
   1. 槽位要交给另一份工作时。前提是上一份工作的现场已经采集完成。
   2. 运行时的检出无法让目录等于目标时：目标中的某个文件被一个未跟踪的文件挡住，通常是被忽略的文件。运行时把旧目录移出槽位路径（隔离），在原路径以新 generation 重新物化，新 generation 的构建缓存是冷的。新 generation 就绪后，运行时删除隔离的目录。隔离只是中间状态，不是处理完毕。
@@ -353,9 +354,7 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 
 ## 6. 待验证 / 未决
 
-- ~~jj-lib 的版本锁定与封装边界~~：已实现（2026-10-04）。jj-lib 锁定为 0.45.1，封装在 `backend/crates/store` 中，jj 的类型不出这个 crate。只用到 jj 的存储（git backend）、树合并和本地工作副本状态（`TreeState`），不使用 jj 的操作日志与视图：业务事实在 SQLite 中，成果靠 pin 保留。
-- 换行符：jj 按原样保存与写出文件内容，不做 CRLF 转换。用户仓库开启 `core.autocrlf` 时，槽位中文件的换行符可能与用户工作区不同。待真实项目中观察。
-- 原生中断与中断后的 resume：Codex 在 Windows 上已实测（§1.4）。Claude、以及 Linux 上的两家仍待实测。结果也决定 ideas.md 中的"中断并发送"能否加入。
+- ~~jj-lib 的版本锁定与封装边界~~：已实现（2026-10-04）。jj-lib 锁定为 0.45.1，封装在 `backend/crates/store` 中，jj 的类型不出这个 crate。只用到 jj 的存储（git backend）、树合并和本地工作副本状态（`TreeState`），不使用 jj 的操作日志与视图：业务事实在 SQLite 中，成果靠 pin 保留。- 原生中断与中断后的 resume：Codex 在 Windows 上已实测（§1.4）。Claude、以及 Linux 上的两家仍待实测。结果也决定 ideas.md 中的"中断并发送"能否加入。
 - 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，M4 之后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。Claude 的 `~/.claude/CLAUDE.md` 在 M3 时确认。
 - Codex 0.159.2 的 `codex queue`（向已有会话排队一条消息）能否在 `exec` 的 turn 运行中投递消息，待查。若可以，它可能替代 ideas.md 中的"中断并发送"。`codex delete --force <id>` 可以按 ID 删除会话，清理探针或临时会话时使用。
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。

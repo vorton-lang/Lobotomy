@@ -72,6 +72,7 @@ fn a_slot_is_a_git_clone_at_the_baseline() {
     assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]), f.head);
     assert_eq!(git(&slot.path, &["symbolic-ref", "--short", "HEAD"]), "main");
     assert_eq!(git(&slot.path, &["status", "--porcelain"]), "", "a fresh slot is clean");
+    assert_eq!(git(&slot.path, &["config", "core.autocrlf"]), "false", "no line ending conversion");
     // The state jj keeps for the directory is outside it.
     assert!(!slot.path.join(".jj").exists());
 }
@@ -222,6 +223,24 @@ fn rematerializing_keeps_ignored_caches_and_drops_uncaptured_files() {
     assert!(!slot.path.join("stray.txt").exists());
     assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]), next);
     assert_eq!(git(&slot.path, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn line_endings_are_captured_as_written() {
+    let f = fixture();
+    let slot = f.workspace("worker");
+    slot.materialize(&f.store, &f.head, &f.head, "main", &scope()).unwrap();
+    fs::write(slot.path.join("a.txt"), "one\r\ntwo\r\nthree\r\n").unwrap();
+    let commit = capture(&f, &slot, &f.head, "cap_1");
+    let check = f.workspace("verify");
+    check.materialize(&f.store, &commit, &f.head, "main", &scope()).unwrap();
+    assert_eq!(fs::read(check.path.join("a.txt")).unwrap(), b"one\r\ntwo\r\nthree\r\n");
+
+    // The slot's git agrees, whatever the system's core.autocrlf says: `git diff` shows the
+    // change jj captured, and restoring a file through git writes the stored bytes back.
+    assert!(git(&slot.path, &["diff", "--stat"]).contains("a.txt"));
+    git(&slot.path, &["checkout", "--", "a.txt"]);
+    assert_eq!(fs::read(slot.path.join("a.txt")).unwrap(), b"one\ntwo\nthree\n");
 }
 
 #[test]

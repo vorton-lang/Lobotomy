@@ -117,6 +117,10 @@ impl Workspace {
         if fresh {
             fs::create_dir_all(&self.path).map_err(Error::io(&self.path))?;
             Git::at(&self.path).run(&["init", "--quiet", "--initial-branch", branch])?;
+            // Files are stored and written byte for byte. git must not convert line endings
+            // either, whatever the user's or the system's config says, or the agent's `git diff`
+            // would disagree with what is captured.
+            Git::at(&self.path).run(&["config", "core.autocrlf", "false"])?;
             let alternates = self.path.join(".git").join("objects").join("info").join("alternates");
             let objects = store.git_dir().join("objects");
             fs::write(&alternates, format!("{}\n", path_arg(&objects))).map_err(Error::io(&alternates))?;
