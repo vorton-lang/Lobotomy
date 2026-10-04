@@ -171,6 +171,22 @@ fn a_new_native_session_releases_the_hold_and_resends_the_brief() {
 }
 
 #[test]
+fn a_completed_session_without_a_harness_id_stops_the_role() {
+    let db = db();
+    started_task(&db);
+    let t = register(&db).unwrap();
+    // The turn completed, but recording the session id failed.
+    end(&db, &t.turn_id, Outcome::Completed);
+    send(&db, "m1", "继续");
+    assert_eq!(rejection(register(&db)), "session_unidentified");
+    let again = db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: ROLE.into() });
+    assert_eq!(rejection(again), "nothing_to_continue");
+    // A new native session is the way on.
+    db.execute(&Caller::User, &NewNativeSession { request_id: "n1".into(), role: ROLE.into() }).unwrap();
+    register(&db).unwrap();
+}
+
+#[test]
 fn messages_wait_while_the_task_is_outside_execution_or_paused() {
     let db = db();
     let task = started_task(&db);
@@ -203,6 +219,8 @@ fn done_is_recorded_once_and_holds_further_turns_until_capture() {
     assert_eq!(report(&db, &t.turn_id, ReportStatus::Done, None).unwrap(), ReportEffect::Unchanged);
     let attempt = db.read(|c| open_attempt(c, &task)).unwrap().unwrap();
     assert_eq!(attempt.done_turn_id.as_deref(), Some(t.turn_id.as_str()));
+    db.execute(&Caller::Runtime, &SessionIdentified { turn_id: t.turn_id.clone(), native_id: "thread-1".into() })
+        .unwrap();
     end(&db, &t.turn_id, Outcome::Completed);
     send(&db, "m1", "还有一件事");
     assert_eq!(rejection(register(&db)), "awaiting_capture");

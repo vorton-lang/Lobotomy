@@ -1,79 +1,18 @@
 //! The backend end to end with a fake Codex (tests/fixtures/fake-codex.mjs, run by Node): the
 //! scheduler, the turn runner, the MCP service and the database together. Needs `node` on PATH.
 
-use std::path::{Path, PathBuf};
+mod common;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use common::*;
 use lobotomy_core::id::now_ms;
 use lobotomy_core::task::{CreateTask, SendMessage, SetPaused, StartAttempt, load_task, open_attempt};
-use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, Turn, TurnState, last_turn};
+use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, TurnState};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::Backend;
-use lobotomyd::host::{HarnessConfig, Host};
-use lobotomyd::project::Project;
-
-fn fake_codex() -> HarnessConfig {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("fake-codex.mjs");
-    HarnessConfig {
-        codex: vec!["node".into(), script.to_string_lossy().into_owned()],
-        interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
-        codex_reasoning_effort: None,
-    }
-}
-
-fn open_project(dir: &Path, harness: HarnessConfig) -> Project {
-    let host = Arc::new(Host::open(&dir.join("host"), harness).unwrap());
-    Project::open(&dir.join("project"), host).unwrap()
-}
-
-async fn start(dir: &Path) -> Backend {
-    Backend::start(Arc::new(open_project(dir, fake_codex())), 0).await.unwrap()
-}
-
-fn create_task(db: &Db, body: &str) -> String {
-    db.execute(
-        &Caller::User,
-        &CreateTask {
-            request_id: format!("c-{body}"),
-            title: "测试任务".into(),
-            body: body.into(),
-            criteria: "work.txt 存在".into(),
-            executor: "Malkuth".into(),
-        },
-    )
-    .unwrap()
-    .id
-}
-
-fn last(db: &Db) -> Option<Turn> {
-    db.read(|c| last_turn(c, "Malkuth")).unwrap()
-}
-
-async fn wait_for<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        if let Some(value) = check() {
-            return value;
-        }
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn ended_turn(db: &Db) -> Turn {
-    wait_for("the turn to end", || last(db).filter(|t| t.state == TurnState::Ended)).await
-}
-
-fn slot(dir: &Path) -> PathBuf {
-    dir.join("project").join("slots").join("worker")
-}
-
-/// Lets the scheduler run a few rounds.
-async fn settle(backend: &Backend) {
-    backend.project.wake.notify_one();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-}
+use lobotomyd::host::Host;
 
 #[tokio::test]
 async fn a_task_runs_to_done_through_mcp() {
@@ -197,12 +136,7 @@ async fn a_turn_left_registered_by_the_last_run_is_reconciled_as_interrupted() {
 #[ignore = "runs a real Codex turn"]
 async fn a_real_codex_turn_reports_done() {
     let dir = tempfile::tempdir().unwrap();
-    let harness = HarnessConfig {
-        codex: vec![lobotomy_harness::codex::locate().to_string_lossy().into_owned()],
-        interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
-        codex_reasoning_effort: Some("low".into()),
-    };
-    let backend = Backend::start(Arc::new(open_project(dir.path(), harness)), 0).await.unwrap();
+    let backend = Backend::start(Arc::new(open_project(dir.path(), real_codex())), 0).await.unwrap();
     let db = backend.project.db.clone();
     db.execute(
         &Caller::User,
@@ -301,14 +235,39 @@ async fn a_quota_failed_role_continues_after_recovery_unless_paused() {
 #[ignore = "runs a real Codex call"]
 async fn a_real_quota_check_passes() {
     let dir = tempfile::tempdir().unwrap();
-    let harness = HarnessConfig {
-        codex: vec![lobotomy_harness::codex::locate().to_string_lossy().into_owned()],
-        interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
-        codex_reasoning_effort: None,
-    };
-    let host = Arc::new(Host::open(dir.path(), harness).unwrap());
+    let host = Arc::new(Host::open(dir.path(), real_codex()).unwrap());
     host.db.block("codex", None, "test", now_ms()).unwrap();
     assert!(!host.retry("codex").await.unwrap().is_blocked());
+}
+
+/// A check whose CLI writes more stderr than a pipe holds still finishes, and the next retry
+/// runs a new check (#10).
+#[tokio::test]
+async fn a_quota_check_reads_stderr_and_can_run_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host::open(dir.path(), fake_codex_with(&["--fake-stderr-flood"])).unwrap());
+    for _ in 0..2 {
+        host.db.block("codex", None, "test", now_ms()).unwrap();
+        assert!(!host.retry("codex").await.unwrap().is_blocked());
+    }
+}
+
+/// A check that does not finish times out, leaves the domain waiting for the user, and does not
+/// keep later retries from running (#10).
+#[tokio::test]
+async fn a_hanging_quota_check_times_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = fake_codex_with(&["--fake-hang"]);
+    harness.probe_timeout = Duration::from_secs(2);
+    let host = Arc::new(Host::open(dir.path(), harness).unwrap());
+    host.db.block("codex", None, "test", now_ms()).unwrap();
+    for _ in 0..2 {
+        let started = Instant::now();
+        let domain = host.retry("codex").await.unwrap();
+        assert!(domain.is_blocked());
+        assert_eq!(domain.next_check_at, None, "no automatic check after a timeout");
+        assert!(started.elapsed() >= Duration::from_secs(2), "the retry ran a check of its own");
+    }
 }
 
 fn next_task(db: &Db) -> String {

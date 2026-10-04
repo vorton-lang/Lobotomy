@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use lobotomy_core::id::now_ms;
@@ -11,7 +12,9 @@ use lobotomy_core::quota::{CheckOutcome, Domain, HostDb};
 use lobotomy_harness::codex;
 use lobotomy_harness::event::Event;
 use lobotomy_harness::process::{self, Spec};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+
+use crate::capability;
 
 pub struct Host {
     pub dir: PathBuf,
@@ -30,6 +33,9 @@ pub struct HarnessConfig {
     /// The program and arguments that send Ctrl+C to a pid (harness-adapter.md §1.8).
     pub interrupt_helper: Vec<String>,
     pub codex_reasoning_effort: Option<String>,
+    /// A quota check that has not finished by then counts as rejected without a reset time, so
+    /// the domain waits for the user's retry (data-model.md §8.4). A normal check takes seconds.
+    pub probe_timeout: Duration,
 }
 
 impl HarnessConfig {
@@ -40,7 +46,27 @@ impl HarnessConfig {
             codex: vec![codex::locate().to_string_lossy().into_owned()],
             interrupt_helper: vec![exe.to_string_lossy().into_owned(), "ctrl-c".into()],
             codex_reasoning_effort: None,
+            probe_timeout: Duration::from_secs(120),
         })
+    }
+}
+
+/// Marks a domain as being checked, and clears the mark however the check ends: done, failed,
+/// timed out or cancelled.
+struct CheckingMark<'a> {
+    checking: &'a Mutex<HashSet<String>>,
+    harness: String,
+}
+
+impl<'a> CheckingMark<'a> {
+    fn acquire(checking: &'a Mutex<HashSet<String>>, harness: &str) -> Option<Self> {
+        checking.lock().unwrap().insert(harness.to_owned()).then(|| Self { checking, harness: harness.to_owned() })
+    }
+}
+
+impl Drop for CheckingMark<'_> {
+    fn drop(&mut self) {
+        self.checking.lock().unwrap().remove(&self.harness);
     }
 }
 
@@ -78,12 +104,10 @@ impl Host {
     /// Runs one quota check for the domain and records the result. A check already in progress
     /// is not repeated; the current state is returned instead.
     pub async fn check(self: &Arc<Self>, harness: &str) -> anyhow::Result<Domain> {
-        if !self.checking.lock().unwrap().insert(harness.to_owned()) {
+        let Some(_mark) = CheckingMark::acquire(&self.checking, harness) else {
             return Ok(self.db.domain(harness)?);
-        }
-        let outcome = self.probe(harness).await;
-        self.checking.lock().unwrap().remove(harness);
-        let outcome = outcome.unwrap_or_else(|e| {
+        };
+        let outcome = self.probe(harness).await.unwrap_or_else(|e| {
             tracing::warn!(harness, error = format!("{e:#}"), "quota check could not run");
             CheckOutcome::Rejected { resets_at: None }
         });
@@ -96,22 +120,59 @@ impl Host {
         let (program, prefix) = self.harness.codex.split_first().context("no Codex program configured")?;
         let args: Vec<String> = prefix.iter().cloned().chain(codex::probe_args()).collect();
         let cwd = self.dir.join("probe");
-        std::fs::create_dir_all(&cwd)?;
-        let mut spawned = process::spawn(&Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &[] })?;
+        let gh = self.dir.join("gh-empty");
+        for dir in [&cwd, &gh] {
+            std::fs::create_dir_all(dir)?;
+        }
+        let env = capability::env(&gh);
+        let spec = Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &env, env_remove: capability::REMOVED_VARS };
+        let mut spawned = process::spawn(&spec)?;
         spawned.resume()?;
         let mut stdin = spawned.child.stdin.take().context("no stdin")?;
         let _ = stdin.write_all(codex::PROBE_INPUT.as_bytes()).await;
         drop(stdin);
+        // Both pipes are read, so the CLI never blocks on a full pipe (#10).
+        let stderr = spawned.child.stderr.take().context("no stderr")?;
+        let stderr_tail = tokio::spawn(tail(stderr, 4096));
         let stdout = spawned.child.stdout.take().context("no stdout")?;
-        let mut lines = BufReader::new(stdout).lines();
-        let mut completed = false;
-        while let Some(line) = lines.next_line().await? {
-            completed |= matches!(codex::parse_line(&line), Some(Event::TurnCompleted { .. }));
-        }
+        let read = async {
+            let mut lines = BufReader::new(stdout).lines();
+            let mut completed = false;
+            while let Some(line) = lines.next_line().await? {
+                completed |= matches!(codex::parse_line(&line), Some(Event::TurnCompleted { .. }));
+            }
+            Ok::<_, std::io::Error>(completed)
+        };
+        let completed = match tokio::time::timeout(self.harness.probe_timeout, read).await {
+            Ok(completed) => completed?,
+            Err(_) => {
+                tracing::warn!(harness, timeout = ?self.harness.probe_timeout, "quota check timed out");
+                false
+            }
+        };
+        let _ = spawned.child.start_kill();
         let _ = spawned.child.wait().await;
         spawned.reap();
+        if !completed && let Ok(Ok(tail)) = tokio::time::timeout(Duration::from_secs(5), stderr_tail).await {
+            tracing::warn!(harness, stderr = tail, "quota check did not complete");
+        }
         // Codex's rejection format is not known yet, so a failed check carries no reset time and
         // the domain waits for the user (data-model.md §8.3, §8.4).
         Ok(if completed { CheckOutcome::Passed } else { CheckOutcome::Rejected { resets_at: None } })
     }
+}
+
+/// Reads a stream to its end and keeps the last `keep` bytes.
+async fn tail(mut stream: impl AsyncRead + Unpin, keep: usize) -> String {
+    let (mut kept, mut buf) = (Vec::new(), vec![0u8; 8192]);
+    while let Ok(n) = stream.read(&mut buf).await {
+        if n == 0 {
+            break;
+        }
+        kept.extend_from_slice(&buf[..n]);
+        if kept.len() > keep {
+            kept.drain(..kept.len() - keep);
+        }
+    }
+    String::from_utf8_lossy(&kept).into_owned()
 }

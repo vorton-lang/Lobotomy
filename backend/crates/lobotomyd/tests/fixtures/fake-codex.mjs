@@ -6,10 +6,17 @@
 //   FAKE:fail   reports a failed turn
 //   FAKE:sleep  starts a turn and waits; Ctrl+C ends it without a turn end event
 //   otherwise   completes the turn with a message
+// Flags placed before Codex's own arguments change the process itself:
+//   --fake-stderr-flood  writes 4 MiB to stderr first and waits until it is read
+//   --fake-hang          never finishes on its own
+// Every run writes the environment it sees to last-env.json in its cwd.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 
 const args = process.argv.slice(2);
+const flags = new Set(args.filter(a => a.startsWith('--fake-')));
+const watched = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_CONFIG_DIR'];
+fs.writeFileSync('last-env.json', JSON.stringify(Object.fromEntries(watched.map(k => [k, process.env[k] ?? null]))));
 const config = name => {
   const i = args.findIndex((a, j) => args[j - 1] === '-c' && a.startsWith(`${name}=`));
   return i < 0 ? undefined : JSON.parse(args[i].slice(name.length + 1));
@@ -22,6 +29,9 @@ fs.writeFileSync('last-args.json', JSON.stringify(args));
 const emit = event => process.stdout.write(JSON.stringify(event) + '\n');
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
+
+if (flags.has('--fake-stderr-flood')) await new Promise(r => process.stderr.write('x'.repeat(4 << 20), r));
+if (flags.has('--fake-hang')) await new Promise(r => setTimeout(r, 600_000));
 
 emit({ type: 'thread.started', thread_id: threadId });
 emit({ type: 'turn.started' });

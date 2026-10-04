@@ -22,12 +22,14 @@ use std::process::Stdio;
 
 use tokio::process::{Child, Command};
 
-/// What to start.
+/// What to start. The process inherits the backend's environment, minus `env_remove`, plus
+/// `env`.
 pub struct Spec<'a> {
     pub program: &'a Path,
     pub args: &'a [String],
     pub cwd: &'a Path,
     pub env: &'a [(String, String)],
+    pub env_remove: &'a [&'a str],
 }
 
 /// A started CLI. On Windows it does not run until [`Spawned::resume`].
@@ -55,6 +57,9 @@ impl Spawned {
 /// Starts the CLI with piped stdio.
 pub fn spawn(spec: &Spec<'_>) -> io::Result<Spawned> {
     let mut cmd = Command::new(spec.program);
+    for name in spec.env_remove {
+        cmd.env_remove(name);
+    }
     cmd.args(spec.args)
         .current_dir(spec.cwd)
         .envs(spec.env.iter().map(|(k, v)| (OsStr::new(k), OsStr::new(v))))

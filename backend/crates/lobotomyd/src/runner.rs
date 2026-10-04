@@ -18,6 +18,7 @@ use lobotomy_harness::process::{self, Spec, Spawned};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use crate::capability;
 use crate::mcp::command_id_in;
 use crate::project::{Project, RunningTurn};
 
@@ -87,18 +88,6 @@ fn instructions(role: &Role) -> String {
     WORKER_INSTRUCTIONS.replace("{name}", &role.name)
 }
 
-/// Process environment that trims what the CLI can do outside the project
-/// (harness-adapter.md §1.6): `git push` fails locally and `gh` is logged out.
-fn capability_env(gh_config_dir: &Path) -> Vec<(String, String)> {
-    let mut env = vec![("GIT_CONFIG_COUNT".to_owned(), "3".to_owned())];
-    for (i, prefix) in ["https://", "git@", "ssh://"].iter().enumerate() {
-        env.push((format!("GIT_CONFIG_KEY_{i}"), "url.lobotomy-push-disabled://.pushInsteadOf".to_owned()));
-        env.push((format!("GIT_CONFIG_VALUE_{i}"), (*prefix).to_owned()));
-    }
-    env.push(("GH_CONFIG_DIR".to_owned(), gh_config_dir.to_string_lossy().into_owned()));
-    env
-}
-
 /// What the runner saw in the CLI's output.
 #[derive(Default)]
 struct Observed {
@@ -147,8 +136,8 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     };
     let (program, prefix) = project.host.harness.codex.split_first().context("no Codex program configured")?;
     let args: Vec<String> = prefix.iter().cloned().chain(turn_args.to_args()).collect();
-    let env = capability_env(&gh);
-    let spec = Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &env };
+    let env = capability::env(&gh);
+    let spec = Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &env, env_remove: capability::REMOVED_VARS };
     let mut spawned = match process::spawn(&spec) {
         Ok(spawned) => spawned,
         Err(e) => {

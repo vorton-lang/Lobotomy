@@ -8,7 +8,7 @@ use lobotomy_harness::process::{Spec, is_running, spawn, terminate};
 
 fn powershell(script: &str, cwd: &Path) -> lobotomy_harness::process::Spawned {
     let args = ["-NoProfile", "-NonInteractive", "-Command", script].map(String::from);
-    spawn(&Spec { program: Path::new("powershell.exe"), args: &args, cwd, env: &[] }).unwrap()
+    spawn(&Spec { program: Path::new("powershell.exe"), args: &args, cwd, env: &[], env_remove: &[] }).unwrap()
 }
 
 fn pid_alive(pid: u32) -> bool {

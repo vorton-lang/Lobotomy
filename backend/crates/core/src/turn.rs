@@ -268,6 +268,22 @@ fn register(cx: &mut Cx<'_>, role: &str, continue_note: Option<&str>) -> Result<
             return Err(Error::rejected("held", format!("{role}'s last turn {} did not complete", last.id)));
         }
     }
+    // A completed turn without a recorded session id would make the next turn start a fresh
+    // harness session, silently losing the context. The role stops; a new native session is the
+    // user's way on (#10).
+    if session.native_id.is_none() {
+        let completed = cx
+            .tx
+            .query_row(
+                "SELECT 1 FROM turn WHERE native_session_id = ?1 AND outcome = 'completed' LIMIT 1",
+                [&session.id],
+                |_| Ok(()),
+            )
+            .optional()?;
+        if completed.is_some() {
+            return Err(Error::rejected("session_unidentified", format!("session {} has no harness id", session.id)));
+        }
+    }
 
     let (task_id, attempt_id) = match occupant(cx.tx, role)? {
         Some(task_id) => {
