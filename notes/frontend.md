@@ -136,3 +136,50 @@ CI 中固定运行合成场景（参照 OpenHands 的 `BENCH_MESSAGES` 与 Goose
 - Thread 的单位、序号方案和 SQLite schema，在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论，结果写入 [data-model.md](data-model.md)。Thread 与会议的关系留到 M3。
 - 节流间隔、缓冲上限、分页大小、头尾预览行数等参数，待基线测量后确定。
 - 布局细节待原型验证。
+
+## 7. M1 的实现（2026-10-04，第 4 个增量）
+
+**接口**：后端在 `/gui` 提供 WebSocket，与 MCP 共用一个本机端口（`backend/crates/lobotomyd/src/gui.rs`）。
+
+- 请求 `{id, method, params}`，方法有：
+  - `snapshot`：快照，含"等你决定"的条目；
+  - `thread`：对话分页，`before` 往前翻，`after` 补上新内容；
+  - `task`：任务详情；
+  - `diff`：两个提交之间的文件改动；
+  - `blob`：取文件库中的全文；
+  - `command`：用户命令，以及接入、中断、终止残留进程、额度重试、重试出错的工作、停止后端。
+- 推送：
+  - 事件日志的新条目；
+  - Thread 有新 item 时的序号；
+  - 运行中 turn 的 item；
+  - 每 15 秒一次心跳；
+  - 客户端落后时的 `resync`。
+- "等你决定"的条目由后端计算，与登记 turn 时的停下规则相同。最近一次采集还没完成时，role 是在等运行时，不列入。
+
+**前端**：`frontend/`，React + Vite，状态用 zustand。
+- 按 §3 的规则：重连或 `resync` 后重新取快照；推送只说什么变了，内容按需拉取。
+- 组件按 §4.1 的选型。
+- agent 文本中的 HTML 一律作为文本显示，链接只打开 http(s) 与 mailto，并在系统浏览器中打开。
+- 构建产物带 CSP，只运行自己的脚本，只连本机后端。
+
+**Electron**：`frontend/electron/`，按 §1 的启停方式实现。项目目录记在 host 目录的 `gui.json` 中。
+
+**运行（从源码）**：
+
+1. `cd backend && cargo build -p lobotomyd`
+2. `cd frontend && npm install && npm run app`。第一次启动时选择仓库。
+
+开发时可以用 `npm run dev` 加浏览器，地址中带 `?backend=ws://127.0.0.1:<端口>/gui&token=<token>`。
+
+**测试**：
+- vitest 测试对话分行；
+- Playwright 用本机 Edge，驱动真实后端与假 Codex，走完建任务、执行、验证、看 diff、验收、用户仓库出现文件；也测 turn 失败后继续；
+- Electron 外壳测试覆盖：没有项目时的接入、启动后端、退出时停止组织；
+- 后端崩溃不影响 GUI 重新连接、Electron 被强制结束后后端仍在运行：后一项手动验证过。
+
+**限制**：
+- 搜索与性能基线在第 5 个增量。
+- 没有安装包，Electron 从源码树找后端。
+- Inspector 还没有做：M1 只有一个 role，它的 Thread 就在主区。
+- Codex 的文本在完成时整块到达，运行中只显示正在执行的命令与已运行时间。
+- Windows 上由 Electron 拉起的后端会继承 Electron 的标准输出句柄。正常从桌面启动时没有影响；Playwright 因此要先停后端才能关闭应用。

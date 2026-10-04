@@ -59,4 +59,10 @@ frontend/                Electron + React + TypeScript
    - 待真实项目观察：体积护栏的阈值。
    - 换行跟着仓库走：按 `.gitattributes` 与文件现有的换行，不受机器配置影响（harness-adapter.md §3，用户确认）。
 4. **GUI**：WebSocket 协议（快照加序号、增量、命令）；React 界面（建任务、Malkuth 的 Thread、候选成果的 diff、验收与退回、turn 与额度状态）；Electron 外壳。
+
+   进度（2026-10-04）：第 4 个增量完成，实现与运行方式见 frontend.md §7。决定（用户确认）：
+   - 主区放 Malkuth 的 Thread，做出来后按实际效果迭代；
+   - GUI 连接要带 token，并校验 Origin；
+   - Electron 拉起独立的后端，关窗口时退到托盘，退出时停止组织；
+   - M1 不做系统通知。
 5. **端到端与性能基线**：用一个真实的小仓库走通 M1 链路；性能基线框架（frontend.md §5）。
