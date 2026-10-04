@@ -1,5 +1,6 @@
 // Messages to Malkuth. While it works on a task, a message belongs to that task. Outside
-// execution, messages wait until the task returns or closes (data-model.md §4.2).
+// execution, a message waits for the task to return to execution; closing the task does not
+// deliver it, and accepting needs the user to let it go (data-model.md §4.2, #14, #15).
 
 import { useState } from 'react';
 import { act, MAIN_ROLE, run, useStore } from '../store';
@@ -17,11 +18,13 @@ export function Composer() {
     if (sent !== undefined) setText('');
   };
 
-  const hint = task
-    ? task.phase === 'executing'
+  const hint = !task
+    ? '发给 Malkuth（不属于任何任务）'
+    : task.phase === 'executing'
       ? `发给 Malkuth · 任务「${task.title}」`
-      : `任务「${task.title}」在${task.phase === 'verifying' ? '验证' : '验收'}阶段，消息会在任务回到执行或关闭后投递`
-    : '发给 Malkuth（不属于任何任务）';
+      : task.phase === 'verifying'
+        ? `任务「${task.title}」正在验证。消息先排队，任务回到执行时交给 Malkuth；验收前要你决定退回还是不再投递`
+        : `任务「${task.title}」等你验收。消息先排队，退回后交给 Malkuth；直接验收则不再投递`;
 
   return (
     <div className="composer">

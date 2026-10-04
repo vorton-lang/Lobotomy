@@ -473,6 +473,11 @@ pre {
   justify-content: flex-end;
   margin-top: 14px;
 }
+.modal .viewer-actions {
+  justify-content: space-between;
+  align-items: center;
+  margin: 6px 0 8px;
+}
 
 .role-line {
   display: flex;

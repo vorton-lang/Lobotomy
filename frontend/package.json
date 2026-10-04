@@ -15,6 +15,7 @@
     "bench": "cargo build --release -p lobotomyd --manifest-path ../backend/Cargo.toml && vite build && playwright test -c bench/bench.config.ts"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.1",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.13",
     "@pierre/diffs": "^1.5.1",

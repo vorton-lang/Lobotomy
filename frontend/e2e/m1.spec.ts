@@ -149,6 +149,8 @@ test('a message the executor never got waits for the user at acceptance', async 
 
   const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
   await expect(card).toContainText('还有 1 条你发的消息没交给执行者');
+  // The composer says the same: closing the task does not deliver them (#15).
+  await expect(composer).toHaveAttribute('placeholder', /退回后交给 Malkuth；直接验收则不再投递/);
   await card.getByRole('button', { name: '查看并验收' }).click();
   const panel = page.getByRole('dialog', { name: '补充要求的任务' });
   await expect(panel.locator('.undelivered')).toContainText('异常行要能看到原始行号');
@@ -187,11 +189,12 @@ test('changes made outside any task become a task', async ({ page }) => {
 });
 
 // A command that writes a file through a heredoc takes a line or two until opened; search still
-// reaches its end (#14).
+// reaches its end (#14). Its whole text opens over the window and copies whole (#15).
 test('a long command stays short until opened', async ({ page }) => {
   await open(page);
   const composer = page.getByLabel('消息');
-  await composer.fill('FAKE:longcmd');
+  // Forty items before it make the thread taller than the window.
+  await composer.fill('FAKE:many=40 FAKE:longcmd');
   await composer.press('Enter');
   const item = page.locator('.item.command', { hasText: 'cat > generated.txt' });
   await expect(item.locator('summary')).toContainText('共 405 行');
@@ -204,6 +207,38 @@ test('a long command stays short until opened', async ({ page }) => {
   await expect(item).toHaveAttribute('open', '');
   await expect.poll(() => page.evaluate(() => CSS.highlights.get('search-current')?.size ?? 0)).toBeGreaterThan(0);
   await bar.getByLabel('搜索对话').press('Escape');
+
+  // Opened from a row low in a long thread, the viewer is where the window shows it, top to
+  // bottom: nothing of the thread covers or clips it.
+  await page.locator('.thread').evaluate((thread) => thread.scrollTo(0, thread.scrollHeight));
+  await item.getByRole('button', { name: '查看全文' }).click();
+  const viewer = page.getByRole('dialog', { name: '全文' });
+  await expect(viewer.locator('.cm-content')).toBeVisible();
+  const shown = await viewer.evaluate((dialog) => {
+    const r = dialog.getBoundingClientRect();
+    const inside = (f: number) => {
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height * f);
+      return hit !== null && dialog.contains(hit);
+    };
+    return r.top >= 0 && r.bottom <= innerHeight && r.height > 400 && [0.05, 0.5, 0.95].every(inside);
+  });
+  expect(shown).toBe(true);
+
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+  // The command FAKE:longcmd emits. The Windows clipboard ends lines with CRLF.
+  const body = Array.from({ length: 402 }, (_, i) => `  line ${i} of the generated source;`);
+  const command = ["cat > generated.txt <<'EOF'", ...body, 'heredoc-end-marker', 'EOF'].join('\n');
+  const whole = (text: string) => expect(text.replace(/\r\n/g, '\n')).toBe(command);
+  await viewer.locator('.cm-content').click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('ControlOrMeta+c');
+  whole(await clipboard());
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+  await viewer.getByRole('button', { name: '复制全文' }).click();
+  await expect.poll(clipboard).not.toBe('');
+  whole(await clipboard());
+  await viewer.getByRole('button', { name: '关闭' }).click();
 });
 
 // Ctrl+F finds what the virtualized thread has not loaded, loads it and scrolls there
