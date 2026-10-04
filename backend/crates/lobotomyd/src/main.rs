@@ -1,10 +1,9 @@
 //! The Lobotomy backend process. v1 runs one project per instance (data-model.md §10).
 
-mod project;
-
 use std::path::PathBuf;
 
 use anyhow::bail;
+use lobotomyd::project;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {

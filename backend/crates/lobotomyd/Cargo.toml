@@ -8,5 +8,15 @@ publish.workspace = true
 [dependencies]
 lobotomy-core.workspace = true
 anyhow.workspace = true
+axum.workspace = true
+http.workspace = true
+rmcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tower.workspace = true

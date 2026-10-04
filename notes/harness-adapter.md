@@ -71,7 +71,8 @@ Codex（消息经 stdin，位置参数为 -）
 |---|---|---|
 | 每轮单进程 | 首个输出约 2s，简单一轮 4–5s（haiku） | 首轮首个输出约 2.7s，resume 约 0.2s，一轮 7–22s |
 | 跨进程 prompt cache | 命中约 23.6k token，1h TTL | 输入大部分来自缓存 |
-| HTTP MCP 注入 | `--mcp-config` 可用，每轮重新 initialize | `-c mcp_servers.<name>.url=` 可用 |
+| HTTP MCP 注入 | `--mcp-config` 可用 | `-c mcp_servers.<name>.url=` 可用 |
+| MCP 协议版本（2026-10-04） | 2026-07-28：先发 `server/discover`，没有 `initialize` 握手，每个请求在 `_meta` 中带协议版本 | 2025-06-18：`initialize` 握手后 `tools/list`、`tools/call` |
 | 角色指令 | `--append-system-prompt` 可用，压缩后须重传 | `-c developer_instructions=` 可用，resume、压缩后保留 |
 | resume 时的 cwd | 不恢复 | 不恢复 |
 | 压缩事件 | stdout 有；`-p "/compact"` 可手动触发 | 压缩会发生，但 `--json` 输出无事件，仅 rollout 文件有 |
@@ -166,6 +167,21 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 ## 2. MCP 服务
 
 后端在 localhost 提供 streamable HTTP MCP。运行时每轮把带 token 的 URL 传给 CLI（1.3 第 2 条），由 URL 识别调用者；每轮不需要额外启动子进程。工具集见 [manager-actions.md](manager-actions.md) 与 [roles-and-tasks.md](roles-and-tasks.md)。
+
+**实现**（2026-10-04）：
+
+- 使用官方 Rust SDK rmcp 3.5（[m1-plan.md](m1-plan.md) §2）。URL 为 `/mcp/{token}`；路由先取出 token，放进 HTTP 请求的扩展中，工具处理函数从请求上下文读取。
+- 服务不保存 MCP 会话（rmcp 的 stateless 模式），工具调用以单个 JSON 响应返回，不用 SSE 流，不提供 GET 流（返回 405）。调用者已由 URL 中的 token 识别，会话没有额外作用。
+- `Host` 只接受 loopback 名称，防止 DNS 重绑定。
+- 两家 CLI 协商的协议版本不同（§1.4）：Claude 已使用 2026-07-28 的无状态协议，Codex 仍使用 2025-06-18 的 `initialize` 握手。stateless 模式对两者逐个请求应答，两者都能工作。
+
+**契约测试**：[backend/crates/lobotomyd/tests/mcp_contract.rs](../backend/crates/lobotomyd/tests/mcp_contract.rs)。用真实 CLI 跑一个 turn，确认三点：CLI 调用了工具，处理函数从 URL 取到了 token；所有 HTTP 交换都成功；工具结果到达了模型。测试打印协商的协议版本和每个 HTTP 交换。它消耗订阅额度，默认不运行。CLI 或 rmcp 升级后重跑：
+
+```text
+cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-threads 1
+```
+
+2026-10-04 的结果：Claude Code 2.1.283 与 Codex CLI 0.159.2 都通过。
 
 **语义更新：** v0.2 写的是"每个 role 分配一个 URL"，只能识别到 role。现改为按 turn 发放 token：`done` 等 MCP 调用绑定到发出它的 turn，不按"角色当前任务"反查归属（[data-model.md](data-model.md) §3）。
 
