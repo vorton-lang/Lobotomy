@@ -1,6 +1,6 @@
 // Labels and pure transformations for display.
 
-import type { BlobRef, Item, LiveItem, LiveTurn, Message, Permission, Phase, TaskDetail, Turn } from './api/types';
+import type { Attention, BlobRef, Item, LiveItem, LiveTurn, Message, Permission, Phase, TaskDetail, Turn } from './api/types';
 import type { ThreadState } from './store';
 
 export const PHASE_LABEL: Record<Phase, string> = {
@@ -76,10 +76,43 @@ export function turnOutcome(turn: Turn): string {
   if (turn.state === 'running') return '运行中';
   if (turn.state === 'unknown') return '状态未知';
   if (turn.outcome === 'completed') return 'turn 正常结束';
+  return abnormalEnd(turn);
+}
+
+/**
+ * How a turn that did not end normally ended. The thread and the card that waits for the user
+ * say it in the same words (#16).
+ */
+export function abnormalEnd(turn: Turn): string {
   if (turn.outcome === 'interrupted') return '被中断';
-  if (turn.failure?.kind === 'quota') return '额度不足';
-  if (turn.failure?.kind === 'permission') return '没能启动：权限模式不被允许';
-  return turn.failure?.unstarted ? '没能启动' : '失败';
+  if (turn.failure?.kind === 'permission') return '没能启动（权限模式不被允许）';
+  if (turn.failure?.unstarted) return '没能启动';
+  if (turn.failure?.kind === 'quota') return '因额度不足而失败';
+  return '失败';
+}
+
+/** A stable key for a card that waits for the user: a card keeps its draft while others come and go (#16). */
+export function attentionKey(a: Attention): string {
+  switch (a.kind) {
+    case 'hold':
+      return `hold:${a.role}:${a.hold.kind}`;
+    case 'outside_changes':
+      return `outside:${a.capture.id}`;
+    case 'unknown_turn':
+      return `unknown:${a.turn_id}`;
+    case 'task_blocked':
+      return `blocked:${a.task_id}`;
+    case 'stalled':
+      return `stalled:${a.turn_id}`;
+    case 'accept':
+      return `accept:${a.verification_id}`;
+    case 'quota':
+      return `quota:${a.domain.harness}`;
+    case 'job_failed':
+      return `job:${a.key}`;
+    case 'preview_stopped':
+      return 'preview';
+  }
 }
 
 export const HARNESS_LABEL: Record<string, string> = { codex: 'Codex', claude: 'Claude' };

@@ -37,9 +37,9 @@ impl Db {
     }
 
     fn init(mut conn: Connection) -> Result<Self> {
-        conn.pragma_update(None, "foreign_keys", true)?;
         conn.busy_timeout(Duration::from_secs(5))?;
-        migrate(&mut conn)?;
+        migrate(&mut conn, MIGRATIONS)?;
+        conn.pragma_update(None, "foreign_keys", true)?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -121,13 +121,64 @@ impl Db {
     }
 }
 
-fn migrate(conn: &mut Connection) -> Result<()> {
+/// Applies the migrations not yet applied, each in its own transaction.
+///
+/// Foreign keys are off while they run and checked before each commit. A migration may then
+/// rebuild a table other tables point to, as SQLite's "twelve steps" require for changing a CHECK
+/// constraint: with foreign keys on, dropping the old table would fail (#16). SQLite ignores the
+/// pragma inside a transaction, so a migration cannot switch it itself.
+fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
+    conn.pragma_update(None, "foreign_keys", false)?;
     let applied = conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))? as usize;
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(applied) {
+    for (i, sql) in migrations.iter().enumerate().skip(applied) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
+        let dangling: Option<String> = tx.query_row("PRAGMA foreign_key_check", [], |r| r.get(0)).optional()?;
+        if let Some(table) = dangling {
+            return Err(Error::invariant(format!("migration {} leaves rows of {table} pointing at nothing", i + 1)));
+        }
         tx.pragma_update(None, "user_version", (i + 1) as i64)?;
         tx.commit()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PARENT_AND_CHILD: &str = "
+        CREATE TABLE parent (id TEXT PRIMARY KEY, kind TEXT CHECK (kind IN ('a'))) STRICT;
+        CREATE TABLE child (id TEXT PRIMARY KEY, parent TEXT NOT NULL REFERENCES parent (id)) STRICT;
+        INSERT INTO parent VALUES ('p', 'a');
+        INSERT INTO child VALUES ('c', 'p');";
+
+    /// Widening a CHECK constraint means rebuilding the table; other tables keep pointing at it.
+    const WIDEN_PARENT: &str = "
+        CREATE TABLE parent_new (id TEXT PRIMARY KEY, kind TEXT CHECK (kind IN ('a', 'b'))) STRICT;
+        INSERT INTO parent_new SELECT * FROM parent;
+        DROP TABLE parent;
+        ALTER TABLE parent_new RENAME TO parent;";
+
+    #[test]
+    fn a_migration_can_rebuild_a_table_others_point_to() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn, &[PARENT_AND_CHILD, WIDEN_PARENT]).unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        conn.execute("INSERT INTO parent VALUES ('q', 'b')", []).unwrap();
+        let orphan = conn.execute("INSERT INTO child VALUES ('d', 'nowhere')", []);
+        assert!(orphan.is_err(), "the reference still holds after the rebuild");
+    }
+
+    #[test]
+    fn a_migration_that_leaves_dangling_rows_is_not_applied() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let broken = "DELETE FROM parent;";
+        let err = migrate(&mut conn, &[PARENT_AND_CHILD, broken]).unwrap_err();
+        assert!(matches!(err, Error::Invariant(_)), "{err}");
+        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, 1, "the broken migration rolled back");
+        let parents: i64 = conn.query_row("SELECT COUNT(*) FROM parent", [], |r| r.get(0)).unwrap();
+        assert_eq!(parents, 1);
+    }
 }

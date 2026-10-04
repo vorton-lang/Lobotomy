@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::project::Project;
 
-/// A running backend for one project: the MCP service and the scheduler.
+/// A running backend for one project: the MCP service, the GUI service and the scheduler.
 pub struct Backend {
     pub project: Arc<Project>,
     pub addr: SocketAddr,

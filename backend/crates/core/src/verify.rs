@@ -16,7 +16,8 @@ use crate::id::new_id;
 use crate::item::Blob;
 use crate::project::{ProjectConfig, config_version, current_config, require_project};
 use crate::task::{
-    Phase, Task, drop_queued, dropped_detail, load_task, queue_message, record_decision, undelivered_user_messages,
+    Phase, Task, close_task, dropped_detail, enter_execution, load_task, queue_message, record_decision,
+    undelivered_user_messages,
 };
 use crate::workspace::{plan, role_slot};
 
@@ -175,7 +176,7 @@ pub fn verification_plan(conn: &Connection, id: &str) -> Result<VerificationPlan
     message.push_str(&format!("\n\nLobotomy-Task: {}\nLobotomy-Role: {}\n", task.id, task.executor));
     Ok(VerificationPlan {
         verification_id: v.id,
-        candidate: capture.commit_id.ok_or_else(|| Error::rejected("not_pinned", "the candidate is not pinned"))?,
+        candidate: capture.commit_id.ok_or_else(|| Error::invariant("a verified candidate is not pinned"))?,
         base: v.base,
         branch: project.branch,
         config: config_version(conn, v.config_version)?,
@@ -352,27 +353,18 @@ fn rebased_slot(conn: &Connection, v: &Verification, commit: &str) -> Result<Opt
 }
 
 /// Opens the next attempt of a task coming back to execution, with a message for the executor
-/// (data-model.md §4.1). The native session carries on; the executor has seen the brief.
+/// (data-model.md §4.1). The native session carries on; the executor has seen the brief. The slot
+/// needs no `require_slot_free` check: the task is verifying or accepting, so no turn runs and
+/// its candidate's capture is what the slot holds.
 fn reenter(cx: &mut Cx<'_>, task: &Task, slot: Option<(String, String)>, body: &str) -> Result<()> {
-    let seq: i64 =
-        cx.tx
-            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| r.get(0))?;
-    let attempt_id = new_id("att");
-    cx.tx.execute(
-        "INSERT INTO attempt (id, task_id, seq, started_at, code_start) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![attempt_id, task.id, seq, cx.now, slot.as_ref().map(|(target, _)| target)],
-    )?;
-    cx.tx.execute(
-        "UPDATE task SET phase = 'executing', blocked_reason = NULL, revision = revision + 1 WHERE id = ?1",
-        [&task.id],
-    )?;
+    let started = enter_execution(cx, task, slot.as_ref().map(|(target, _)| target.as_str()))?;
     if let Some((target, head)) = &slot
         && let Some(name) = role_slot(cx.tx, &task.executor)?
     {
         plan(cx, &name, target, head, Some(&task.id))?;
     }
     queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), body)?;
-    cx.emit("attempt.started", &task.id, json!({ "attempt_id": attempt_id, "seq": seq }))?;
+    cx.emit("attempt.started", &task.id, json!({ "attempt_id": started.attempt_id, "seq": started.seq }))?;
     Ok(())
 }
 
@@ -491,22 +483,21 @@ impl Command for Accept {
         });
         let decision = record_decision(cx, "accept", Some(&task.id), caller, detail)?;
         let rev = project.integration_rev + 1;
-        cx.tx.execute(
+        // The check above read the head in this transaction, so exactly one row moves; anything
+        // else is a broken invariant, not a race.
+        let moved = cx.tx.execute(
             "UPDATE project SET integration = ?2, integration_rev = ?3 WHERE id = ?1 AND integration = ?4",
             params![project.id, commit, rev, project.integration],
         )?;
+        if moved != 1 {
+            return Err(Error::invariant(format!("the integration head of project {} did not move", project.id)));
+        }
         cx.tx.execute(
             "INSERT INTO publication (rev, commit_id, previous, task_id, decision_id, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![rev, commit, project.integration, task.id, decision, cx.now],
         )?;
-        cx.tx.execute("DELETE FROM occupancy WHERE task_id = ?1", [&task.id])?;
-        crate::turn::end_task_sessions(cx, &task.id)?;
-        drop_queued(cx, &task.id)?;
-        cx.tx.execute(
-            "UPDATE task SET phase = 'done', closed_at = ?2, revision = revision + 1 WHERE id = ?1",
-            params![task.id, cx.now],
-        )?;
+        close_task(cx, &task, Phase::Done)?;
         cx.tx.execute(
             "INSERT INTO outbox (id, kind, idem_key, payload, state, created_at) VALUES (?1, 'preview', ?2, ?3, 'pending', ?4)",
             params![new_id("obx"), format!("preview:{commit}"), json!({ "target": commit }).to_string(), cx.now],

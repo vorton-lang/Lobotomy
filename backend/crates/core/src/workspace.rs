@@ -58,7 +58,7 @@ fn parse((mut ws, state): (Workspace, String)) -> Result<Workspace> {
         "materializing" => WorkspaceState::Materializing,
         "ready" => WorkspaceState::Ready,
         "retired" => WorkspaceState::Retired,
-        other => return Err(Error::rejected("bad_state", format!("unknown workspace state {other}"))),
+        other => return Err(Error::invariant(format!("unknown workspace state {other}"))),
     };
     Ok(ws)
 }
@@ -120,13 +120,34 @@ pub(crate) fn plan(cx: &mut Cx<'_>, name: &str, target: &str, head: &str, task_i
     Ok(id)
 }
 
+/// Whether the role's slot may be written with other content (harness-adapter.md §3): no turn runs
+/// in it, its content is captured, and no changes made outside any task wait for the user (#14).
+/// The user's own decision about such changes passes their capture as `deciding`. Every way of
+/// planning another target over a slot in use checks this here, so the rules cannot drift apart
+/// (#16).
+pub fn require_slot_free(conn: &Connection, role: &str, deciding: Option<&str>) -> Result<()> {
+    if let Some(turn) = crate::turn::unfinished_turn(conn, role)? {
+        return Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", turn.id)));
+    }
+    crate::capture::require_captured(conn, role)?;
+    if let Some(capture) = crate::capture::outside_changes(conn, role)?
+        && deciding != Some(capture.id.as_str())
+    {
+        return Err(Error::rejected(
+            "outside_changes",
+            format!("the slot of {role} holds undecided changes of capture {}", capture.id),
+        ));
+    }
+    Ok(())
+}
+
 /// The slot follows the role's work: with a task it holds the attempt's code start, without one
 /// the integration version. When the role has no task and its slot holds something else (it was
 /// never written, or the last task was accepted or abandoned), the slot is planned at the
-/// integration version, once its content is captured (harness-adapter.md §3).
+/// integration version, once it is free (harness-adapter.md §3).
 ///
-/// Changes made in turns without a task are captured but belong to no result; the next
-/// materialization drops them from the slot.
+/// Changes made in turns without a task stay in the slot until the user makes a task of them or
+/// discards them (#14).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AlignIdleSlot {
     pub role: String,
@@ -144,18 +165,14 @@ impl Command for AlignIdleSlot {
             return Err(Error::rejected("role_busy", format!("{} works on {task}", self.role)));
         }
         let project = require_project(cx.tx)?;
-        if let Some(ws) = current_workspace(cx.tx, &slot)? {
-            if ws.task_id.is_none() && ws.target == project.integration && ws.head == project.integration {
-                return Err(Error::rejected("slot_aligned", format!("slot {slot} is at the integration version")));
-            }
-            if let Some(turn) = crate::turn::unfinished_turn(cx.tx, &self.role)? {
-                return Err(Error::rejected(
-                    "turn_unfinished",
-                    format!("{} has unfinished turn {}", self.role, turn.id),
-                ));
-            }
-            crate::capture::require_captured(cx.tx, &self.role)?;
+        if let Some(ws) = current_workspace(cx.tx, &slot)?
+            && ws.task_id.is_none()
+            && ws.target == project.integration
+            && ws.head == project.integration
+        {
+            return Err(Error::rejected("slot_aligned", format!("slot {slot} is at the integration version")));
         }
+        require_slot_free(cx.tx, &self.role, None)?;
         plan(cx, &slot, &project.integration, &project.integration, None)?;
         Ok(())
     }

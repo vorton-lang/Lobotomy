@@ -384,6 +384,25 @@ fn blocked_sets_the_reason_once_and_progress_clears_it() {
     assert_eq!(reason(&db), None);
 }
 
+/// A question asked before the task was abandoned does not come back when it is reopened: the
+/// GUI would show it as the executor waiting for the user (#16).
+#[test]
+fn a_question_does_not_outlive_its_task() {
+    let db = db();
+    let task = started_task(&db);
+    let t = register(&db).unwrap();
+    report(&db, &t.turn_id, ReportStatus::Blocked, Some("用哪个检查命令？")).unwrap();
+    end(&db, &t.turn_id, Outcome::Completed);
+    let abandon = Abandon { request_id: "a1".into(), task_id: task.clone(), reason: "先不做".into() };
+    db.execute(&Caller::User, &abandon).unwrap();
+    let reason = || db.read(|c| load_task(c, &task)).unwrap().blocked_reason;
+    assert_eq!(reason(), None, "a closed task asks nothing");
+    db.execute(&Caller::User, &Reopen { request_id: "r1".into(), task_id: task.clone() }).unwrap();
+    start(&db, &task);
+    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Executing);
+    assert_eq!(reason(), None);
+}
+
 #[test]
 fn reports_after_the_turn_ended_are_late_and_change_nothing() {
     let db = db();

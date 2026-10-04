@@ -3,9 +3,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use lobotomy_core::project::{Onboard, load_project};
-use lobotomy_core::{Caller, id::new_id};
+use lobotomy_core::{Caller, Error, id::new_id};
 use lobotomy_store::repo;
 
 use crate::project::Project;
@@ -16,7 +16,11 @@ use crate::runner::db;
 /// nothing happens and the reasons are returned.
 pub async fn onboard(project: &Arc<Project>, repo_path: &Path) -> anyhow::Result<()> {
     if let Some(existing) = db(project, |db| db.read(load_project)).await? {
-        bail!("this project is already connected to {}", existing.repo_path);
+        return Err(Error::rejected(
+            "already_onboarded",
+            format!("this project is already connected to {}", existing.repo_path),
+        )
+        .into());
     }
     let repo_path = std::fs::canonicalize(repo_path).with_context(|| format!("opening {}", repo_path.display()))?;
     let repo_path = dunce(&repo_path);
@@ -39,7 +43,11 @@ pub async fn onboard(project: &Arc<Project>, repo_path: &Path) -> anyhow::Result
             problems.push("没有配置 git 的 user.name 与 user.email".to_owned());
         }
         if !problems.is_empty() {
-            bail!("不能接入 {}：{}", path.display(), problems.join("；"));
+            return Err(Error::rejected(
+                "repo_unusable",
+                format!("不能接入 {}：{}", path.display(), problems.join("；")),
+            )
+            .into());
         }
         let (branch, head, author) = (state.branch.unwrap(), state.head.unwrap(), author.unwrap());
         store.import(&path, &branch, Some(&head), "import")?;

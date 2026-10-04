@@ -3,7 +3,7 @@
 // deliver it, and accepting needs the user to let it go (data-model.md §4.2, #14, #15).
 
 import { useState } from 'react';
-import { act, MAIN_ROLE, run, useStore } from '../store';
+import { act, MAIN_ROLE, useCommand, useStore } from '../store';
 
 export function Composer() {
   const [text, setText] = useState('');
@@ -11,10 +11,11 @@ export function Composer() {
   const task = useStore((s) => s.snapshot?.tasks.find((t) => t.id === role?.task_id));
   const running = role?.unfinished?.state === 'running' ? role.unfinished : null;
 
+  const { submit, busy } = useCommand('send_message');
   const send = async () => {
     const body = text.trim();
     if (!body) return;
-    const sent = await run('send_message', { role: MAIN_ROLE, task_id: task?.id ?? null, body });
+    const sent = await submit({ role: MAIN_ROLE, task_id: task?.id ?? null, body });
     if (sent !== undefined) setText('');
   };
 
@@ -47,7 +48,7 @@ export function Composer() {
             中断
           </button>
         )}
-        <button className="primary" onClick={send} disabled={!text.trim()}>
+        <button className="primary" onClick={send} disabled={!text.trim() || busy}>
           发送
         </button>
       </div>

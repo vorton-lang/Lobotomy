@@ -1,10 +1,13 @@
 //! Runs one registered turn: starts the CLI, delivers the input, stores the transcript items and
 //! ends the turn (harness-adapter.md §1; data-model.md §3, §7).
 
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
+use futures::FutureExt as _;
 use lobotomy_core::id::now_ms;
 use lobotomy_core::item::{NewItem, externalize, record_item};
 use lobotomy_core::role::{Role, load_role};
@@ -12,7 +15,7 @@ use lobotomy_core::turn::{
     EndTurn, Failure, FailureKind, InputDelivered, Outcome, SessionIdentified, Turn, TurnLaunched, load_turn,
 };
 use lobotomy_core::workspace::load_workspace;
-use lobotomy_core::{Caller, Command, Db};
+use lobotomy_core::{Caller, Command, Db, Error};
 use lobotomy_harness::codex::{self, TurnArgs};
 use lobotomy_harness::event::{Event, Item, ItemKind};
 use lobotomy_harness::process::{self, Spawned, Spec};
@@ -43,6 +46,23 @@ where
     db(project, move |db| db.execute(&Caller::Runtime, &cmd)).await
 }
 
+/// Turns a panic in `f` into an error, so the bookkeeping after a runner or a job still happens:
+/// otherwise a panicked turn stays in `running` for good, and shutdown waits its whole grace
+/// period for it (#16).
+pub(crate) async fn catch_panic<T>(f: impl Future<Output = anyhow::Result<T>>) -> anyhow::Result<T> {
+    match AssertUnwindSafe(f).catch_unwind().await {
+        Ok(result) => result,
+        Err(panic) => {
+            let what = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_default();
+            anyhow::bail!("panicked: {what}")
+        }
+    }
+}
+
 /// Starts a runner for a registered turn unless one is running already.
 pub fn launch(project: &Arc<Project>, turn_id: String) {
     {
@@ -54,7 +74,7 @@ pub fn launch(project: &Arc<Project>, turn_id: String) {
     }
     let project = project.clone();
     tokio::spawn(async move {
-        if let Err(e) = run(&project, &turn_id).await {
+        if let Err(e) = catch_panic(run(&project, &turn_id)).await {
             tracing::error!(turn_id, error = format!("{e:#}"), "turn runner failed");
             // The turn must not stay running without a runner. If the CLI may still be alive,
             // the turn becomes unknown at the next start and is reconciled then.
@@ -77,9 +97,10 @@ pub fn launch(project: &Arc<Project>, turn_id: String) {
 pub async fn interrupt(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let pid = {
         let mut running = project.running.lock().unwrap();
-        let turn = running.get_mut(turn_id).context("the turn is not running here")?;
+        let turn =
+            running.get_mut(turn_id).ok_or_else(|| Error::rejected("not_running", "the turn is not running here"))?;
         turn.interrupt_requested = true;
-        turn.pid.context("the CLI has not started yet")?
+        turn.pid.ok_or_else(|| Error::rejected("not_started", "the CLI has not started yet"))?
     };
     process::interrupt(pid, &project.host.harness.interrupt_helper).await?;
     Ok(())
@@ -98,6 +119,11 @@ struct Observed {
     failed: Option<String>,
     last_error: Option<String>,
     unparsed: bool,
+    /// An event could not be recorded; the raw output is kept to replay it (#16).
+    unrecorded: bool,
+    /// The harness's session id could not be recorded. Going on would start the next turn in a
+    /// fresh session without anyone noticing, so the turn fails and the role waits (#16).
+    session_unrecorded: Option<String>,
 }
 
 /// A failure before the CLI wrote anything: its input reached no session.
@@ -232,6 +258,7 @@ async fn drive(
         let Some(event) = codex::parse_line(&line) else { continue };
         if let Err(e) = observe(project, turn, event, &mut seen).await {
             tracing::warn!(turn_id = turn.id, error = format!("{e:#}"), "could not record an event");
+            seen.unrecorded = true;
         }
     }
     raw.flush().await?;
@@ -239,7 +266,14 @@ async fn drive(
     let _ = stderr_copy.await;
 
     let interrupted = project.running.lock().unwrap().get(&turn.id).is_some_and(|t| t.interrupt_requested);
-    let result = if seen.completed {
+    let result = if let Some(error) = seen.session_unrecorded {
+        let path = project.raw_output_path(&turn.id, "jsonl");
+        let message = format!(
+            "Lobotomy 没能记下这一轮的 Codex 会话 ID：{error}\n接着用原来的会话继续，或新建会话。原始输出保留在 {}",
+            path.display()
+        );
+        (Outcome::Failed, Some(Failure::new(FailureKind::Other, message)))
+    } else if seen.completed {
         (Outcome::Completed, None)
     } else if let Some(message) = seen.failed {
         // Codex's quota rejections are not known yet; they count as ordinary failures
@@ -271,7 +305,7 @@ async fn drive(
         }
         (Outcome::Failed, Some(Failure { unstarted: !seen.output, ..Failure::new(kind, message) }))
     };
-    let clean = result.0 == Outcome::Completed && !seen.unparsed;
+    let clean = result.0 == Outcome::Completed && !seen.unparsed && !seen.unrecorded;
     Ok((result.0, result.1, clean))
 }
 
@@ -292,7 +326,11 @@ async fn observe(project: &Arc<Project>, turn: &Turn, event: Event, seen: &mut O
     match event {
         Event::SessionStarted { native_id } => {
             if turn.native_id.as_deref() != Some(native_id.as_str()) {
-                runtime(project, SessionIdentified { turn_id: turn.id.clone(), native_id }).await?;
+                let identified = runtime(project, SessionIdentified { turn_id: turn.id.clone(), native_id }).await;
+                if let Err(e) = &identified {
+                    seen.session_unrecorded = Some(format!("{e:#}"));
+                }
+                identified?;
             }
         }
         Event::ItemCompleted(item) => {

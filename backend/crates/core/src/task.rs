@@ -40,7 +40,7 @@ impl Phase {
             "accepting" => Phase::Accepting,
             "done" => Phase::Done,
             "abandoned" => Phase::Abandoned,
-            other => return Err(Error::rejected("bad_phase", format!("unknown phase {other}"))),
+            other => return Err(Error::invariant(format!("unknown phase {other}"))),
         })
     }
 
@@ -251,6 +251,49 @@ fn require_open(task: &Task) -> Result<()> {
 fn bump_revision(cx: &Cx<'_>, task_id: &str) -> Result<()> {
     cx.tx.execute("UPDATE task SET revision = revision + 1 WHERE id = ?1", [task_id])?;
     Ok(())
+}
+
+/// Puts the task into execution with a new attempt (data-model.md §4.1). Every way into
+/// execution goes through here: a start, a reopen, a failed verification, a send-back. A
+/// question the executor asked in an earlier attempt no longer stands (#16). The caller emits
+/// `attempt.started` once the attempt's slot and message are in place.
+pub(crate) fn enter_execution(cx: &mut Cx<'_>, task: &Task, code_start: Option<&str>) -> Result<AttemptStarted> {
+    let seq: i64 =
+        cx.tx
+            .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| r.get(0))?;
+    let attempt_id = new_id("att");
+    cx.tx.execute(
+        "INSERT INTO attempt (id, task_id, seq, started_at, code_start) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![attempt_id, task.id, seq, cx.now, code_start],
+    )?;
+    cx.tx.execute(
+        "UPDATE task SET phase = 'executing', blocked_reason = NULL, queue_pos = NULL WHERE id = ?1",
+        [&task.id],
+    )?;
+    bump_revision(cx, &task.id)?;
+    Ok(AttemptStarted { attempt_id, seq })
+}
+
+/// Closes the task, accepted (`Done`) or abandoned (data-model.md §4.2, §9.2). Every way out goes
+/// through here: the executor is freed, the task's sessions end (#11) and the messages still
+/// queued for it are dropped (#14). An abandoned task's open attempt ends with it; an accepted
+/// task's attempt ended when its candidate was captured.
+pub(crate) fn close_task(cx: &mut Cx<'_>, task: &Task, phase: Phase) -> Result<()> {
+    debug_assert!(phase.is_closed(), "close_task with {}", phase.as_str());
+    if phase == Phase::Abandoned {
+        cx.tx.execute(
+            "UPDATE attempt SET ended_at = ?2, end_reason = 'abandoned' WHERE task_id = ?1 AND ended_at IS NULL",
+            params![task.id, cx.now],
+        )?;
+    }
+    cx.tx.execute("DELETE FROM occupancy WHERE task_id = ?1", [&task.id])?;
+    crate::turn::end_task_sessions(cx, &task.id)?;
+    drop_queued(cx, &task.id)?;
+    cx.tx.execute(
+        "UPDATE task SET phase = ?2, closed_at = ?3, queue_pos = NULL, blocked_reason = NULL WHERE id = ?1",
+        params![task.id, phase.as_str(), cx.now],
+    )?;
+    bump_revision(cx, &task.id)
 }
 
 fn next_queue_pos(cx: &Cx<'_>, executor: &str) -> Result<i64> {
@@ -565,19 +608,7 @@ impl Command for Abandon {
         let dropped = undelivered_user_messages(cx.tx, &task.id)?;
         let detail = json!({ "reason": self.reason, "dropped_messages": dropped_detail(&dropped) });
         record_decision(cx, "abandon", Some(&task.id), caller, detail)?;
-        drop_queued(cx, &task.id)?;
-        cx.tx.execute(
-            "UPDATE attempt SET ended_at = ?2, end_reason = 'abandoned' WHERE task_id = ?1 AND ended_at IS NULL",
-            params![task.id, cx.now],
-        )?;
-        cx.tx.execute("DELETE FROM occupancy WHERE task_id = ?1", [&task.id])?;
-        // A closed task's session ends; a reopened task starts a fresh one (#11).
-        crate::turn::end_task_sessions(cx, &task.id)?;
-        cx.tx.execute(
-            "UPDATE task SET phase = 'abandoned', closed_at = ?2, queue_pos = NULL WHERE id = ?1",
-            params![task.id, cx.now],
-        )?;
-        bump_revision(cx, &task.id)?;
+        close_task(cx, &task, Phase::Abandoned)?;
         cx.emit("task.abandoned", &task.id, json!({ "reason": self.reason }))?;
         Ok(())
     }
@@ -662,22 +693,8 @@ impl Command for StartAttempt {
         if let Some(other) = occupant(cx.tx, &task.executor)? {
             return Err(Error::rejected("role_busy", format!("{} is occupied by {other}", task.executor)));
         }
-        // The slot is about to be rewritten: nothing may run in it, and what is there must be
-        // captured.
-        if let Some(turn) = crate::turn::unfinished_turn(cx.tx, &task.executor)? {
-            return Err(Error::rejected(
-                "turn_unfinished",
-                format!("{} has unfinished turn {}", task.executor, turn.id),
-            ));
-        }
-        crate::capture::require_captured(cx.tx, &task.executor)?;
-        // Changes outside any task are in the slot until the user decides about them (#14).
-        if let Some(capture) = crate::capture::outside_changes(cx.tx, &task.executor)? {
-            return Err(Error::rejected(
-                "outside_changes",
-                format!("the slot of {} holds undecided changes of capture {}", task.executor, capture.id),
-            ));
-        }
+        // The slot is about to be rewritten.
+        crate::workspace::require_slot_free(cx.tx, &task.executor, None)?;
         let project = crate::project::require_project(cx.tx)?;
         let earlier = crate::verify::work_so_far(cx.tx, &task.id)?;
         let start = match (&earlier, &self.code_start) {
@@ -693,21 +710,12 @@ impl Command for StartAttempt {
             }
         };
 
-        let seq: i64 =
-            cx.tx.query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| {
-                r.get(0)
-            })?;
-        let attempt_id = new_id("att");
-        cx.tx.execute(
-            "INSERT INTO attempt (id, task_id, seq, started_at, code_start) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![attempt_id, task.id, seq, cx.now, start.commit],
-        )?;
+        let started = enter_execution(cx, &task, Some(&start.commit))?;
+        let seq = started.seq;
         cx.tx.execute(
             "INSERT INTO occupancy (role, task_id, since) VALUES (?1, ?2, ?3)",
             params![task.executor, task.id, cx.now],
         )?;
-        cx.tx.execute("UPDATE task SET phase = 'executing', queue_pos = NULL WHERE id = ?1", [&task.id])?;
-        bump_revision(cx, &task.id)?;
         if let Some(slot) = crate::workspace::role_slot(cx.tx, &task.executor)? {
             crate::workspace::plan(cx, &slot, &start.commit, &start.base, Some(&task.id))?;
         }
@@ -722,7 +730,7 @@ impl Command for StartAttempt {
             ));
         }
         queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), &brief)?;
-        cx.emit("attempt.started", &task.id, json!({ "attempt_id": attempt_id, "seq": seq }))?;
-        Ok(AttemptStarted { attempt_id, seq })
+        cx.emit("attempt.started", &task.id, json!({ "attempt_id": started.attempt_id, "seq": seq }))?;
+        Ok(started)
     }
 }

@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import type { Attempt, Capture, Item, Message, TaskDetail, Turn, VerificationRow } from './api/types';
-import { buildRows, continueNote, firstLines, fits, lastLines, preview, timeline, workRange } from './format';
+import type { Attempt, Attention, Capture, Failure, Item, Message, TaskDetail, Turn, VerificationRow } from './api/types';
+import {
+  abnormalEnd,
+  attentionKey,
+  buildRows,
+  continueNote,
+  firstLines,
+  fits,
+  lastLines,
+  preview,
+  timeline,
+  turnOutcome,
+  workRange,
+} from './format';
 import { mergePage, type ThreadState } from './store';
 
 const turn = (id: string, input = '【来自 你】\n做点事'): Turn => ({
@@ -179,5 +191,37 @@ describe('preview', () => {
     const { text, blob } = preview({ blob: 'h', size: 300_000, head: 'start', tail: 'end' });
     expect(blob?.blob).toBe('h');
     expect(text.startsWith('start') && text.endsWith('end')).toBe(true);
+  });
+});
+
+describe('abnormalEnd', () => {
+  const failed = (failure: Partial<Failure> | null, outcome: Turn['outcome'] = 'failed'): Turn => ({
+    ...turn('t'),
+    outcome,
+    failure: failure && { kind: 'other', message: 'x', resets_at: null, ...failure },
+  });
+
+  it('names each way a turn ends abnormally, as the thread does', () => {
+    const cases: [Turn, string][] = [
+      [failed(null, 'interrupted'), '被中断'],
+      [failed({ kind: 'permission', unstarted: true }), '没能启动（权限模式不被允许）'],
+      [failed({ unstarted: true }), '没能启动'],
+      [failed({ kind: 'quota' }), '因额度不足而失败'],
+      [failed({}), '失败'],
+    ];
+    for (const [t, label] of cases) {
+      expect(abnormalEnd(t)).toBe(label);
+      expect(turnOutcome(t)).toBe(label);
+    }
+  });
+});
+
+describe('attentionKey', () => {
+  it('tells cards apart and keeps a card its key from one snapshot to the next', () => {
+    const blocked = (task_id: string, reason = 'r'): Attention => ({ kind: 'task_blocked', task_id, title: 't', reason });
+    expect(attentionKey(blocked('a'))).toBe(attentionKey(blocked('a', '换了个问法')));
+    expect(attentionKey(blocked('a'))).not.toBe(attentionKey(blocked('b')));
+    const accept: Attention = { kind: 'accept', task_id: 'a', title: 't', verification_id: 'v' };
+    expect(attentionKey(accept)).not.toBe(attentionKey(blocked('a')));
   });
 });

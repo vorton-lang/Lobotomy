@@ -14,20 +14,24 @@ async function open(page: Page) {
   await expect(page.getByText('已连接')).toBeVisible();
 }
 
-async function createTask(page: Page, title: string, body: string) {
+async function createTask(page: Page, title: string, body: string, { twice = false } = {}) {
   await page.getByRole('button', { name: '+ 新任务' }).click();
   const dialog = page.getByRole('dialog', { name: '新任务' });
   await dialog.getByLabel('标题').fill(title);
   await dialog.getByLabel('你的原话').fill(body);
   await dialog.getByLabel('完成条件').fill('work.txt 存在');
-  await dialog.getByRole('button', { name: '交给 Malkuth' }).click();
+  const submit = dialog.getByRole('button', { name: '交给 Malkuth' });
+  if (twice) await submit.dblclick();
+  else await submit.click();
 }
 
 test.use({ baseURL: 'http://127.0.0.1:5173' });
 
 test('a task goes from creation to the user repository', async ({ page }) => {
   await open(page);
-  await createTask(page, '写 work.txt', 'FAKE:done');
+  // Pressing twice creates one task (#16).
+  await createTask(page, '写 work.txt', 'FAKE:done', { twice: true });
+  await expect(page.locator('.task-line', { hasText: '写 work.txt' })).toHaveCount(1);
 
   // Malkuth's report shows in the thread; the turn's end shows too; the candidate waits for
   // acceptance.
@@ -114,7 +118,7 @@ test('a managed Codex goes on after switching to auto review', async ({ page }) 
   const card = page.locator('.attention .card').filter({ hasText: '没能启动' });
   await expect(card).toContainText('不允许 Codex 以「完全放开」运行');
   await expect(card).toContainText('继续时会原样重新发送');
-  await expect(page.locator('.turn-divider').filter({ hasText: '没能启动：权限模式不被允许' })).toBeVisible();
+  await expect(page.locator('.turn-divider').filter({ hasText: '没能启动（权限模式不被允许）' })).toBeVisible();
   await card.getByRole('button', { name: '改用自动审批并继续' }).click();
   await expect(card).toBeHidden();
 

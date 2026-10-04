@@ -5,6 +5,7 @@
 //   FAKE:done   writes work.txt, reports done, completes the turn; with FAKE:text=<word> the
 //               file holds that word instead of "hi"; with FAKE:nowrite it writes nothing
 //   FAKE:wait=<ms>  waits that long before anything else, so a message can arrive meanwhile
+//   FAKE:newthread  reports a new session id even when resuming, which the runtime cannot record
 //   FAKE:managed  acts as a Codex whose administrator does not allow full access: given
 //               --dangerously-bypass-approvals-and-sandbox, it exits at start with Codex's error
 //               on stderr and nothing on stdout; otherwise the other modes go on
@@ -36,7 +37,6 @@ const config = name => {
   return i < 0 ? undefined : JSON.parse(args[i].slice(name.length + 1));
 };
 const resumeAt = args.indexOf('resume');
-const threadId = resumeAt >= 0 ? args[resumeAt + 1] : crypto.randomUUID();
 const url = config('mcp_servers.lobotomy.url');
 fs.writeFileSync(`${diag}last-args.json`, JSON.stringify(args));
 
@@ -59,6 +59,7 @@ if (input.includes('FAKE:managed') && args.includes('--dangerously-bypass-approv
 if (flags.has('--fake-stderr-flood')) await new Promise(r => process.stderr.write('x'.repeat(4 << 20), r));
 if (flags.has('--fake-hang')) await new Promise(r => setTimeout(r, 600_000));
 
+const threadId = resumeAt >= 0 && !input.includes('FAKE:newthread') ? args[resumeAt + 1] : crypto.randomUUID();
 emit({ type: 'thread.started', thread_id: threadId });
 emit({ type: 'turn.started' });
 const wait = /FAKE:wait=(\d+)/.exec(input);

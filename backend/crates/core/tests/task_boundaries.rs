@@ -216,6 +216,21 @@ fn changes_outside_any_task_keep_tasks_from_starting_until_the_user_decides() {
     start(&db, &task);
 }
 
+/// When the integration version moves (another role's task was accepted), the idle slot follows
+/// it, but not over changes the user has not decided about (#16).
+#[test]
+fn an_idle_slot_does_not_follow_the_integration_version_over_undecided_changes() {
+    let db = db();
+    idle_slot(&db);
+    outside_turn(&db, "m1", &["README.md"]);
+    db.write(|tx| {
+        Ok(tx.execute("UPDATE project SET integration = 'moved', integration_rev = integration_rev + 1", [])?)
+    })
+    .unwrap();
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &AlignIdleSlot { role: ROLE.into() })), "outside_changes");
+    assert_eq!(db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap().target, BASE);
+}
+
 #[test]
 fn a_task_made_from_outside_changes_starts_from_them() {
     let db = db();

@@ -102,8 +102,9 @@ export class Connection {
         pending.reject(new RequestFailed({ code: 'disconnected', message: '与后端的连接已断开' }));
       }
       this.pending.clear();
-      this.events.status('closed');
+      // A stopped connection says nothing more: a newer one reports the status now (#16).
       if (this.closed) return;
+      this.events.status('closed');
       const delay = RETRY_MS[Math.min(this.attempts++, RETRY_MS.length - 1)];
       setTimeout(async () => {
         const found = await this.locate?.().catch(() => null);

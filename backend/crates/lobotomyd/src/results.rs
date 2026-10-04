@@ -48,7 +48,7 @@ where
     }
     let project = project.clone();
     tokio::spawn(async move {
-        if let Err(e) = job.await {
+        if let Err(e) = crate::runner::catch_panic(job).await {
             let reason = format!("{e:#}");
             tracing::error!(key, error = reason, "store job failed; waiting for the user to retry");
             project.failed.lock().unwrap().insert(key.clone(), reason);
@@ -113,8 +113,12 @@ pub async fn materialize(project: Arc<Project>, ws: Workspace) -> anyhow::Result
             let old_state = project.slot_state_dir(&ws.name, ws.generation);
             let next = runtime(&project, ReplaceWorkspace { workspace_id: ws.id.clone(), reason }).await?;
             write(project.clone(), next.clone(), branch, scope).await??;
-            let _ = std::fs::remove_dir_all(aside);
-            let _ = std::fs::remove_dir_all(old_state);
+            // A slot keeps build caches (data-model.md §6): deleting one can take seconds.
+            blocking(move || {
+                let _ = std::fs::remove_dir_all(aside);
+                let _ = std::fs::remove_dir_all(old_state);
+            })
+            .await?;
             next
         }
         Err(e) => return Err(e.into()),

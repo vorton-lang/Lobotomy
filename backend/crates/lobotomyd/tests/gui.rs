@@ -153,6 +153,10 @@ async fn the_gui_drives_a_task_to_acceptance() {
     let call = &thread["items"][2];
     assert_eq!(thread["commands"][call["command_id"].as_str().unwrap()]["args"]["status"], "done");
     assert!(thread["messages"][0]["body"].as_str().unwrap().contains("写 work.txt"));
+    // A turn's MCP token is for its CLI only (#16).
+    for view in [&thread, &snapshot] {
+        assert!(!view.to_string().contains("\"tok_"), "a turn token reached the GUI: {view}");
+    }
 
     // The candidate's diff against the integration version.
     let detail = gui.call("task", json!({ "task_id": task })).await.unwrap();

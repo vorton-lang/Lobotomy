@@ -57,8 +57,16 @@ function reachable(port) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Starts in progress, by project directory: callers at the same time share one (#16). */
+const starting = new Map();
+
 /** The project's running backend, started if needed. It outlives this process. */
-async function ensureBackend(dir) {
+function ensureBackend(dir) {
+  if (!starting.has(dir)) starting.set(dir, startBackend(dir).finally(() => starting.delete(dir)));
+  return starting.get(dir);
+}
+
+async function startBackend(dir) {
   const infoPath = path.join(dir, 'backend.json');
   const info = readJson(infoPath);
   if (info && (await reachable(info.port))) return info;
@@ -136,11 +144,15 @@ async function quit() {
       await new Promise((resolve, reject) => {
         const socket = new WebSocket(`ws://127.0.0.1:${info.port}/gui?token=${encodeURIComponent(token())}`);
         socket.onopen = () => socket.send(JSON.stringify({ id: 1, method: 'command', params: { name: 'shutdown', args: {} } }));
-        socket.onmessage = () => {
+        // Pushes and ticks come on the same socket; only the reply to the request counts.
+        socket.onmessage = (event) => {
+          const message = JSON.parse(String(event.data));
+          if (message.id !== 1) return;
           socket.close();
-          resolve();
+          if (message.error) reject(new Error(message.error.message));
+          else resolve();
         };
-        socket.onerror = reject;
+        socket.onerror = () => reject(new Error('连不上后端'));
       });
       // The backend waits up to 30 s for interrupted turns before it exits.
       for (let i = 0; i < 200 && (await reachable(info.port)); i++) await sleep(200);

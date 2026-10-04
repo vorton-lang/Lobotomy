@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import type { Attention, Capture, Hold, RoleView, Task } from '../api/types';
-import { bytes, clock, elapsed, HARNESS_LABEL, PERMISSION_LABEL, PHASE_LABEL } from '../format';
-import { act, MAIN_ROLE, run, selectTask, setPermission, toast, useStore } from '../store';
+import { abnormalEnd, attentionKey, bytes, clock, elapsed, HARNESS_LABEL, PERMISSION_LABEL, PHASE_LABEL } from '../format';
+import { act, MAIN_ROLE, run, selectTask, setPermission, toast, useCommand, useStore } from '../store';
 import { Modal, useNow } from './common';
 import { DiffPool, DiffView } from './DiffView';
 
@@ -16,8 +16,8 @@ export function Sidebar() {
           等你决定 {attention.length > 0 && <span className="count">{attention.length}</span>}
         </h3>
         {attention.length === 0 && <p className="muted">现在没有需要你处理的事。</p>}
-        {attention.map((a, i) => (
-          <AttentionCard key={i} attention={a} />
+        {attention.map((a) => (
+          <AttentionCard key={attentionKey(a)} attention={a} />
         ))}
       </section>
       <Workboard />
@@ -103,14 +103,7 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
   const abandon = taskId ? () => run('abandon', { task_id: taskId, reason: '用户在异常后放弃' }) : undefined;
   if (hold.kind === 'abnormal') {
     const failure = hold.turn.failure;
-    const why =
-      hold.turn.outcome === 'interrupted'
-        ? '被中断'
-        : failure?.unstarted
-          ? '没能启动'
-          : failure?.kind === 'quota'
-            ? '因额度不足而失败'
-            : '失败';
+    const why = abnormalEnd(hold.turn);
     const harnessName = HARNESS_LABEL[roleView?.harness ?? ''] ?? roleView?.harness;
     // The environment refused full access: the one-step way on is auto review (harness-adapter.md §1.9).
     const switchable = failure?.kind === 'permission' && harness?.permission === 'full';
@@ -276,6 +269,7 @@ function StalledCard({ attention: a }: { attention: Extract<Attention, { kind: '
 
 function Reply({ taskId, placeholder = '回复', children }: { taskId: string; placeholder?: string; children?: React.ReactNode }) {
   const [reply, setReply] = useState('');
+  const { submit, busy } = useCommand('send_message');
   return (
     <>
       <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder={placeholder} aria-label={placeholder} />
@@ -283,9 +277,9 @@ function Reply({ taskId, placeholder = '回复', children }: { taskId: string; p
         {children}
         <button
           className="primary"
-          disabled={!reply.trim()}
+          disabled={!reply.trim() || busy}
           onClick={async () => {
-            const sent = await run('send_message', { role: MAIN_ROLE, task_id: taskId, body: reply.trim() });
+            const sent = await submit({ role: MAIN_ROLE, task_id: taskId, body: reply.trim() });
             if (sent !== undefined) setReply('');
           }}
         >
@@ -380,10 +374,11 @@ function NewTask({ onClose, fromCapture }: { onClose: () => void; fromCapture?: 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [criteria, setCriteria] = useState('');
+  const { submit, busy } = useCommand<{ id: string }>(fromCapture ? 'adopt_outside_changes' : 'create_task');
   const create = async () => {
-    const created = fromCapture
-      ? await run<{ id: string }>('adopt_outside_changes', { capture_id: fromCapture, title, body, criteria })
-      : await run<{ id: string }>('create_task', { title, body, criteria, executor: MAIN_ROLE });
+    const created = await submit(
+      fromCapture ? { capture_id: fromCapture, title, body, criteria } : { title, body, criteria, executor: MAIN_ROLE },
+    );
     if (!created) return;
     onClose();
     // An open task panel would cover the thread where the new task's work shows (#13); the
@@ -408,7 +403,7 @@ function NewTask({ onClose, fromCapture }: { onClose: () => void; fromCapture?: 
       </label>
       <div className="actions">
         <button onClick={onClose}>取消</button>
-        <button className="primary" disabled={!title.trim()} onClick={create}>
+        <button className="primary" disabled={!title.trim() || busy} onClick={create}>
           交给 Malkuth
         </button>
       </div>

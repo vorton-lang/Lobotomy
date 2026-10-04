@@ -1,6 +1,7 @@
 // The GUI's state: a projection of the backend (frontend.md §0). The backend is the authority;
 // after any doubt (reconnect, resync) the store reloads instead of patching.
 
+import { useCallback, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { Connection, RequestFailed, type Status } from './api/connection';
 import { findBackend } from './bridge';
@@ -104,13 +105,45 @@ export function toast(text: string) {
  * Runs a user command (data-model.md §9.2). The request id makes a retry harmless. Rejections
  * are shown to the user and returned as `undefined`.
  */
-export async function run<T = unknown>(name: string, args: Record<string, unknown> = {}): Promise<T | undefined> {
+export async function run<T = unknown>(
+  name: string,
+  args: Record<string, unknown> = {},
+  requestId: string = crypto.randomUUID(),
+): Promise<T | undefined> {
   try {
-    return await call<T>('command', { name, args: { request_id: crypto.randomUUID(), ...args } });
+    return await call<T>('command', { name, args: { request_id: requestId, ...args } });
   } catch (e) {
     toast(e instanceof RequestFailed ? `${e.remote.message}` : String(e));
     return undefined;
   }
+}
+
+/**
+ * A command that creates something or sends text, submitted from a form (#16). While a request
+ * is out, `busy` is true and another submit does nothing. The request id stays the same until a
+ * submit succeeds, so pressing again after a reply was lost runs the command once.
+ */
+export function useCommand<T = unknown>(name: string) {
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const requestId = useRef(crypto.randomUUID());
+  const submit = useCallback(
+    async (args: Record<string, unknown>): Promise<T | undefined> => {
+      if (pending.current) return undefined;
+      pending.current = true;
+      setBusy(true);
+      try {
+        const result = await run<T>(name, args, requestId.current);
+        if (result !== undefined) requestId.current = crypto.randomUUID();
+        return result;
+      } finally {
+        pending.current = false;
+        setBusy(false);
+      }
+    },
+    [name],
+  );
+  return { submit, busy };
 }
 
 /** Runtime actions take no request id. */

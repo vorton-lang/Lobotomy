@@ -30,11 +30,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
 
   // Accepting names the verification, the criteria version, the integration head and the
   // undelivered messages the user saw; the backend refuses if any differ (harness-adapter.md §4.2).
+  // The criteria version is the one shown below, not the snapshot's, which may be newer (#16).
   const accept = (dropping: string[]) =>
     run('accept', {
       task_id: task.id,
       verification_id: verification?.id,
-      criteria_version: task.criteria_version,
+      criteria_version: criteria?.version,
       expected_integration: integration,
       dropping,
     });
@@ -217,7 +218,11 @@ function SendBack({ taskId, initial, onClose }: { taskId: string; initial: strin
   );
 }
 
-function EditCriteria({ taskId, version, text, onClose }: { taskId: string; version: number; text: string; onClose: () => void }) {
+function EditCriteria(props: { taskId: string; version: number; text: string; onClose: () => void }) {
+  // The version being edited is the one the dialog opened with; a newer one saved meanwhile
+  // makes the backend refuse, instead of being written over (#16).
+  const [{ version, text }] = useState(() => ({ version: props.version, text: props.text }));
+  const { taskId, onClose } = props;
   const [value, setValue] = useState(text);
   return (
     <Modal title="修改完成条件" onClose={onClose}>

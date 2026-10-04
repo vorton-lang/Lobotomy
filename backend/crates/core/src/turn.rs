@@ -41,7 +41,7 @@ impl TurnState {
             "running" => TurnState::Running,
             "ended" => TurnState::Ended,
             "unknown" => TurnState::Unknown,
-            other => return Err(Error::rejected("bad_state", format!("unknown turn state {other}"))),
+            other => return Err(Error::invariant(format!("unknown turn state {other}"))),
         })
     }
 }
@@ -68,7 +68,7 @@ impl Outcome {
             "completed" => Outcome::Completed,
             "failed" => Outcome::Failed,
             "interrupted" => Outcome::Interrupted,
-            other => return Err(Error::rejected("bad_outcome", format!("unknown outcome {other}"))),
+            other => return Err(Error::invariant(format!("unknown outcome {other}"))),
         })
     }
 }
@@ -111,6 +111,9 @@ pub struct Turn {
     pub native_id: Option<String>,
     pub task_id: Option<String>,
     pub attempt_id: Option<String>,
+    /// The turn's MCP token: only its CLI needs it, so it is never serialized, to the GUI or
+    /// anywhere else (#16).
+    #[serde(skip)]
     pub token: String,
     pub input: String,
     pub state: TurnState,

@@ -51,6 +51,9 @@ const lines = (text: string) =>
 export function Settings({ onClose }: { onClose: () => void }) {
   const current = useStore((s) => s.snapshot?.config);
   const harnesses = useStore((s) => s.snapshot?.harnesses ?? []);
+  // The version the form was filled from. A version saved meanwhile, in another window, makes the
+  // backend refuse this save instead of being written over (#16).
+  const [version] = useState(() => current?.version ?? 0);
   const [checks, setChecks] = useState<Check[]>(current?.config.checks ?? []);
   const [excluded, setExcluded] = useState((current?.config.excluded ?? []).join('\n'));
   const [forced, setForced] = useState((current?.config.force_tracked ?? []).join('\n'));
@@ -66,7 +69,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
       max_new_files: maxFiles,
       max_new_bytes: maxMb * 1024 * 1024,
     };
-    const saved = await run('edit_project_config', { expected_version: current.version, config });
+    const saved = await run('edit_project_config', { expected_version: version, config });
     if (saved !== undefined) onClose();
   };
   const setCheck = (i: number, patch: Partial<Check>) => setChecks(checks.map((c, j) => (i === j ? { ...c, ...patch } : c)));
@@ -75,7 +78,10 @@ export function Settings({ onClose }: { onClose: () => void }) {
     <Modal title="设置" onClose={onClose} wide>
       <Permissions harnesses={harnesses} />
 
-      <h2 className="settings-group">项目设置 · 第 {current.version} 版</h2>
+      <h2 className="settings-group">项目设置 · 第 {version} 版</h2>
+      {current.version !== version && (
+        <p className="error">另一个窗口已保存了第 {current.version} 版。关闭后重新打开，在新版本上修改。</p>
+      )}
       <h3>检查命令</h3>
       <p className="muted">在验证现场按顺序运行，退出码为 0 算通过。第一条失败后不再运行其余的。</p>
       {checks.map((check, i) => (
@@ -120,7 +126,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
       <div className="actions">
         <button onClick={onClose}>取消</button>
         <button className="primary" onClick={save}>
-          保存项目设置为第 {current.version + 1} 版
+          保存项目设置为第 {version + 1} 版
         </button>
       </div>
     </Modal>

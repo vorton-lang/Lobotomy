@@ -234,9 +234,7 @@ pub(crate) fn settle_outside(cx: &mut Cx<'_>, capture_id: &str, outcome: Outside
     if pending.as_ref().map(|c| c.id.as_str()) != Some(capture.id.as_str()) {
         return Err(Error::rejected("not_pending", format!("capture {} holds no undecided changes", capture.id)));
     }
-    if let Some(turn) = unfinished_turn(cx.tx, &capture.role)? {
-        return Err(Error::rejected("turn_unfinished", format!("{} has unfinished turn {}", capture.role, turn.id)));
-    }
+    crate::workspace::require_slot_free(cx.tx, &capture.role, Some(&capture.id))?;
     let value = serde_json::to_value(outcome)?;
     cx.tx.execute("UPDATE capture SET outside = ?2 WHERE id = ?1", params![capture.id, value.as_str()])?;
     cx.emit("capture.outside", &capture.id, json!({ "role": capture.role, "outside": outcome }))?;

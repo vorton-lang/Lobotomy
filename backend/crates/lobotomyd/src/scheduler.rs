@@ -147,11 +147,17 @@ async fn reconcile(project: &Arc<Project>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A rejected runtime command means its preconditions do not hold now.
+/// A rejected runtime command means its preconditions do not hold now. Anything else, a broken
+/// invariant included, is an error: waiting does not resolve it (#16).
 pub(crate) fn ignore_rejection<T>(result: anyhow::Result<T>) -> anyhow::Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
-        Err(e) if e.downcast_ref::<lobotomy_core::Error>().is_some_and(|e| e.code().is_some()) => Ok(None),
-        Err(e) => Err(e),
+        Err(e) => match e.downcast_ref::<lobotomy_core::Error>().and_then(|e| e.code()) {
+            Some(code) => {
+                tracing::debug!(code, "not now: {e:#}");
+                Ok(None)
+            }
+            None => Err(e),
+        },
     }
 }

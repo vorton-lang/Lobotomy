@@ -15,6 +15,7 @@ use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, Regi
 use lobotomy_core::verify::{Accept, RetryPreview, VerificationState, latest_verification, preview_stopped};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::host::Host;
+use lobotomyd::project::Project;
 use lobotomyd::results::{failures, retry_failed};
 
 /// The M1 chain: the user creates a task, Malkuth works in its slot and reports done, the runtime
@@ -313,6 +314,47 @@ async fn a_cli_that_exits_with_only_stderr_fails_with_its_error() {
     assert!(message.contains("  7: <unknown>"), "the excerpt keeps the start of stderr: {message}");
     let stderr = backend.project.raw_output_path(&turn.id, "stderr");
     assert!(stderr.exists(), "the raw stderr stays as evidence");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// One backend per data directory: a second one cannot open it while the first lives (#16).
+#[tokio::test]
+async fn a_second_backend_cannot_open_the_same_data_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = open_project(dir.path(), fake_codex()).await;
+    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
+    let data = dir.path().join("project");
+    let refused = Project::open(&data, host.clone()).err().expect("the second open fails");
+    assert!(refused.to_string().contains("another backend is already running"), "{refused:#}");
+    drop(first);
+    Project::open(&data, host).unwrap();
+}
+
+/// A turn whose session id cannot be recorded fails, and its raw output stays: otherwise the next
+/// turn would quietly start a fresh session and lose the role's context (#16).
+#[tokio::test]
+async fn a_session_id_that_cannot_be_recorded_fails_the_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    let task = create_task(&db, "先说一句");
+    let first = ended_turn(&db).await;
+    assert_eq!(first.outcome, Some(Outcome::Completed));
+    let message = SendMessage {
+        request_id: "m1".into(),
+        role: "Malkuth".into(),
+        task_id: Some(task.clone()),
+        body: "FAKE:newthread".into(),
+    };
+    db.execute(&Caller::User, &message).unwrap();
+    let second =
+        wait_for("the second turn to end", || last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended))
+            .await;
+    assert_eq!(second.outcome, Some(Outcome::Failed));
+    let failure = second.failure.unwrap().message;
+    assert!(failure.contains("没能记下这一轮的 Codex 会话 ID"), "{failure}");
+    assert!(backend.project.raw_output_path(&second.id, "jsonl").exists(), "the raw output stays");
+    wait_for("the role to hold", || db.read(|c| hold(c, "Malkuth")).unwrap()).await;
     backend.shutdown(Duration::from_secs(5)).await;
 }
 

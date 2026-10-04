@@ -44,6 +44,10 @@ pub struct Project {
     pub shutdown_requested: Notify,
     /// What connected GUIs are told (see `gui`), as JSON text.
     pub gui_push: tokio::sync::broadcast::Sender<Arc<str>>,
+    /// An exclusive lock on `<data_dir>/lock`, held while the instance lives: two backends on one
+    /// data directory would run two schedulers on one database (#16). The OS releases it when
+    /// the process ends, however it ends.
+    _lock: std::fs::File,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -71,6 +75,22 @@ pub struct RunningTurn {
 impl Project {
     pub fn open(data_dir: &Path, host: Arc<Host>) -> anyhow::Result<Self> {
         std::fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
+        let lock_path = data_dir.join("lock");
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| format!("opening {}", lock_path.display()))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                anyhow::bail!("another backend is already running on {}", data_dir.display())
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(e).with_context(|| format!("locking {}", lock_path.display()));
+            }
+        }
         let db = Db::open(&data_dir.join("lobotomy.db")).context("opening the project database")?;
         let store = Store::open_or_init(&data_dir.join("store")).context("opening the private store")?;
         Ok(Self {
@@ -89,6 +109,7 @@ impl Project {
             wake: Notify::new(),
             shutdown_requested: Notify::new(),
             gui_push: tokio::sync::broadcast::channel(crate::gui::PUSH_BUFFER).0,
+            _lock: lock,
         })
     }
 

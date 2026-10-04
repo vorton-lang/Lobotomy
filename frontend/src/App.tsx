@@ -14,15 +14,19 @@ import { connect, openSearch, useStore } from './store';
 
 export function App() {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
+  // Why the backend could not be reached at start, such as a backend that did not start (#16).
+  const [failed, setFailed] = useState<string | null>(null);
   const snapshot = useStore((s) => s.snapshot);
   const selectedTask = useStore((s) => s.selectedTask);
   const toasts = useStore((s) => s.toasts);
   const searching = useStore((s) => s.search !== null);
   const attention = snapshot?.attention.length ?? 0;
 
-  useEffect(() => {
-    void backendUrl().then(setUrl);
-  }, []);
+  const find = () => {
+    setFailed(null);
+    backendUrl().then(setUrl, (e: unknown) => setFailed(e instanceof Error ? e.message : String(e)));
+  };
+  useEffect(find, []);
   useEffect(() => {
     if (url) connect(url);
   }, [url]);
@@ -54,6 +58,14 @@ export function App() {
     return () => document.removeEventListener('click', onClick);
   }, []);
 
+  if (failed !== null) {
+    return (
+      <div className="splash">
+        <p>没能连上后端：{failed}</p>
+        <button onClick={find}>重试</button>
+      </div>
+    );
+  }
   if (url === undefined) return <div className="splash">正在连接…</div>;
   if (url === null || !snapshot?.project) {
     return <Onboarding connected={url !== null && snapshot !== null} onBackend={setUrl} />;

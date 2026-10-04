@@ -1,9 +1,9 @@
 //! The Lobotomy backend process. v1 runs one project per instance (data-model.md §10).
 //!
 //! `lobotomyd --data-dir <dir> [--repo <dir>] [--host-dir <dir>] [--port <n>]` runs the backend.
-//! `--repo` connects the user's repository on the first run (harness-adapter.md §4.3); until the
-//! GUI does it, this is how a project gets one. The host directory holds state shared across
-//! projects (data-model.md §10).
+//! `--repo` connects the user's repository on the first run (harness-adapter.md §4.3), as the
+//! GUI's onboarding also can; tests and scripts use it. The host directory holds state shared
+//! across projects (data-model.md §10). One backend runs per data directory.
 //! `lobotomyd ctrl-c <pid>` is the helper that sends Ctrl+C to a CLI's console
 //! (harness-adapter.md §1.8).
 

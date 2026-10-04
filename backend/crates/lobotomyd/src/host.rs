@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
+use lobotomy_core::Error;
 use lobotomy_core::host::HostDb;
 use lobotomy_core::quota::{CheckOutcome, Domain};
 use lobotomy_harness::event::Event;
@@ -118,9 +119,11 @@ impl Host {
     /// The user's choice; only the GUI makes it.
     pub fn set_permission(&self, harness: &str, permission: &str) -> anyhow::Result<Permission> {
         if !HARNESSES.contains(&harness) {
-            bail!("unknown harness {harness}");
+            return Err(Error::rejected("unknown_harness", format!("unknown harness {harness}")).into());
         }
-        let Some(parsed) = Permission::parse(permission) else { bail!("unknown permission mode {permission}") };
+        let Some(parsed) = Permission::parse(permission) else {
+            return Err(Error::rejected("unknown_permission", format!("unknown permission mode {permission}")).into());
+        };
         self.db.set_permission(harness, parsed.as_str(), lobotomy_core::id::now_ms())?;
         tracing::info!(harness, permission, "permission mode changed");
         Ok(parsed)

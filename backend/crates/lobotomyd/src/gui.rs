@@ -4,9 +4,12 @@
 //!   `{id, error: {code, message}}`. Commands carry the GUI's request id as their idempotency
 //!   key, so a repeated request does nothing twice.
 //! - The server pushes what changed, not the content: `{type: "events", events}` with the global
-//!   event log, `{type: "live", live}` with items of running turns, `{type: "host"}` when a host
-//!   setting changed, `{type: "tick"}` every 15 seconds, and `{type: "resync"}` when the client
-//!   fell behind and must take a new snapshot.
+//!   event log, `{type: "thread", role, seq}` when a thread has a new item, `{type: "live", live}`
+//!   with items of running turns, `{type: "host"}` when a host setting changed, `{type: "tick"}`
+//!   every 15 seconds, and `{type: "resync"}` when the client fell behind and must take a new
+//!   snapshot.
+//! - Error codes: a refusal's own code; `bad_request` for parameters that do not parse;
+//!   `internal` for anything else.
 //! - A connection needs the host's GUI token, and `Host` and `Origin` must be local.
 
 use std::collections::{BTreeSet, HashMap};
@@ -14,7 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -35,7 +38,7 @@ use lobotomy_core::turn::{
 };
 use lobotomy_core::verify::{Accept, RetryPreview, SendBack, Verification, latest_verification, preview_stopped};
 use lobotomy_core::workspace::{Workspace, current_workspace};
-use lobotomy_core::{Caller, Command, Db};
+use lobotomy_core::{Caller, Command, Db, Error};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -246,10 +249,18 @@ async fn respond(project: &Arc<Project>, text: &str) -> String {
     match call(project, &request.method, request.params).await {
         Ok(result) => json!({ "id": request.id, "result": result }).to_string(),
         Err(e) => {
-            let code = e.downcast_ref::<lobotomy_core::Error>().and_then(|e| e.code()).unwrap_or("internal");
-            json!({ "id": request.id, "error": { "code": code, "message": format!("{e:#}") } }).to_string()
+            json!({ "id": request.id, "error": { "code": error_code(&e), "message": format!("{e:#}") } }).to_string()
         }
     }
+}
+
+/// A refusal carries its code; parameters that do not parse are the client's mistake; anything
+/// else is the backend's (#16).
+fn error_code(e: &anyhow::Error) -> &'static str {
+    if let Some(e) = e.downcast_ref::<lobotomy_core::Error>() {
+        return e.code().unwrap_or("internal");
+    }
+    if e.downcast_ref::<serde_json::Error>().is_some() { "bad_request" } else { "internal" }
 }
 
 async fn call(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Result<Value> {
@@ -269,7 +280,7 @@ async fn call(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Re
         "blob" => {
             let BlobParams { hash } = serde_json::from_value(params)?;
             if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-                bail!("not a blob hash: {hash}");
+                return Err(Error::rejected("bad_request", format!("not a blob hash: {hash}")).into());
             }
             json!({ "text": project.blobs.read(&hash)? })
         }
@@ -279,7 +290,7 @@ async fn call(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Re
             project.wake.notify_one();
             result
         }
-        other => bail!("unknown method {other}"),
+        other => return Err(Error::rejected("bad_request", format!("unknown method {other}")).into()),
     })
 }
 
@@ -990,7 +1001,11 @@ async fn command(project: &Arc<Project>, name: &str, args: Value) -> anyhow::Res
             let id = turn_id.clone();
             let turn = db(project, move |db| db.read(|c| load_turn(c, &id))).await?;
             let (TurnState::Unknown, Some(pid), Some(start)) = (turn.state, turn.pid, turn.process_start) else {
-                bail!("turn {turn_id} is not an unknown turn with a known process");
+                return Err(Error::rejected(
+                    "not_unknown_turn",
+                    format!("turn {turn_id} is not an unknown turn with a known process"),
+                )
+                .into());
             };
             Ok(json!({ "terminated": lobotomy_harness::process::terminate(pid as u32, start)? }))
         }
@@ -1011,6 +1026,6 @@ async fn command(project: &Arc<Project>, name: &str, args: Value) -> anyhow::Res
             project.shutdown_requested.notify_one();
             Ok(Value::Null)
         }
-        other => bail!("unknown command {other}"),
+        other => Err(Error::rejected("bad_request", format!("unknown command {other}")).into()),
     }
 }
