@@ -227,6 +227,39 @@ async fn a_turn_without_a_report_leaves_the_task_to_the_user() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// Search finds what the thread shows, in the thread's order: messages at the start of their turn,
+/// items, then queued messages.
+#[tokio::test]
+async fn search_finds_the_threads_text_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let mut gui = Client::connect(&backend).await;
+    let args = json!({ "request_id": "r1", "title": "写 work.txt", "body": "FAKE:done", "criteria": "-", "executor": "Malkuth" });
+    gui.command("create_task", args).await.unwrap();
+    gui.event("task.accepting").await;
+    // Outside execution a message waits in the queue.
+    gui.command("send_message", json!({ "request_id": "m1", "role": "Malkuth", "body": "work.txt 再改一下" })).await.unwrap();
+    let thread = gui.call("thread", json!({ "role": "Malkuth" })).await.unwrap();
+    let item = |kind: &str| thread["items"].as_array().unwrap().iter().find(|i| i["kind"] == kind).unwrap().clone();
+    let first_seq = thread["items"][0]["seq"].clone();
+
+    let search = |query: &str| json!({ "role": "Malkuth", "query": query });
+    let found = gui.call("search", search("WORK.TXT")).await.unwrap();
+    let matches = found["matches"].as_array().unwrap();
+    let kinds: Vec<&str> = matches.iter().map(|m| m["kind"].as_str().unwrap()).collect();
+    // The brief names the criteria file, the report's body says it wrote it, the queued message
+    // mentions it.
+    assert_eq!(kinds, ["message", "item", "message"], "{found}");
+    assert_eq!(matches[0]["seq"], first_seq, "a message sits at its turn's first item");
+    assert_eq!(matches[1]["id"], item("mcp_call")["id"], "the report is found by its recorded body");
+    assert_eq!(matches[2]["seq"], Value::Null, "a queued message comes last");
+
+    let found = gui.call("search", search("finished")).await.unwrap();
+    assert_eq!(found["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(gui.call("search", search("  ")).await.unwrap()["matches"], json!([]));
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// A client that falls further behind than the push buffer is told to take a new snapshot rather
 /// than silently missing pushes (frontend.md §3).
 #[tokio::test]

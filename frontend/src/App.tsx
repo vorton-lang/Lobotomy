@@ -5,17 +5,19 @@ import { useEffect, useState } from 'react';
 import { backendUrl, inElectron } from './bridge';
 import { Composer } from './components/Composer';
 import { Onboarding } from './components/Onboarding';
+import { SearchBar } from './components/SearchBar';
 import { Sidebar } from './components/Sidebar';
 import { TaskPanel } from './components/TaskPanel';
 import { Thread } from './components/Thread';
 import { TopBar } from './components/TopBar';
-import { connect, useStore } from './store';
+import { connect, openSearch, useStore } from './store';
 
 export function App() {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
   const snapshot = useStore((s) => s.snapshot);
   const selectedTask = useStore((s) => s.selectedTask);
   const toasts = useStore((s) => s.toasts);
+  const searching = useStore((s) => s.search !== null);
   const attention = snapshot?.attention.length ?? 0;
 
   useEffect(() => {
@@ -28,6 +30,17 @@ export function App() {
     document.title = attention > 0 ? `(${attention}) Lobotomy` : 'Lobotomy';
     window.lobotomy?.setAttention(attention);
   }, [attention]);
+  // Ctrl+F searches the thread; the browser's find cannot see rows the list has not mounted.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        openSearch();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   // Links in agent text open in the system browser, never in the app window.
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
@@ -52,6 +65,7 @@ export function App() {
         <section className="conversation">
           <Thread />
           <Composer />
+          {searching && <SearchBar />}
           {selectedTask && <TaskPanel taskId={selectedTask} />}
         </section>
         <Sidebar />

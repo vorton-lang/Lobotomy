@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { START_MARKER, infoFile, startBackend, waitForFile, type BenchInfo } from './setup';
+import { FIRST_TASK, START_MARKER, infoFile, startBackend, waitForFile, type BenchInfo } from './setup';
 import { longTasks, memory, now, probe, round, startFrames, stats, stopFrames, takeKeys, takeRequests, whenText, type Probe } from './probe';
 
 const info = () => JSON.parse(fs.readFileSync(infoFile, 'utf8')) as BenchInfo;
@@ -76,6 +76,25 @@ test('scrolling back to the start of the thread', async ({ page }) => {
     frames: await stopFrames(p),
     long_tasks: await longTasks(p, before),
     ...(await memory(p)),
+  };
+});
+
+test('searching for the start of the thread', async ({ page }) => {
+  const p = await open(page);
+  await whenText(p, '.thread .row', NEWEST);
+  await takeRequests(p, 'thread');
+  await page.keyboard.press('Control+f');
+  const field = page.getByLabel('搜索对话');
+  await field.click();
+  const before = await now(p);
+  // Only the first turn's brief has it: the search loads every older page on the way there.
+  await page.keyboard.type(FIRST_TASK);
+  const found = await whenText(p, '.thread .row', START_MARKER);
+  results.search_to_start = {
+    found_ms: round(found - before),
+    search_ms: await takeRequests(p, 'search'),
+    older_pages_ms: await takeRequests(p, 'thread'),
+    long_tasks: await longTasks(p, before),
   };
 });
 

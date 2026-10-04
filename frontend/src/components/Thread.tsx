@@ -4,7 +4,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { VList, type VListHandle } from 'virtua';
 import { buildRows, clock, sourceLabel, turnOutcome, type Row } from '../format';
-import { loadOlder, useStore } from '../store';
+import { clearHighlight, highlight } from '../highlight';
+import { loadOlder, matchRowKey, useStore } from '../store';
 import { Markdown } from './common';
 import { ItemView, LiveItemView, RunningView } from './ItemView';
 
@@ -27,6 +28,43 @@ export function Thread() {
   useEffect(() => {
     if (prepending) setPrepending(false);
   }, [rows, prepending]);
+
+  // Search: scroll to the current match once its page is loaded, and mark the matches.
+  const search = useStore((s) => s.search);
+  const target = search && search.current >= 0 ? matchRowKey(search.matches[search.current]) : null;
+  const handledJump = useRef(0);
+  const toOpen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!search || !target || handledJump.current === search.jump) return;
+    const index = rows.findIndex((row) => row.key === target);
+    // Not loaded yet: the search is loading older pages, and the rows change when they arrive.
+    if (index < 0) return;
+    handledJump.current = search.jump;
+    atEnd.current = false;
+    toOpen.current = target;
+    list.current?.scrollToIndex(index, { align: 'center' });
+  }, [search, target, rows]);
+  const query = search?.query ?? '';
+  useEffect(() => {
+    const root = document.querySelector('.thread');
+    if (!root || !query.trim()) return;
+    let frame = 0;
+    const mark = () => {
+      frame = 0;
+      if (highlight(root, query.trim(), target, toOpen.current)) toOpen.current = null;
+    };
+    mark();
+    // Rows mount and unmount as the list scrolls; their text arrives late (Markdown).
+    const observer = new MutationObserver(() => {
+      if (!frame) frame = requestAnimationFrame(mark);
+    });
+    observer.observe(root, { subtree: true, childList: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+      clearHighlight();
+    };
+  }, [query, target, thread.loaded, rows.length === 0]);
 
   const onScroll = (offset: number) => {
     const handle = list.current;
@@ -51,7 +89,7 @@ export function Thread() {
   return (
     <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} keepMounted={[rows.length - 1]}>
       {rows.map((row) => (
-        <div key={row.key} className="row">
+        <div key={row.key} className="row" data-key={row.key}>
           <RowView row={row} title={title} commands={thread.commands} />
         </div>
       ))}

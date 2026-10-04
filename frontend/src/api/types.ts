@@ -222,6 +222,13 @@ export interface ThreadPage {
   queued: Message[];
 }
 
+/** A search match: an item, or a message shown at its turn's first item (`seq` null: queued). */
+export interface SearchMatch {
+  kind: 'item' | 'message';
+  id: string;
+  seq: number | null;
+}
+
 export type Content =
   | { kind: 'text'; text: string }
   | { kind: 'binary'; size: number }

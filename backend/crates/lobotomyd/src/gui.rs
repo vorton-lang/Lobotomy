@@ -254,6 +254,10 @@ async fn call(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Re
     Ok(match method {
         "snapshot" => serde_json::to_value(snapshot(project).await?)?,
         "thread" => thread(project, serde_json::from_value(params)?).await?,
+        "search" => {
+            let p: SearchParams = serde_json::from_value(params)?;
+            db(project, move |db| db.read(|c| search_thread(c, &p))).await?
+        }
         "task" => task_detail(project, serde_json::from_value(params)?).await?,
         "diff" => {
             let DiffParams { from, to } = serde_json::from_value(params)?;
@@ -625,6 +629,82 @@ fn messages_where(conn: &Connection, filter: &str, args: impl rusqlite::Params) 
 
 async fn thread(project: &Arc<Project>, p: ThreadParams) -> anyhow::Result<Value> {
     db(project, move |db| db.read(|c| thread_page(c, &p))).await
+}
+
+// ---- search ----
+
+#[derive(Deserialize)]
+struct SearchParams {
+    role: String,
+    query: String,
+}
+
+/// Where a match is: an item, or a message shown at the start of its turn (`seq` is the turn's
+/// first item) or among the queued ones at the end (`seq` is absent).
+#[derive(Serialize)]
+struct Match {
+    kind: &'static str,
+    id: String,
+    seq: Option<i64>,
+}
+
+/// Matches returned at most, the newest; the GUI says when older ones were left out.
+const MATCH_LIMIT: usize = 1000;
+
+/// A text field of an item as the thread shows it: a field moved to the blob store is searched
+/// by its head and tail, which is what the thread shows of it.
+fn shown(field: &str) -> String {
+    format!(
+        "CASE json_type(i.content, '{field}') WHEN 'text' THEN json_extract(i.content, '{field}') \
+         WHEN 'object' THEN coalesce(json_extract(i.content, '{field}.head'), '') || char(10) || \
+         coalesce(json_extract(i.content, '{field}.tail'), '') END"
+    )
+}
+
+/// The thread's matches of `query` in order, ignoring ASCII case (frontend.md §4.1 "搜索"): the
+/// text of items, the report a Lobotomy tool call recorded, and messages. The GUI loads pages
+/// back to a match before showing it.
+fn search_thread(conn: &Connection, p: &SearchParams) -> lobotomy_core::Result<Value> {
+    let query = p.query.trim();
+    if query.is_empty() {
+        return Ok(json!({ "matches": [], "more": false }));
+    }
+    let text = ["$.text", "$.command", "$.output", "$.query", "$.message"]
+        .iter()
+        .map(|f| format!("coalesce({}, '')", shown(f)))
+        .chain(["title", "body", "blocked_on"].iter().map(|k| format!("coalesce(json_extract(c.args, '$.{k}'), '')")))
+        .collect::<Vec<_>>()
+        .join(" || char(10) || ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT i.id, i.seq FROM item i JOIN thread t ON t.id = i.thread_id
+         LEFT JOIN command_record c ON c.id = i.command_id
+         WHERE t.role = ?1 AND i.kind != 'input' AND instr(lower({text}), lower(?2)) > 0
+         ORDER BY i.seq DESC LIMIT ?3"
+    ))?;
+    let limit = MATCH_LIMIT as i64 + 1;
+    let items = stmt.query_map(params![p.role, query, limit], |r| Ok(Match { kind: "item", id: r.get(0)?, seq: Some(r.get(1)?) }))?;
+    let mut matches = items.collect::<rusqlite::Result<Vec<_>>>()?;
+    // A message bound to a turn that never stored an item is not shown, so it does not match.
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.turn_id, (SELECT MIN(i.seq) FROM item i WHERE i.turn_id = m.turn_id) FROM message m
+         WHERE m.role = ?1 AND instr(lower(m.body), lower(?2)) > 0 ORDER BY m.seq",
+    )?;
+    let messages = stmt.query_map(params![p.role, query], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<i64>>(2)?))
+    })?;
+    for row in messages {
+        let (id, turn, seq) = row?;
+        if turn.is_none() || seq.is_some() {
+            matches.push(Match { kind: "message", id, seq });
+        }
+    }
+    // The thread's order: a turn's messages come before its items; queued messages come last.
+    matches.sort_by_key(|m| (m.seq.unwrap_or(i64::MAX), m.kind == "item"));
+    let more = matches.len() > MATCH_LIMIT;
+    if more {
+        matches.drain(..matches.len() - MATCH_LIMIT);
+    }
+    Ok(json!({ "matches": matches, "more": more }))
 }
 
 // ---- task detail ----

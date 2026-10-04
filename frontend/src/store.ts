@@ -4,7 +4,7 @@
 import { create } from 'zustand';
 import { Connection, RequestFailed, type Status } from './api/connection';
 import { findBackend } from './bridge';
-import type { CommandRow, Item, LiveTurn, Message, Push, Snapshot, TaskDetail, ThreadPage, Turn } from './api/types';
+import type { CommandRow, Item, LiveTurn, Message, Push, SearchMatch, Snapshot, TaskDetail, ThreadPage, Turn } from './api/types';
 
 export interface ThreadState {
   role: string;
@@ -22,6 +22,20 @@ export interface Toast {
   text: string;
 }
 
+/** Ctrl+F in the thread (frontend.md §4.1 "搜索"). */
+export interface SearchState {
+  query: string;
+  matches: SearchMatch[];
+  /** Older matches were left out. */
+  more: boolean;
+  /** Index into `matches`; the newest at first. */
+  current: number;
+  /** Bumped by every jump, so the thread scrolls even to the same match again. */
+  jump: number;
+  /** Bumped by every Ctrl+F, so the search field takes the focus again. */
+  focus: number;
+}
+
 interface State {
   status: Status;
   snapshot: Snapshot | null;
@@ -30,6 +44,7 @@ interface State {
   selectedTask: string | null;
   taskDetail: TaskDetail | null;
   toasts: Toast[];
+  search: SearchState | null;
 }
 
 /** M1 has one role in the main area (frontend.md §2 "M1 的布局"). */
@@ -54,6 +69,7 @@ export const useStore = create<State>(() => ({
   selectedTask: null,
   taskDetail: null,
   toasts: [],
+  search: null,
 }));
 
 let connection: Connection | null = null;
@@ -173,6 +189,67 @@ export async function loadTaskDetail(taskId: string) {
 export function selectTask(taskId: string | null) {
   useStore.setState({ selectedTask: taskId, taskDetail: null });
   if (taskId) void loadTaskDetail(taskId);
+}
+
+// ---- search (frontend.md §4.1 "搜索") ----
+
+export function openSearch() {
+  const search = useStore.getState().search;
+  useStore.setState({ search: search ? { ...search, focus: search.focus + 1 } : { query: '', matches: [], more: false, current: -1, jump: 0, focus: 1 } });
+  // A task panel would cover the matches.
+  selectTask(null);
+}
+
+export function closeSearch() {
+  useStore.setState({ search: null });
+}
+
+let searchRequest = 0;
+
+/** Searches the whole thread on the backend and goes to the newest match. */
+export async function runSearch(query: string) {
+  const request = ++searchRequest;
+  const role = useStore.getState().thread.role;
+  const found = query.trim()
+    ? await call<{ matches: SearchMatch[]; more: boolean }>('search', { role, query }).catch((e) => {
+        toast(String(e));
+        return { matches: [], more: false };
+      })
+    : { matches: [], more: false };
+  if (request !== searchRequest || !useStore.getState().search) return;
+  const current = found.matches.length - 1;
+  useStore.setState((s) => ({ search: s.search && { ...s.search, query, ...found, current, jump: s.search.jump + 1 } }));
+  if (current >= 0) await reveal(found.matches[current]);
+}
+
+/** Goes to an older (-1) or newer (+1) match, round the ends. */
+export async function stepSearch(delta: number) {
+  const search = useStore.getState().search;
+  if (!search || search.matches.length === 0) return;
+  const current = (search.current + delta + search.matches.length) % search.matches.length;
+  useStore.setState({ search: { ...search, current, jump: search.jump + 1 } });
+  await reveal(search.matches[current]);
+}
+
+/** Loads older pages until the match's row is in the thread. */
+async function reveal(match: SearchMatch) {
+  if (match.seq === null) return;
+  try {
+    for (;;) {
+      const thread = useStore.getState().thread;
+      const oldest = thread.items[0]?.seq;
+      if (oldest === undefined || oldest <= match.seq || !thread.hasMore) return;
+      await loadOlder();
+    }
+  } catch (e) {
+    toast(String(e));
+  }
+}
+
+/** The thread row a match is shown in (`buildRows`). */
+export function matchRowKey(match: SearchMatch): string {
+  if (match.kind === 'item') return `item-${match.id}`;
+  return match.seq === null ? `queued-${match.id}` : `msg-${match.id}`;
 }
 
 /** Coalesces bursts of pushes into one reload per kind. */

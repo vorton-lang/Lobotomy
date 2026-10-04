@@ -637,3 +637,33 @@ pre {
   border-radius: 8px;
   max-width: 560px;
 }
+
+/* Ctrl+F over the thread (components/SearchBar.tsx, highlight.ts). */
+.search-bar {
+  position: absolute;
+  top: 8px;
+  right: 24px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.search-bar input {
+  width: 220px;
+}
+.search-count {
+  min-width: 64px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+::highlight(search) {
+  background-color: rgba(255, 196, 0, 0.35);
+}
+::highlight(search-current) {
+  background-color: rgba(255, 128, 0, 0.75);
+}

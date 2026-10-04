@@ -49,4 +49,11 @@ test('screenshots', async ({ page }) => {
   await page.screenshot({ path: `${out}/6-round-2.png` });
   await panel.getByRole('button', { name: '关闭' }).click();
   await page.screenshot({ path: `${out}/7-thread.png` });
+
+  await page.keyboard.press('Control+f');
+  await page.getByLabel('搜索对话').fill('work.txt');
+  await expect(page.getByRole('search').locator('.search-count')).toContainText('/');
+  await page.getByLabel('搜索对话').press('Enter');
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: `${out}/8-search.png` });
 });

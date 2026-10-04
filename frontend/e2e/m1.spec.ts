@@ -104,3 +104,25 @@ test('a failed turn waits for the user to continue', async ({ page }) => {
   await panel.getByRole('button', { name: '放弃' }).click();
   await expect(stalled).toBeHidden();
 });
+
+// Ctrl+F finds what the virtualized thread has not loaded, loads it and scrolls there
+// (frontend.md §4.1 "搜索").
+test('search goes to a match pages back', async ({ page }) => {
+  await open(page);
+  await createTask(page, '搜索目标任务', 'FAKE:many=250');
+  // The turn is over: its brief is now more than a page above the newest item.
+  await expect(page.locator('.attention .card').filter({ hasText: '还没有完成' })).toBeVisible();
+  const brief = page.locator('.thread .row', { hasText: '任务：搜索目标任务（第 1 轮执行）' });
+  await expect(brief).toHaveCount(0);
+
+  await page.keyboard.press('Control+f');
+  const bar = page.getByRole('search');
+  await bar.getByLabel('搜索对话').fill('搜索目标任务');
+  await expect(bar.locator('.search-count')).toHaveText('1 / 1');
+  await expect(brief).toBeVisible();
+  await expect.poll(() => page.evaluate(() => CSS.highlights.get('search-current')?.size ?? 0)).toBeGreaterThan(0);
+
+  await bar.getByLabel('搜索对话').press('Escape');
+  await expect(bar).toBeHidden();
+  expect(await page.evaluate(() => CSS.highlights.has('search-current'))).toBe(false);
+});
