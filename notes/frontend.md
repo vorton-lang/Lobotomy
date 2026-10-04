@@ -175,7 +175,8 @@ CI 中固定运行合成场景（参照 OpenHands 的 `BENCH_MESSAGES` 与 Goose
 - vitest 测试对话分行；
 - Playwright 用本机 Edge，驱动真实后端与假 Codex，走完建任务、执行、验证、看 diff、验收、用户仓库出现文件；也测 turn 失败后继续；
 - Electron 外壳测试覆盖：没有项目时的接入、启动后端、退出时停止组织；
-- 后端崩溃不影响 GUI 重新连接、Electron 被强制结束后后端仍在运行：后一项手动验证过。
+- Electron 被强制结束后后端仍在运行：手动验证过（Windows）。
+- 断线重连后重新同步还没有自动测试。
 
 **限制**：
 - 搜索与性能基线在第 5 个增量。
