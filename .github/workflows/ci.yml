@@ -79,7 +79,7 @@ jobs:
           xvfb-run --auto-servernum npx playwright test
       - name: Keep Playwright's traces of failures
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-${{ matrix.os }}
           path: frontend/test-results/
@@ -122,13 +122,13 @@ jobs:
         working-directory: frontend
         shell: bash
         run: node bench/summary.mjs >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bench-${{ matrix.os }}
           path: frontend/bench-results/latest.json
       - name: Keep Playwright's traces of failures
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-failures-${{ matrix.os }}
           path: frontend/test-results/

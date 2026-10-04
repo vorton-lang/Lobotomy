@@ -19,12 +19,11 @@ use lobotomy_core::verify::{
     CheckOutcome, FinishPreview, FinishVerification, PreviewJob, PreviewResult, verification_plan, work_so_far,
 };
 use lobotomy_core::workspace::{ReplaceWorkspace, Workspace, WorkspaceReady, current_workspace, load_workspace};
-use lobotomy_harness::process::{self, Spec};
 use lobotomy_store::{Captured, Guard, Identity, Leave, Scope, repo};
 use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-use crate::capability;
+use crate::launch;
 use crate::project::Project;
 use crate::runner::{db, runtime};
 
@@ -245,16 +244,11 @@ async fn still_verifying(project: &Arc<Project>, verification_id: &str) -> anyho
 /// role (harness-adapter.md §1.6). A check that runs past its timeout is ended with everything it
 /// started.
 async fn run_check(project: &Arc<Project>, check: &Check, cwd: &Path) -> anyhow::Result<CheckOutcome> {
-    let gh = project.empty_gh_config_dir();
-    std::fs::create_dir_all(&gh)?;
-    let env = capability::env(&gh);
-    let spec = Spec { program: Path::new(""), args: &[], cwd, env: &env, env_remove: capability::REMOVED_VARS };
     let started = Instant::now();
-    let mut spawned = process::spawn_shell(&check.command, &spec)?;
-    spawned.resume()?;
-    drop(spawned.child.stdin.take());
-    let stdout = tokio::spawn(read_capped(spawned.child.stdout.take().context("no stdout")?));
-    let stderr = tokio::spawn(read_capped(spawned.child.stderr.take().context("no stderr")?));
+    let mut spawned = launch::spawn(launch::What::Shell(&check.command), cwd, &project.empty_gh_config_dir())?;
+    let io = launch::run(&mut spawned, b"", read_capped).await?;
+    let stdout = tokio::spawn(read_capped(io.stdout));
+    let stderr = io.stderr;
     let waited = tokio::time::timeout(Duration::from_secs(check.timeout_secs), spawned.child.wait()).await;
     let (exit_code, timed_out) = match waited {
         Ok(status) => (status?.code().map(i64::from), false),

@@ -6,14 +6,11 @@ use lobotomy_core::capture::{
     latest_capture, pending_captures,
 };
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, load_project};
-use lobotomy_core::report::{OrgReport, ReportStatus};
+use lobotomy_core::report::ReportStatus;
 use lobotomy_core::task::{
-    Abandon, CodeStart, CreateTask, Phase, Reopen, SendMessage, StartAttempt, load_task, occupant, open_attempt,
-    queued_messages,
+    Abandon, CodeStart, Phase, Reopen, SendMessage, StartAttempt, load_task, occupant, open_attempt, queued_messages,
 };
-use lobotomy_core::turn::{
-    Continue, EndTurn, Outcome, RegisterTurn, SessionIdentified, TurnRegistered, current_session,
-};
+use lobotomy_core::turn::{Continue, RegisterTurn, current_session};
 use lobotomy_core::verify::{
     Accept, CheckOutcome, FinishPreview, FinishVerification, PreviewResult, RetryPreview, Reverify, SendBack,
     StartVerification, VerificationState, latest_verification, next_preview, preview_stopped,
@@ -23,46 +20,10 @@ use lobotomy_core::{Caller, Db};
 use serde_json::json;
 
 mod common;
-use common::{BASE, ROLE, SLOT, db, pin_captures, ready_slot, rejection, start};
-
-fn create(db: &Db, request_id: &str) -> String {
-    db.execute(
-        &Caller::User,
-        &CreateTask {
-            request_id: request_id.into(),
-            title: "加一个 new.txt".into(),
-            body: "原话".into(),
-            criteria: "文件存在".into(),
-            executor: ROLE.into(),
-        },
-    )
-    .unwrap()
-    .id
-}
-
-fn register(db: &Db) -> TurnRegistered {
-    let t = db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() }).unwrap();
-    db.execute(&Caller::Runtime, &SessionIdentified { turn_id: t.turn_id.clone(), native_id: "thread-1".into() })
-        .unwrap();
-    t
-}
+use common::{BASE, ROLE, SLOT, create, db, end_turn, pin_captures, ready_slot, register, rejection, report, start};
 
 fn report_done(db: &Db, turn_id: &str) {
-    db.execute(
-        &Caller::Role { role: ROLE.into(), turn_id: turn_id.into() },
-        &OrgReport {
-            title: "完成了".into(),
-            body: "加了 new.txt".into(),
-            status: ReportStatus::Done,
-            blocked_on: None,
-        },
-    )
-    .unwrap();
-}
-
-fn end_turn(db: &Db, turn_id: &str) {
-    db.execute(&Caller::Runtime, &EndTurn { turn_id: turn_id.into(), outcome: Outcome::Completed, failure: None })
-        .unwrap();
+    report(db, turn_id, ReportStatus::Done, None).unwrap();
 }
 
 fn pending(db: &Db) -> String {
@@ -388,6 +349,11 @@ fn a_reopened_task_starts_from_its_last_candidate_rebased() {
     assert_eq!((ws.target.as_str(), ws.head.as_str()), ("rebased-candidate", BASE));
     let brief = db.read(|c| queued_messages(c, ROLE)).unwrap().pop().unwrap().body;
     assert!(brief.contains("冲突") && brief.contains("a.txt"), "{brief}");
+    // A new native session in the middle of the attempt hears about the conflicts again (#16).
+    let renew = lobotomy_core::turn::NewNativeSession { request_id: "n1".into(), role: ROLE.into() };
+    db.execute(&Caller::User, &renew).unwrap();
+    let again = db.read(|c| queued_messages(c, ROLE)).unwrap().pop().unwrap().body;
+    assert!(again.starts_with("（新会话）") && again.contains("a.txt"), "{again}");
 }
 
 fn align(db: &Db) -> lobotomy_core::Result<()> {

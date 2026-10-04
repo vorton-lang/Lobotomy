@@ -126,7 +126,7 @@ turn 是执行单位：一个进程、一个 MCP token，对账按 turn 进行�
 - 同一任务的多个 attempt（验证失败、退回）沿用同一个 session。上一轮做了什么、为什么被打回，对修改有用。
 - 重开的任务新开 session（§4.6）。
 - 不属于任何任务的消息（role 空闲时用户直接发送）使用 role 的一个独立 session。
-- 用户随时可以手动新建 native session。
+- 用户随时可以手动新建 native session。新 session 开始时，运行时重发这一轮的完整开工说明：任务说明，加上"初始改动"的提示和开工时有冲突标记的文件。冲突文件记在 attempt 上。原来只重发任务说明，新 session 不知道工作目录里有冲突标记（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
 - 采集被挡下时，role 同样停下，等用户放行、丢弃或继续（harness-adapter.md §4.1）。
 - 异常后停下（harness-adapter.md §1.7）只针对当前 attempt 内的异常 turn。上一个 attempt 已经结束时，采集或用户已经推进了工作，它的异常 turn 不再挡住新 attempt；"继续"也只能作用于当前 attempt。这样新任务、重开和新 attempt 都不会被旧的异常状态阻塞。
 
@@ -455,7 +455,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
   - 系统通知的投递；
   - 后端的监听端口与 GUI 连接。
 - 多项目时，role（含 Manager）不跨项目共享，每个项目一套（用户确认，2026-10-04）。role 的 native session、Thread、槽位都属于项目实例。
-- **实现**（2026-10-04）：外层是 `Host` 对象，项目实例持有它的引用。外层状态存在独立的 `host.db` 中，目录默认为 `%LOCALAPPDATA%\Lobotomy`（Linux 为 `$XDG_STATE_HOME/lobotomy` 或 `~/.local/state/lobotomy`），可用 `--host-dir` 指定。目前存放额度域、每个 harness 的权限模式（harness-adapter.md §1.9）与 CLI 配置。"同一额度域同时最多一次检查"目前在进程内保证，多实例时再改为跨进程。
+- **实现**（2026-10-04）：外层是 `Host` 对象，项目实例持有它的引用。外层状态存在独立的 `host.db` 中，目录默认为 `%LOCALAPPDATA%\Lobotomy`（Linux 为 `$XDG_STATE_HOME/lobotomy` 或 `~/.local/state/lobotomy`），可用 `--host-dir` 指定。目前存放额度域、每个 harness 的权限模式（harness-adapter.md §1.9）与 CLI 配置。`host.db` 与项目数据库一样按编号迁移（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）；第一个迁移只建缺少的表，迁移出现之前建的库照常升级。"同一额度域同时最多一次检查"目前在进程内保证，多实例时再改为跨进程。
 
 ## 11. 未定
 

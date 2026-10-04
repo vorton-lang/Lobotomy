@@ -3,10 +3,10 @@
 // check commands, capture scope and the size guardrail. Each save of the project configuration is
 // a new version; checks and captures name the version they used.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Check, HarnessView, Permission, ProjectConfig } from '../api/types';
-import { HARNESS_LABEL, PERMISSION_LABEL } from '../format';
-import { run, setPermission, useStore } from '../store';
+import { bytes, HARNESS_LABEL, PERMISSION_LABEL } from '../format';
+import { call, run, setPermission, useStore } from '../store';
 import { Modal } from './common';
 
 const permissionNote = (permission: Permission, harness: string) =>
@@ -38,6 +38,26 @@ function Permissions({ harnesses }: { harnesses: HarnessView[] }) {
           </fieldset>
         );
       })}
+    </>
+  );
+}
+
+/** What the raw output of turns takes on disk (data-model.md §7.4); read when the settings open. */
+function Storage() {
+  const [usage, setUsage] = useState<{ files: number; bytes: number } | null>(null);
+  useEffect(() => {
+    call<{ raw_output: { files: number; bytes: number } }>('disk_usage').then(
+      (u) => setUsage(u.raw_output),
+      () => setUsage(null),
+    );
+  }, []);
+  if (!usage) return null;
+  return (
+    <>
+      <h3>存储</h3>
+      <p className="muted">
+        保留的原始输出：{usage.files} 个文件，共 {bytes(usage.bytes)}。turn 没有正常结束、或出现无法识别的事件时保留，用于排查；目前不自动删除。
+      </p>
     </>
   );
 }
@@ -77,6 +97,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="设置" onClose={onClose} wide>
       <Permissions harnesses={harnesses} />
+      <Storage />
 
       <h2 className="settings-group">项目设置 · 第 {version} 版</h2>
       {current.version !== version && (

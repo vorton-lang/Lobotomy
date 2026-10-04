@@ -15,18 +15,20 @@ use crate::error::{Error, Result};
 use crate::id::new_id;
 use crate::item::Blob;
 use crate::project::{ProjectConfig, config_version, current_config, require_project};
+use crate::prompts;
+use crate::sql::sql_enum;
 use crate::task::{
     Phase, Task, close_task, dropped_detail, enter_execution, load_task, queue_message, record_decision,
     undelivered_user_messages,
 };
 use crate::workspace::{plan, role_slot};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum VerificationState {
-    Running,
-    Passed,
-    Failed,
+sql_enum! {
+    pub enum VerificationState {
+        Running = "running",
+        Passed = "passed",
+        Failed = "failed",
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -59,14 +61,13 @@ fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result
             config_version: r.get(5)?,
             commit_id: r.get(6)?,
             conflicts: vec![],
-            state: VerificationState::Running,
+            state: r.get(8)?,
         };
-        Ok((v, r.get::<_, Option<String>>(7)?, r.get::<_, String>(8)?))
+        Ok((v, r.get::<_, Option<String>>(7)?))
     })?;
     rows.map(|row| {
-        let (mut v, conflicts, state) = row?;
+        let (mut v, conflicts) = row?;
         v.conflicts = conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
-        v.state = serde_json::from_value(Value::String(state))?;
         Ok(v)
     })
     .collect()
@@ -288,13 +289,7 @@ impl Command for FinishVerification {
         };
         cx.tx.execute(
             "UPDATE verification SET commit_id = ?2, conflicts = ?3, state = ?4, finished_at = ?5 WHERE id = ?1",
-            params![
-                v.id,
-                self.commit,
-                serde_json::to_string(&self.conflicts)?,
-                if state == VerificationState::Passed { "passed" } else { "failed" },
-                cx.now
-            ],
+            params![v.id, self.commit, serde_json::to_string(&self.conflicts)?, state, cx.now],
         )?;
         cx.emit("verification.finished", &v.id, json!({ "task_id": v.task_id, "state": state }))?;
 
@@ -313,34 +308,18 @@ impl Command for FinishVerification {
         // Failed: the reason goes straight back to the executor, not through the Manager
         // (roles-and-tasks.md §2.2).
         let rebased = rebased_slot(cx.tx, &v, &self.commit)?;
-        let body = if !self.conflicts.is_empty() {
-            format!(
-                "集成版本在你开始这项任务之后有了新的提交，你的候选成果与它冲突。工作目录已更新为合并后的结果，HEAD \
-                 指向新的集成版本。以下文件中有冲突标记：\n{}\n\n请解决冲突后再次报告 done。",
-                self.conflicts.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n")
-            )
-        } else {
-            let moved = if rebased.is_some() {
-                "\n\n集成版本在你开始这项任务之后有了新的提交，工作目录已更新为基于它的结果，HEAD 指向新的集成版本。"
-            } else {
-                ""
-            };
-            match failed_check {
-                Some(check) => {
-                    let why = match (check.timed_out, check.exit_code) {
-                        (true, _) => "超时".to_owned(),
-                        (false, Some(code)) => format!("退出码为 {code}"),
-                        (false, None) => "被终止".to_owned(),
-                    };
-                    format!(
-                        "候选成果没有通过验证：检查命令 `{}` {why}。输出的最后部分：\n```\n{}\n```{moved}\n\n请修复后再次报告 done。",
-                        check.command, check.tail
-                    )
-                }
-                None => format!("候选成果没有通过验证：检查命令没有全部运行。{moved}\n\n请再次报告 done。"),
-            }
+        let body = match failed_check {
+            _ if !self.conflicts.is_empty() => prompts::verification_conflicts(&self.conflicts),
+            Some(check) => prompts::verification_failed(
+                &check.command,
+                check.timed_out,
+                check.exit_code,
+                &check.tail,
+                rebased.is_some(),
+            ),
+            None => prompts::verification_incomplete(rebased.is_some()),
         };
-        reenter(cx, &task, rebased, &body)?;
+        reenter(cx, &task, rebased, &self.conflicts, &body)?;
         Ok(state)
     }
 }
@@ -356,8 +335,14 @@ fn rebased_slot(conn: &Connection, v: &Verification, commit: &str) -> Result<Opt
 /// (data-model.md §4.1). The native session carries on; the executor has seen the brief. The slot
 /// needs no `require_slot_free` check: the task is verifying or accepting, so no turn runs and
 /// its candidate's capture is what the slot holds.
-fn reenter(cx: &mut Cx<'_>, task: &Task, slot: Option<(String, String)>, body: &str) -> Result<()> {
-    let started = enter_execution(cx, task, slot.as_ref().map(|(target, _)| target.as_str()))?;
+fn reenter(
+    cx: &mut Cx<'_>,
+    task: &Task,
+    slot: Option<(String, String)>,
+    conflicts: &[String],
+    body: &str,
+) -> Result<()> {
+    let started = enter_execution(cx, task, slot.as_ref().map(|(target, _)| target.as_str()), conflicts)?;
     if let Some((target, head)) = &slot
         && let Some(name) = role_slot(cx.tx, &task.executor)?
     {
@@ -539,9 +524,7 @@ impl Command for SendBack {
             },
             None => None,
         };
-        // The reason starts on the first line, which the GUI shows as the message's summary.
-        let body = format!("用户退回了候选成果：{}\n\n请修改后再次报告 done。", self.reason);
-        reenter(cx, &task, slot, &body)
+        reenter(cx, &task, slot, &[], &prompts::sent_back(&self.reason))
     }
 }
 

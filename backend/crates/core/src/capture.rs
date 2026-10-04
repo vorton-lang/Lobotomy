@@ -13,40 +13,32 @@ use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::id::new_id;
 use crate::project::current_config;
+use crate::prompts;
+use crate::sql::sql_enum;
 use crate::task::{Phase, load_task, open_attempt, record_decision};
 use crate::turn::{Outcome, Turn, unfinished_turn};
 use crate::workspace::load_workspace;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptureKind {
-    /// An ordinary turn's end.
-    Turn,
-    /// The capture of the turn that reported `done` (harness-adapter.md §4.1).
-    Candidate,
-    /// The scene a turn left when it did not complete.
-    Interrupted,
-}
-
-impl CaptureKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            CaptureKind::Turn => "turn",
-            CaptureKind::Candidate => "candidate",
-            CaptureKind::Interrupted => "interrupted",
-        }
+sql_enum! {
+    pub enum CaptureKind {
+        /// An ordinary turn's end.
+        Turn = "turn",
+        /// The capture of the turn that reported `done` (harness-adapter.md §4.1).
+        Candidate = "candidate",
+        /// The scene a turn left when it did not complete.
+        Interrupted = "interrupted",
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptureState {
-    Intent,
-    Pinned,
-    /// The size guardrail stopped it; nothing was written to the store.
-    Oversized,
-    /// The slot holds content a capture cannot represent; nothing was written.
-    Uncovered,
+sql_enum! {
+    pub enum CaptureState {
+        Intent = "intent",
+        Pinned = "pinned",
+        /// The size guardrail stopped it; nothing was written to the store.
+        Oversized = "oversized",
+        /// The slot holds content a capture cannot represent; nothing was written.
+        Uncovered = "uncovered",
+    }
 }
 
 /// The user's decision for a capture the runtime stopped (data-model.md §9.2).
@@ -63,16 +55,16 @@ pub struct CaptureOptions {
     pub leave_uncovered: bool,
 }
 
-/// What becomes of changes a turn outside any task left in the slot (harness-adapter.md §3, #14).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Outside {
-    /// The user has not decided; no task starts in the slot until then.
-    Pending,
-    /// A task was made from them and starts from them.
-    Adopted,
-    /// The slot was written over; the capture keeps them.
-    Discarded,
+sql_enum! {
+    /// What becomes of changes a turn outside any task left in the slot (harness-adapter.md §3, #14).
+    pub enum Outside {
+        /// The user has not decided; no task starts in the slot until then.
+        Pending = "pending",
+        /// A task was made from them and starts from them.
+        Adopted = "adopted",
+        /// The slot was written over; the capture keeps them.
+        Discarded = "discarded",
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -108,28 +100,24 @@ fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result
             role: r.get(2)?,
             task_id: r.get(3)?,
             attempt_id: r.get(4)?,
-            kind: CaptureKind::Turn, // replaced below
+            kind: r.get(5)?,
             workspace_id: r.get(6)?,
             base: r.get(7)?,
             config_version: r.get(8)?,
-            state: CaptureState::Intent, // replaced below
+            state: r.get(9)?,
             options: CaptureOptions::default(),
             commit_id: r.get(11)?,
             detail: None,
             created_at: r.get(13)?,
-            outside: None,
+            outside: r.get(14)?,
         };
-        let text: (String, String, String, Option<String>, Option<String>) =
-            (r.get(5)?, r.get(9)?, r.get(10)?, r.get(12)?, r.get(14)?);
-        Ok((capture, text))
+        let json: (String, Option<String>) = (r.get(10)?, r.get(12)?);
+        Ok((capture, json))
     })?;
     rows.map(|row| {
-        let (mut capture, (kind, state, options, detail, outside)) = row?;
-        capture.kind = serde_json::from_value(Value::String(kind))?;
-        capture.state = serde_json::from_value(Value::String(state))?;
+        let (mut capture, (options, detail)) = row?;
         capture.options = serde_json::from_str(&options)?;
         capture.detail = detail.as_deref().map(serde_json::from_str).transpose()?;
-        capture.outside = outside.map(|o| serde_json::from_value(Value::String(o))).transpose()?;
         Ok(capture)
     })
     .collect()
@@ -210,12 +198,15 @@ pub fn require_captured(conn: &Connection, role: &str) -> Result<()> {
     }
 }
 
+/// The role's latest capture while the runtime has yet to write it.
+pub fn capture_in_progress(conn: &Connection, role: &str) -> Result<Option<Capture>> {
+    Ok(latest_capture(conn, role)?.filter(|c| c.state == CaptureState::Intent))
+}
+
 pub fn require_no_pending_capture(conn: &Connection, role: &str) -> Result<()> {
-    match latest_capture(conn, role)? {
-        Some(c) if c.state == CaptureState::Intent => {
-            Err(Error::rejected("capture_pending", format!("capture {} of {role} is pending", c.id)))
-        }
-        _ => Ok(()),
+    match capture_in_progress(conn, role)? {
+        Some(c) => Err(Error::rejected("capture_pending", format!("capture {} of {role} is pending", c.id))),
+        None => Ok(()),
     }
 }
 
@@ -235,8 +226,7 @@ pub(crate) fn settle_outside(cx: &mut Cx<'_>, capture_id: &str, outcome: Outside
         return Err(Error::rejected("not_pending", format!("capture {} holds no undecided changes", capture.id)));
     }
     crate::workspace::require_slot_free(cx.tx, &capture.role, Some(&capture.id))?;
-    let value = serde_json::to_value(outcome)?;
-    cx.tx.execute("UPDATE capture SET outside = ?2 WHERE id = ?1", params![capture.id, value.as_str()])?;
+    cx.tx.execute("UPDATE capture SET outside = ?2 WHERE id = ?1", params![capture.id, outcome])?;
     cx.emit("capture.outside", &capture.id, json!({ "role": capture.role, "outside": outcome }))?;
     Ok(capture)
 }
@@ -325,18 +315,22 @@ impl Command for FinishCapture {
         if capture.state != CaptureState::Intent {
             return Err(Error::rejected("not_pending", format!("capture {} is finished", capture.id)));
         }
-        let (state, commit, detail) = match &self.result {
+        let (state, commit, detail, outside) = match &self.result {
             // Changes outside any task are kept from being written over: they wait for the user.
-            CaptureResult::Pinned { commit, changed } if capture.task_id.is_none() && !changed.is_empty() => {
-                ("pinned", Some(commit.as_str()), Some(json!({ "changed": changed })))
-            }
-            CaptureResult::Pinned { commit, .. } => ("pinned", Some(commit.as_str()), None),
+            CaptureResult::Pinned { commit, changed } if capture.task_id.is_none() && !changed.is_empty() => (
+                CaptureState::Pinned,
+                Some(commit.as_str()),
+                Some(json!({ "changed": changed })),
+                Some(Outside::Pending),
+            ),
+            CaptureResult::Pinned { commit, .. } => (CaptureState::Pinned, Some(commit.as_str()), None, None),
             CaptureResult::Oversized { files, total_bytes } => {
-                ("oversized", None, Some(json!({ "files": files, "total_bytes": total_bytes })))
+                (CaptureState::Oversized, None, Some(json!({ "files": files, "total_bytes": total_bytes })), None)
             }
-            CaptureResult::Uncovered { paths } => ("uncovered", None, Some(json!({ "paths": paths }))),
+            CaptureResult::Uncovered { paths } => {
+                (CaptureState::Uncovered, None, Some(json!({ "paths": paths })), None)
+            }
         };
-        let outside = (state == "pinned" && detail.is_some()).then_some("pending");
         cx.tx.execute(
             "UPDATE capture SET state = ?2, commit_id = ?3, detail = ?4, finished_at = ?5, outside = ?6 WHERE id = ?1",
             params![capture.id, state, commit, detail.as_ref().map(Value::to_string), cx.now, outside],
@@ -374,54 +368,20 @@ impl Command for FinishCapture {
     }
 }
 
-/// How many paths a note lists before it summarizes.
-const LISTED: usize = 50;
-
 /// What the executor is told when the user continues past a stopped capture.
 pub fn stopped_note(capture: &Capture) -> String {
     let detail = capture.detail.clone().unwrap_or_default();
     let body = match capture.state {
         CaptureState::Oversized => {
             let files: Vec<NewFile> = serde_json::from_value(detail["files"].clone()).unwrap_or_default();
-            let mut list: Vec<String> =
-                files.iter().take(LISTED).map(|f| format!("- {}（{} 字节）", f.path, f.size)).collect();
-            if files.len() > LISTED {
-                list.push(format!("- ……另有 {} 个文件", files.len() - LISTED));
-            }
-            format!(
-                "上一个 turn 结束后，采集新增了 {} 个文件，共 {} 字节，超过了项目设定的上限，运行时没有采集。新增的文件：\n{}\n\n\
-                 依赖、构建输出、缓存这类不该进入成果的文件，请加入 .gitignore 或删除。",
-                files.len(),
-                detail["total_bytes"],
-                list.join("\n")
-            )
+            prompts::capture_oversized(&files, &detail["total_bytes"])
         }
         _ => {
             let paths: Vec<UncoveredPath> = serde_json::from_value(detail["paths"].clone()).unwrap_or_default();
-            let list: Vec<String> = paths
-                .iter()
-                .take(LISTED)
-                .map(|p| {
-                    let what = match p.kind.as_str() {
-                        "nested_repo" => "嵌套的仓库",
-                        "special_file" => "特殊文件",
-                        _ => "无法表示的文件名",
-                    };
-                    format!("- {}（{what}）", p.path)
-                })
-                .collect();
-            format!(
-                "上一个 turn 结束后，工作目录里有采集无法保存的内容，运行时没有采集：\n{}\n\n\
-                 嵌套的仓库请删除其中的 .git，或把整个目录加入 .gitignore；特殊文件请删除。",
-                list.join("\n")
-            )
+            prompts::capture_uncovered(&paths)
         }
     };
-    if capture.kind == CaptureKind::Candidate {
-        format!("{body}\n\n你报告的 done 因此没有生效。处理后请再次调用 org_report 报告 done。")
-    } else {
-        body
-    }
+    if capture.kind == CaptureKind::Candidate { prompts::done_not_taken(&body) } else { body }
 }
 
 /// The user's way past a stopped capture by deciding what it holds (data-model.md §9.2): the

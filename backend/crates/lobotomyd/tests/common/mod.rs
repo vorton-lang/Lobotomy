@@ -11,18 +11,17 @@ use lobotomy_core::turn::{Turn, TurnState, last_turn};
 use lobotomy_core::workspace::materializing;
 use lobotomy_core::{Caller, Db};
 use lobotomyd::Backend;
-use lobotomyd::host::{HarnessConfig, Host};
+use lobotomyd::host::{Cli, HarnessConfig, Host};
 use lobotomyd::project::Project;
 
 /// The fake Codex. `flags` go before Codex's own arguments, such as `--fake-hang`.
 pub fn fake_codex_with(flags: &[&str]) -> HarnessConfig {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("fake-codex.mjs");
-    let mut codex = vec!["node".to_owned(), script.to_string_lossy().into_owned()];
-    codex.extend(flags.iter().map(|f| (*f).to_owned()));
+    let mut command = vec!["node".to_owned(), script.to_string_lossy().into_owned()];
+    command.extend(flags.iter().map(|f| (*f).to_owned()));
     HarnessConfig {
-        codex,
+        codex: Cli { command, reasoning_effort: None },
         interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
-        codex_reasoning_effort: None,
         probe_timeout: Duration::from_secs(60),
     }
 }
@@ -34,9 +33,11 @@ pub fn fake_codex() -> HarnessConfig {
 /// The real Codex, for the ignored tests.
 pub fn real_codex() -> HarnessConfig {
     HarnessConfig {
-        codex: vec![lobotomy_harness::codex::locate().to_string_lossy().into_owned()],
+        codex: Cli {
+            command: vec![lobotomy_harness::codex::locate().to_string_lossy().into_owned()],
+            reasoning_effort: Some("low".into()),
+        },
         interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
-        codex_reasoning_effort: Some("low".into()),
         probe_timeout: Duration::from_secs(120),
     }
 }

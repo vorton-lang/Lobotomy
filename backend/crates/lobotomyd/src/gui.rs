@@ -254,6 +254,17 @@ async fn respond(project: &Arc<Project>, text: &str) -> String {
     }
 }
 
+/// The files directly in `dir` and their total size; a directory that does not exist is empty.
+/// The raw output a turn keeps (data-model.md §7.4) is not deleted on its own yet, so the user
+/// sees what it takes (#16).
+fn directory_size(dir: &std::path::Path) -> (u64, u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return (0, 0) };
+    entries
+        .filter_map(|entry| entry.ok()?.metadata().ok())
+        .filter(|meta| meta.is_file())
+        .fold((0, 0), |(files, bytes), meta| (files + 1, bytes + meta.len()))
+}
+
 /// A refusal carries its code; parameters that do not parse are the client's mistake; anything
 /// else is the backend's (#16).
 fn error_code(e: &anyhow::Error) -> &'static str {
@@ -272,6 +283,12 @@ async fn call(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Re
             db(project, move |db| db.read(|c| search_thread(c, &p))).await?
         }
         "task" => task_detail(project, serde_json::from_value(params)?).await?,
+        // Asked for when the settings open, not with every snapshot: it walks a directory.
+        "disk_usage" => {
+            let turns = project.data_dir.join("turns");
+            let (files, bytes) = tokio::task::spawn_blocking(move || directory_size(&turns)).await?;
+            json!({ "raw_output": { "files": files, "bytes": bytes } })
+        }
         "diff" => {
             let DiffParams { from, to } = serde_json::from_value(params)?;
             let store = project.store.clone();
@@ -355,7 +372,7 @@ fn stalled(conn: &Connection, role: &RoleView) -> lobotomy_core::Result<Option<S
     if role.unfinished.is_some()
         || role.hold.is_some()
         || role.queued_messages > 0
-        || lobotomy_core::capture::require_no_pending_capture(conn, &role.role.name).is_err()
+        || lobotomy_core::capture::capture_in_progress(conn, &role.role.name)?.is_some()
     {
         return Ok(None);
     }
@@ -378,15 +395,12 @@ fn stalled(conn: &Connection, role: &RoleView) -> lobotomy_core::Result<Option<S
     let report_error = calls
         .iter()
         .filter_map(|c| serde_json::from_str::<Value>(c).ok())
-        .filter(|c| c["server"] == "lobotomy")
-        .map(|c| {
-            let text =
-                c["error"]["message"].as_str().or(c["error"].as_str()).or(c["result"]["content"][0]["text"].as_str());
-            match text {
-                Some(text) => text.to_owned(),
-                None if !c["error"].is_null() => c["error"].to_string(),
-                None => "调用没有返回内容".to_owned(),
-            }
+        .filter(|c| c["server"] == lobotomy_harness::MCP_SERVER)
+        // The adapter says why in harness-neutral fields (harness/src/event.rs).
+        .map(|c| match (c["error_text"].as_str(), c["result_text"].as_str()) {
+            (Some(error), _) => error.to_owned(),
+            (None, Some(reply)) => reply.to_owned(),
+            (None, None) => "调用没有返回内容".to_owned(),
         })
         .next_back();
     Ok(Some(Stalled { task_id: task_id.clone(), turn_id: last.id.clone(), report_error }))
@@ -572,9 +586,11 @@ pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
     if let Some(reason) = view.preview_stopped {
         attention.push(Attention::PreviewStopped { reason });
     }
-    let harnesses = lobotomy_harness::HARNESSES
+    let harnesses = lobotomy_harness::Harness::ALL
         .iter()
-        .map(|&harness| Ok(HarnessView { harness, permission: project.host.permission(harness)?.as_str() }))
+        .map(|&harness| {
+            Ok(HarnessView { harness: harness.as_str(), permission: project.host.permission(harness)?.as_str() })
+        })
         .collect::<anyhow::Result<_>>()?;
     let live = project.live.lock().unwrap().clone();
     Ok(Snapshot {

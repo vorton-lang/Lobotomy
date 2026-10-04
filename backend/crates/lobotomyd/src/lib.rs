@@ -4,6 +4,7 @@
 pub mod capability;
 pub mod gui;
 pub mod host;
+pub mod launch;
 pub mod mcp;
 pub mod onboard;
 pub mod project;

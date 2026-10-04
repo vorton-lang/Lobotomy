@@ -8,42 +8,21 @@ use serde_json::json;
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::id::new_id;
+use crate::prompts;
+use crate::sql::sql_enum;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Phase {
-    Queued,
-    Executing,
-    Verifying,
-    Accepting,
-    Done,
-    Abandoned,
+sql_enum! {
+    pub enum Phase {
+        Queued = "queued",
+        Executing = "executing",
+        Verifying = "verifying",
+        Accepting = "accepting",
+        Done = "done",
+        Abandoned = "abandoned",
+    }
 }
 
 impl Phase {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Phase::Queued => "queued",
-            Phase::Executing => "executing",
-            Phase::Verifying => "verifying",
-            Phase::Accepting => "accepting",
-            Phase::Done => "done",
-            Phase::Abandoned => "abandoned",
-        }
-    }
-
-    pub fn parse(s: &str) -> Result<Self> {
-        Ok(match s {
-            "queued" => Phase::Queued,
-            "executing" => Phase::Executing,
-            "verifying" => Phase::Verifying,
-            "accepting" => Phase::Accepting,
-            "done" => Phase::Done,
-            "abandoned" => Phase::Abandoned,
-            other => return Err(Error::invariant(format!("unknown phase {other}"))),
-        })
-    }
-
     pub fn is_closed(self) -> bool {
         matches!(self, Phase::Done | Phase::Abandoned)
     }
@@ -70,45 +49,34 @@ pub struct Task {
 const TASK_COLUMNS: &str = "id, title, body, executor, phase, paused, blocked_reason, criteria_version, \
                             queue_pos, revision, created_at, closed_at, origin_capture";
 
-fn task_from_row(r: &Row<'_>) -> rusqlite::Result<(Task, String)> {
-    let phase: String = r.get(4)?;
-    Ok((
-        Task {
-            id: r.get(0)?,
-            title: r.get(1)?,
-            body: r.get(2)?,
-            executor: r.get(3)?,
-            phase: Phase::Queued, // replaced by the caller after parsing `phase`
-            paused: r.get::<_, i64>(5)? != 0,
-            blocked_reason: r.get(6)?,
-            criteria_version: r.get(7)?,
-            queue_pos: r.get(8)?,
-            revision: r.get(9)?,
-            created_at: r.get(10)?,
-            closed_at: r.get(11)?,
-            origin_capture: r.get(12)?,
-        },
-        phase,
-    ))
+fn task_from_row(r: &Row<'_>) -> rusqlite::Result<Task> {
+    Ok(Task {
+        id: r.get(0)?,
+        title: r.get(1)?,
+        body: r.get(2)?,
+        executor: r.get(3)?,
+        phase: r.get(4)?,
+        paused: r.get::<_, i64>(5)? != 0,
+        blocked_reason: r.get(6)?,
+        criteria_version: r.get(7)?,
+        queue_pos: r.get(8)?,
+        revision: r.get(9)?,
+        created_at: r.get(10)?,
+        closed_at: r.get(11)?,
+        origin_capture: r.get(12)?,
+    })
 }
 
 pub fn load_task(conn: &Connection, id: &str) -> Result<Task> {
     let row =
         conn.query_row(&format!("SELECT {TASK_COLUMNS} FROM task WHERE id = ?1"), [id], task_from_row).optional()?;
-    let (mut task, phase) = row.ok_or_else(|| Error::rejected("not_found", format!("no task {id}")))?;
-    task.phase = Phase::parse(&phase)?;
-    Ok(task)
+    row.ok_or_else(|| Error::rejected("not_found", format!("no task {id}")))
 }
 
 pub fn list_tasks(conn: &Connection) -> Result<Vec<Task>> {
     let mut stmt = conn.prepare(&format!("SELECT {TASK_COLUMNS} FROM task ORDER BY created_at, id"))?;
     let rows = stmt.query_map([], task_from_row)?;
-    rows.map(|r| {
-        let (mut task, phase) = r?;
-        task.phase = Phase::parse(&phase)?;
-        Ok(task)
-    })
-    .collect()
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// The first queued, unpaused task of the role: the next one to start (roles-and-tasks.md §2.2).
@@ -123,11 +91,7 @@ pub fn next_queued_task(conn: &Connection, role: &str) -> Result<Option<Task>> {
             task_from_row,
         )
         .optional()?;
-    row.map(|(mut task, phase)| {
-        task.phase = Phase::parse(&phase)?;
-        Ok(task)
-    })
-    .transpose()
+    Ok(row)
 }
 
 /// The task currently occupying a role, if any.
@@ -141,17 +105,33 @@ pub struct Attempt {
     pub task_id: String,
     pub seq: i64,
     pub done_turn_id: Option<String>,
+    /// Files its code start left with conflict markers.
+    pub conflicts: Vec<String>,
 }
 
 /// The task's open attempt, if any (data-model.md §4.1).
 pub fn open_attempt(conn: &Connection, task_id: &str) -> Result<Option<Attempt>> {
-    Ok(conn
+    let row = conn
         .query_row(
-            "SELECT id, task_id, seq, done_turn_id FROM attempt WHERE task_id = ?1 AND ended_at IS NULL",
+            "SELECT id, task_id, seq, done_turn_id, conflicts FROM attempt WHERE task_id = ?1 AND ended_at IS NULL",
             [task_id],
-            |r| Ok(Attempt { id: r.get(0)?, task_id: r.get(1)?, seq: r.get(2)?, done_turn_id: r.get(3)? }),
+            |r| {
+                let attempt = Attempt {
+                    id: r.get(0)?,
+                    task_id: r.get(1)?,
+                    seq: r.get(2)?,
+                    done_turn_id: r.get(3)?,
+                    conflicts: vec![],
+                };
+                Ok((attempt, r.get::<_, Option<String>>(4)?))
+            },
         )
-        .optional()?)
+        .optional()?;
+    row.map(|(mut attempt, conflicts)| {
+        attempt.conflicts = conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
+        Ok(attempt)
+    })
+    .transpose()
 }
 
 pub fn criteria_text(conn: &Connection, task_id: &str, version: i64) -> Result<String> {
@@ -167,16 +147,24 @@ pub fn criteria_text(conn: &Connection, task_id: &str, version: i64) -> Result<S
 /// doubles as its summary in the GUI; the task id is in the message header (`compose_input`).
 pub fn brief(conn: &Connection, task: &Task, attempt_seq: i64) -> Result<String> {
     let criteria = criteria_text(conn, &task.id, task.criteria_version)?;
-    Ok(format!(
-        "任务：{title}（第 {attempt_seq} 轮执行）\n\n\
-         用户原话：\n{body}\n\n\
-         完成条件（第 {version} 版）：\n{criteria}\n\n\
-         完成后调用 org_report，status 为 done。遇到需要用户决定的问题时，调用 org_report，status 为 blocked，\
-         并在 blocked_on 中写明问题。",
-        title = task.title,
-        body = task.body,
-        version = task.criteria_version,
-    ))
+    Ok(prompts::brief(&task.title, &task.body, attempt_seq, task.criteria_version, &criteria))
+}
+
+/// What the executor is told when an attempt starts, and again when a new native session takes
+/// the attempt over (data-model.md §4.1): the brief, then what is special about where its code
+/// starts. A new session used to get the brief alone and never heard of conflict markers in its
+/// slot (#16).
+pub fn attempt_brief(conn: &Connection, task: &Task, seq: i64, conflicts: &[String]) -> Result<String> {
+    let mut text = brief(conn, task, seq)?;
+    if task.origin_capture.is_some() && seq == 1 {
+        text.push_str("\n\n");
+        text.push_str(prompts::STARTS_FROM_OUTSIDE_CHANGES);
+    }
+    if !conflicts.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&prompts::conflicts_at_start(conflicts));
+    }
+    Ok(text)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -257,14 +245,20 @@ fn bump_revision(cx: &Cx<'_>, task_id: &str) -> Result<()> {
 /// execution goes through here: a start, a reopen, a failed verification, a send-back. A
 /// question the executor asked in an earlier attempt no longer stands (#16). The caller emits
 /// `attempt.started` once the attempt's slot and message are in place.
-pub(crate) fn enter_execution(cx: &mut Cx<'_>, task: &Task, code_start: Option<&str>) -> Result<AttemptStarted> {
+pub(crate) fn enter_execution(
+    cx: &mut Cx<'_>,
+    task: &Task,
+    code_start: Option<&str>,
+    conflicts: &[String],
+) -> Result<AttemptStarted> {
     let seq: i64 =
         cx.tx
             .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| r.get(0))?;
     let attempt_id = new_id("att");
+    let conflicts = (!conflicts.is_empty()).then(|| serde_json::to_string(conflicts)).transpose()?;
     cx.tx.execute(
-        "INSERT INTO attempt (id, task_id, seq, started_at, code_start) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![attempt_id, task.id, seq, cx.now, code_start],
+        "INSERT INTO attempt (id, task_id, seq, started_at, code_start, conflicts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![attempt_id, task.id, seq, cx.now, code_start, conflicts],
     )?;
     cx.tx.execute(
         "UPDATE task SET phase = 'executing', blocked_reason = NULL, queue_pos = NULL WHERE id = ?1",
@@ -470,7 +464,7 @@ impl Command for EditCriteria {
         // Once work has started the executor must hear about it. The scheduler holds the message
         // back while the task is outside execution (data-model.md §4.2).
         if task.phase != Phase::Queued {
-            let body = format!("完成条件已更新为第 {version} 版：\n{}", self.text);
+            let body = prompts::criteria_updated(version, &self.text);
             queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), &body)?;
         }
         cx.emit("task.criteria_changed", &task.id, json!({ "version": version }))?;
@@ -710,7 +704,7 @@ impl Command for StartAttempt {
             }
         };
 
-        let started = enter_execution(cx, &task, Some(&start.commit))?;
+        let started = enter_execution(cx, &task, Some(&start.commit), &start.conflicts)?;
         let seq = started.seq;
         cx.tx.execute(
             "INSERT INTO occupancy (role, task_id, since) VALUES (?1, ?2, ?3)",
@@ -719,16 +713,7 @@ impl Command for StartAttempt {
         if let Some(slot) = crate::workspace::role_slot(cx.tx, &task.executor)? {
             crate::workspace::plan(cx, &slot, &start.commit, &start.base, Some(&task.id))?;
         }
-        let mut brief = brief(cx.tx, &task, seq)?;
-        if task.origin_capture.is_some() && seq == 1 {
-            brief.push_str("\n\n工作目录里已经有这项任务的初始改动：它们是在任务之外做的，用户把它们建成了这项任务。请在此基础上继续。");
-        }
-        if !start.conflicts.is_empty() {
-            brief.push_str(&format!(
-                "\n\n这项任务已有的改动与当前的集成版本冲突。工作目录中以下文件有冲突标记，请先解决：\n{}",
-                start.conflicts.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n")
-            ));
-        }
+        let brief = attempt_brief(cx.tx, &task, seq, &start.conflicts)?;
         queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), &brief)?;
         cx.emit("attempt.started", &task.id, json!({ "attempt_id": started.attempt_id, "seq": seq }))?;
         Ok(started)

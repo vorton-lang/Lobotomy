@@ -501,7 +501,7 @@ async fn a_real_codex_turn_reports_done() {
     // Role sessions persist so they can resume; this one is a test, so keep it out of the
     // user's Codex history.
     if let Some(session) = &turn.native_id {
-        let deleted = std::process::Command::new(&backend.project.host.harness.codex[0])
+        let deleted = std::process::Command::new(&backend.project.host.harness.codex.command[0])
             .args(["delete", "--force", session])
             .output()
             .map(|out| out.status.success());

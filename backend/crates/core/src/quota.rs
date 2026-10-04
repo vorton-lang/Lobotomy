@@ -16,17 +16,6 @@ use crate::host::HostDb;
 /// v1 uses one login per harness (data-model.md §8.1).
 pub const DEFAULT_ACCOUNT: &str = "default";
 
-pub(crate) const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS quota_domain (
-  harness    TEXT NOT NULL,
-  account    TEXT NOT NULL,
-  blocked_at INTEGER,
-  resets_at  INTEGER,
-  message    TEXT,
-  PRIMARY KEY (harness, account)
-) STRICT;
-";
-
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Domain {
     pub harness: String,

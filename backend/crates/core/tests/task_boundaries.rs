@@ -5,61 +5,24 @@
 use lobotomy_core::capture::{
     CaptureResult, DiscardOutsideChanges, FinishCapture, Outside, outside_changes, pending_captures,
 };
-use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
+use lobotomy_core::report::{ReportEffect, ReportStatus};
 use lobotomy_core::task::{
-    Abandon, AdoptOutsideChanges, CodeStart, CreateTask, EditCriteria, SendMessage, StartAttempt, load_task,
-    queued_messages,
+    Abandon, AdoptOutsideChanges, CodeStart, EditCriteria, StartAttempt, load_task, queued_messages,
 };
-use lobotomy_core::turn::{EndTurn, Outcome, RegisterTurn, SessionIdentified, TurnRegistered};
+use lobotomy_core::turn::RegisterTurn;
 use lobotomy_core::verify::{Accept, FinishVerification, SendBack, StartVerification, work_so_far};
 use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceState, current_workspace};
 use lobotomy_core::{Caller, Db};
 
 mod common;
-use common::{BASE, ROLE, SLOT, db, pin_captures, ready_slot, rejection, start};
-
-/// The idle role's slot at the integration version, as the scheduler prepares it.
-fn idle_slot(db: &Db) {
-    db.execute(&Caller::Runtime, &AlignIdleSlot { role: ROLE.into() }).unwrap();
-    ready_slot(db);
-}
-
-fn create(db: &Db, request_id: &str) -> String {
-    let task = CreateTask {
-        request_id: request_id.into(),
-        title: "加一个 new.txt".into(),
-        body: "原话".into(),
-        criteria: "文件存在".into(),
-        executor: ROLE.into(),
-    };
-    db.execute(&Caller::User, &task).unwrap().id
-}
-
-fn register(db: &Db) -> TurnRegistered {
-    let t = db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() }).unwrap();
-    db.execute(&Caller::Runtime, &SessionIdentified { turn_id: t.turn_id.clone(), native_id: "thread".into() })
-        .unwrap();
-    t
-}
+use common::{BASE, ROLE, SLOT, create, db, end_turn, idle_slot, pin_captures, ready_slot, register, rejection, start};
 
 fn report(db: &Db, turn_id: &str, status: ReportStatus) -> ReportEffect {
-    let report = OrgReport { title: "完成了".into(), body: "加了 new.txt".into(), status, blocked_on: None };
-    db.execute(&Caller::Role { role: ROLE.into(), turn_id: turn_id.into() }, &report).unwrap()
-}
-
-fn end_turn(db: &Db, turn_id: &str) {
-    db.execute(&Caller::Runtime, &EndTurn { turn_id: turn_id.into(), outcome: Outcome::Completed, failure: None })
-        .unwrap();
+    common::report(db, turn_id, status, None).unwrap()
 }
 
 fn send(db: &Db, request_id: &str, task: Option<&str>, body: &str) -> String {
-    let message = SendMessage {
-        request_id: request_id.into(),
-        role: ROLE.into(),
-        task_id: task.map(Into::into),
-        body: body.into(),
-    };
-    db.execute(&Caller::User, &message).unwrap().id
+    common::send(db, request_id, task, body)
 }
 
 /// A task waiting for acceptance, and its passed verification.

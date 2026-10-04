@@ -10,66 +10,28 @@ use serde_json::json;
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::id::new_id;
+use crate::prompts;
+use crate::sql::sql_enum;
 use crate::task::{
-    Attempt, Message, Phase, Task, brief, load_task, occupant, open_attempt, queue_message, queued_messages,
+    Attempt, Message, Phase, Task, attempt_brief, load_task, occupant, open_attempt, queue_message, queued_messages,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnState {
-    /// The turn record exists; the CLI has not started.
-    Registered,
-    Running,
-    Ended,
-    /// The backend restarted while the turn was registered or running (data-model.md §3.3).
-    Unknown,
-}
-
-impl TurnState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TurnState::Registered => "registered",
-            TurnState::Running => "running",
-            TurnState::Ended => "ended",
-            TurnState::Unknown => "unknown",
-        }
-    }
-
-    fn parse(s: &str) -> Result<Self> {
-        Ok(match s {
-            "registered" => TurnState::Registered,
-            "running" => TurnState::Running,
-            "ended" => TurnState::Ended,
-            "unknown" => TurnState::Unknown,
-            other => return Err(Error::invariant(format!("unknown turn state {other}"))),
-        })
+sql_enum! {
+    pub enum TurnState {
+        /// The turn record exists; the CLI has not started.
+        Registered = "registered",
+        Running = "running",
+        Ended = "ended",
+        /// The backend restarted while the turn was registered or running (data-model.md §3.3).
+        Unknown = "unknown",
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Outcome {
-    Completed,
-    Failed,
-    Interrupted,
-}
-
-impl Outcome {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Outcome::Completed => "completed",
-            Outcome::Failed => "failed",
-            Outcome::Interrupted => "interrupted",
-        }
-    }
-
-    fn parse(s: &str) -> Result<Self> {
-        Ok(match s {
-            "completed" => Outcome::Completed,
-            "failed" => Outcome::Failed,
-            "interrupted" => Outcome::Interrupted,
-            other => return Err(Error::invariant(format!("unknown outcome {other}"))),
-        })
+sql_enum! {
+    pub enum Outcome {
+        Completed = "completed",
+        Failed = "failed",
+        Interrupted = "interrupted",
     }
 }
 
@@ -134,54 +96,41 @@ const TURN_SELECT: &str = "SELECT t.id, t.role, s.harness, t.native_session_id, 
        t.registered_at, t.started_at, t.ended_at, t.workspace_id
      FROM turn t JOIN native_session s ON s.id = t.native_session_id";
 
-struct TurnRow {
-    turn: Turn,
-    state: String,
-    outcome: Option<String>,
-    failure: Option<String>,
-}
-
-fn turn_from_row(r: &Row<'_>) -> rusqlite::Result<TurnRow> {
-    Ok(TurnRow {
-        turn: Turn {
-            id: r.get(0)?,
-            role: r.get(1)?,
-            harness: r.get(2)?,
-            native_session_id: r.get(3)?,
-            native_id: r.get(4)?,
-            task_id: r.get(5)?,
-            attempt_id: r.get(6)?,
-            token: r.get(7)?,
-            input: r.get(8)?,
-            state: TurnState::Registered, // replaced after parsing
-            outcome: None,
-            failure: None,
-            pid: r.get(12)?,
-            process_start: r.get(13)?,
-            done_at: r.get(14)?,
-            registered_at: r.get(15)?,
-            started_at: r.get(16)?,
-            ended_at: r.get(17)?,
-            workspace_id: r.get(18)?,
-        },
+/// A turn and its failure, still JSON text: parsing it needs the crate's error.
+fn turn_from_row(r: &Row<'_>) -> rusqlite::Result<(Turn, Option<String>)> {
+    let turn = Turn {
+        id: r.get(0)?,
+        role: r.get(1)?,
+        harness: r.get(2)?,
+        native_session_id: r.get(3)?,
+        native_id: r.get(4)?,
+        task_id: r.get(5)?,
+        attempt_id: r.get(6)?,
+        token: r.get(7)?,
+        input: r.get(8)?,
         state: r.get(9)?,
         outcome: r.get(10)?,
-        failure: r.get(11)?,
-    })
-}
-
-fn finish(row: TurnRow) -> Result<Turn> {
-    let mut turn = row.turn;
-    turn.state = TurnState::parse(&row.state)?;
-    turn.outcome = row.outcome.as_deref().map(Outcome::parse).transpose()?;
-    turn.failure = row.failure.as_deref().map(serde_json::from_str).transpose()?;
-    Ok(turn)
+        failure: None,
+        pid: r.get(12)?,
+        process_start: r.get(13)?,
+        done_at: r.get(14)?,
+        registered_at: r.get(15)?,
+        started_at: r.get(16)?,
+        ended_at: r.get(17)?,
+        workspace_id: r.get(18)?,
+    };
+    Ok((turn, r.get(11)?))
 }
 
 fn query_turns(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Turn>> {
     let mut stmt = conn.prepare(&format!("{TURN_SELECT} {filter}"))?;
     let rows = stmt.query_map(args, turn_from_row)?;
-    rows.map(|r| finish(r?)).collect()
+    rows.map(|row| {
+        let (mut turn, failure) = row?;
+        turn.failure = failure.as_deref().map(serde_json::from_str).transpose()?;
+        Ok(turn)
+    })
+    .collect()
 }
 
 pub fn load_turn(conn: &Connection, id: &str) -> Result<Turn> {
@@ -301,22 +250,12 @@ fn is_abnormal(turn: &Turn) -> bool {
 pub fn compose_input(messages: &[Message]) -> String {
     messages
         .iter()
-        .map(|m| {
-            let from = match m.source.as_str() {
-                "user" => "用户".to_owned(),
-                "runtime" => "Lobotomy".to_owned(),
-                other => other.strip_prefix("role:").unwrap_or(other).to_owned(),
-            };
-            match &m.task_id {
-                Some(task) => format!("【来自 {from} · 任务 {task}】\n{}", m.body),
-                None => format!("【来自 {from}】\n{}", m.body),
-            }
-        })
+        .map(|m| format!("{}\n{}", prompts::header(prompts::sender(&m.source), m.task_id.as_deref()), m.body))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-/// Why a role waits for the user. The same rules hold the role in [`register`].
+/// Why a role waits for the user.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Hold {
@@ -328,37 +267,78 @@ pub enum Hold {
     SessionUnidentified { session_id: String },
 }
 
-pub fn hold(conn: &Connection, role: &str) -> Result<Option<Hold>> {
-    // Until the last turn is captured the role waits for the runtime, not for the user.
-    if crate::capture::require_no_pending_capture(conn, role).is_err() {
-        return Ok(None);
+impl Hold {
+    /// The code [`register`] refuses with while the role holds.
+    fn code(&self) -> &'static str {
+        match self {
+            Hold::Abnormal { .. } => "held",
+            Hold::CaptureStopped { .. } => "capture_stopped",
+            Hold::SessionUnidentified { .. } => "session_unidentified",
+        }
+    }
+}
+
+/// What keeps a role from its next turn until someone acts.
+enum Waiting {
+    /// The runtime: the last turn's scene is not captured yet (harness-adapter.md §4.1). The
+    /// capture's id.
+    Runtime(String),
+    /// The user.
+    User(Hold),
+}
+
+/// The one place that decides whether a role waits. [`hold`], [`register`] and [`Continue`] all
+/// ask here, so what the GUI shows and what the runtime refuses cannot drift apart (#16).
+fn waiting(conn: &Connection, role: &str) -> Result<Option<Waiting>> {
+    if let Some(capture) = crate::capture::capture_in_progress(conn, role)? {
+        return Ok(Some(Waiting::Runtime(capture.id)));
     }
     if let Some(capture) = crate::capture::stopped_capture(conn, role)? {
-        return Ok(Some(Hold::CaptureStopped { capture: Box::new(capture) }));
+        return Ok(Some(Waiting::User(Hold::CaptureStopped { capture: Box::new(capture) })));
     }
     let (task, attempt) = current_work(conn, role)?;
     let Some(session) = current_session(conn, role, task.as_ref().map(|t| t.id.as_str()))? else {
         return Ok(None);
     };
-    if let Some(last) = last_turn_in(conn, &session.id)?
-        && is_abnormal(&last)
-        && last.attempt_id == attempt.map(|a| a.id)
-    {
-        return Ok(Some(Hold::Abnormal { turn: Box::new(last) }));
+    if let Some(turn) = abnormal_last_turn(conn, &session, attempt.as_ref().map(|a| a.id.as_str()))? {
+        return Ok(Some(Waiting::User(Hold::Abnormal { turn: Box::new(turn) })));
     }
-    if session.native_id.is_none() {
-        let completed = conn
-            .query_row(
-                "SELECT 1 FROM turn WHERE native_session_id = ?1 AND outcome = 'completed' LIMIT 1",
-                [&session.id],
-                |_| Ok(()),
-            )
-            .optional()?;
-        if completed.is_some() {
-            return Ok(Some(Hold::SessionUnidentified { session_id: session.id }));
-        }
+    if lost_session_id(conn, &session)? {
+        return Ok(Some(Waiting::User(Hold::SessionUnidentified { session_id: session.id })));
     }
     Ok(None)
+}
+
+/// The session's last turn, if it belongs to the current attempt and did not end normally. A turn
+/// of an attempt that has ended does not hold: the capture or the user has already moved the work
+/// on (#11).
+fn abnormal_last_turn(conn: &Connection, session: &NativeSession, attempt_id: Option<&str>) -> Result<Option<Turn>> {
+    Ok(last_turn_in(conn, &session.id)?.filter(|last| is_abnormal(last) && last.attempt_id.as_deref() == attempt_id))
+}
+
+/// A completed turn without a recorded session id: the next turn would start a fresh harness
+/// session and silently lose the context (#10).
+fn lost_session_id(conn: &Connection, session: &NativeSession) -> Result<bool> {
+    if session.native_id.is_some() {
+        return Ok(false);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM turn WHERE native_session_id = ?1 AND outcome = 'completed' LIMIT 1",
+            [&session.id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Why the role waits for the user, if it does. While the last turn's scene is being captured it
+/// waits for the runtime, which is not a hold.
+pub fn hold(conn: &Connection, role: &str) -> Result<Option<Hold>> {
+    Ok(match waiting(conn, role)? {
+        Some(Waiting::User(hold)) => Some(hold),
+        Some(Waiting::Runtime(_)) | None => None,
+    })
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -383,15 +363,19 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     if let Some(running) = unfinished_turn(cx.tx, role)? {
         return Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", running.id)));
     }
-    // The last turn's scene is captured before the next turn touches the slot, and turns only run
-    // in a slot that holds its target (harness-adapter.md §3, §4.1). A capture the runtime
-    // stopped stops the role until the user decides; continuing is one of the choices.
-    crate::capture::require_no_pending_capture(cx.tx, role)?;
-    if continuation.is_none()
-        && let Some(stopped) = crate::capture::stopped_capture(cx.tx, role)?
-    {
-        return Err(Error::rejected("capture_stopped", format!("capture {} of {role} was stopped", stopped.id)));
+    // The last turn's scene is captured before the next turn touches the slot (harness-adapter.md
+    // §4.1). A role that holds waits for the user's choice; continuing is one of the choices, and
+    // gets past an abnormal turn or a stopped capture, never past a lost session id.
+    match waiting(cx.tx, role)? {
+        Some(Waiting::Runtime(capture)) => {
+            return Err(Error::rejected("capture_pending", format!("capture {capture} of {role} is pending")));
+        }
+        Some(Waiting::User(hold)) if continuation.is_none() => {
+            return Err(Error::rejected(hold.code(), format!("{role} waits for the user: {}", hold.code())));
+        }
+        _ => {}
     }
+    // Turns only run in a slot that holds its target (harness-adapter.md §3).
     let workspace_id = match crate::workspace::role_slot(cx.tx, role)? {
         Some(slot) => match crate::workspace::current_workspace(cx.tx, &slot)? {
             Some(ws) if ws.state == crate::workspace::WorkspaceState::Ready => Some(ws.id),
@@ -419,38 +403,16 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
         Some(session) => session,
         None => start_session(cx, role, task_id.as_deref())?,
     };
-    // After an abnormal turn of the current attempt the role waits for the user's choice
-    // (harness-adapter.md §1.7). A turn of an attempt that has ended does not hold: the capture or
-    // the user has already moved the work on (#11).
-    if let Some(last) = last_turn_in(cx.tx, &session.id)?
-        && continuation.is_none()
-        && is_abnormal(&last)
-        && last.attempt_id == attempt_id
-    {
-        return Err(Error::rejected("held", format!("{role}'s last turn {} did not complete", last.id)));
-    }
-    // A completed turn without a recorded session id would make the next turn start a fresh
-    // harness session, silently losing the context. The role stops; a new native session is the
-    // user's way on (#10).
-    if session.native_id.is_none() {
-        let completed = cx
-            .tx
-            .query_row(
-                "SELECT 1 FROM turn WHERE native_session_id = ?1 AND outcome = 'completed' LIMIT 1",
-                [&session.id],
-                |_| Ok(()),
-            )
-            .optional()?;
-        if completed.is_some() {
-            return Err(Error::rejected("session_unidentified", format!("session {} has no harness id", session.id)));
-        }
+    // Also when continuing, which gets past other holds.
+    if lost_session_id(cx.tx, &session)? {
+        return Err(Error::rejected("session_unidentified", format!("session {} has no harness id", session.id)));
     }
 
     let messages = queued_messages(cx.tx, role)?;
     let (note, resend) = continuation.map_or((None, None), |c| (c.note, c.resend));
     let mut parts = Vec::new();
     if let Some(note) = note {
-        parts.push(format!("【来自 Lobotomy】\n{note}"));
+        parts.push(format!("{}\n{note}", prompts::header("Lobotomy", None)));
     }
     if let Some(turn) = resend {
         parts.push(turn.input.clone());
@@ -682,10 +644,9 @@ impl Command for Continue {
         let session = current_session(cx.tx, &self.role, task.as_ref().map(|t| t.id.as_str()))?;
         let attempt_id = attempt.map(|a| a.id);
         let last = match &session {
-            Some(session) => last_turn_in(cx.tx, &session.id)?,
+            Some(session) => abnormal_last_turn(cx.tx, session, attempt_id.as_deref())?,
             None => None,
-        }
-        .filter(|last| is_abnormal(last) && last.attempt_id == attempt_id);
+        };
         let stopped = crate::capture::stopped_capture(cx.tx, &self.role)?;
         if last.is_none() && stopped.is_none() {
             return Err(Error::rejected("nothing_to_continue", format!("{} has no turn to continue", self.role)));
@@ -697,12 +658,8 @@ impl Command for Continue {
         if let Some(last) = &last
             && resend.is_none()
         {
-            let why = match last.failure.as_ref().map(|f| f.kind) {
-                _ if last.outcome == Some(Outcome::Interrupted) => "被中断",
-                Some(FailureKind::Quota) => "因额度不足而失败",
-                _ => "失败",
-            };
-            notes.push(format!("上一个 turn {why}。请先检查当前工作目录的状态，再继续工作。"));
+            let interrupted = last.outcome == Some(Outcome::Interrupted);
+            notes.push(prompts::continue_note(interrupted, last.failure.as_ref().map(|f| f.kind)));
         }
         if let Some(stopped) = &stopped {
             notes.push(crate::capture::stopped_note(stopped));
@@ -752,7 +709,8 @@ impl Command for NewNativeSession {
         }
         start_session(cx, &self.role, task_id)?;
         if let (Some(task), Some(attempt)) = (&task, &attempt) {
-            let body = format!("（新会话）{}", brief(cx.tx, task, attempt.seq)?);
+            let body =
+                format!("{}{}", prompts::NEW_SESSION, attempt_brief(cx.tx, task, attempt.seq, &attempt.conflicts)?);
             queue_message(cx, &self.role, &Caller::Runtime, Some(&task.id), &body)?;
         }
         Ok(())

@@ -18,11 +18,12 @@ use lobotomy_core::workspace::load_workspace;
 use lobotomy_core::{Caller, Command, Db, Error};
 use lobotomy_harness::codex::{self, TurnArgs};
 use lobotomy_harness::event::{Event, Item, ItemKind};
-use lobotomy_harness::process::{self, Spawned, Spec};
+use lobotomy_harness::process::{self, Spawned};
+use lobotomy_harness::{Harness, MCP_SERVER};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::capability;
+use crate::launch;
 use crate::mcp::command_id_in;
 use crate::project::{LiveItem, LiveTurn, Project, RunningTurn};
 
@@ -126,6 +127,13 @@ struct Observed {
     session_unrecorded: Option<String>,
 }
 
+/// The harness's name in what the user reads.
+fn label(harness: Harness) -> &'static str {
+    match harness {
+        Harness::Codex => "Codex",
+    }
+}
+
 /// A failure before the CLI wrote anything: its input reached no session.
 fn unstarted(kind: FailureKind, message: String) -> Option<Failure> {
     Some(Failure { unstarted: true, ..Failure::new(kind, message) })
@@ -150,36 +158,36 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let turn = db(project, move |db| db.read(|c| load_turn(c, &id))).await?;
     let role_name = turn.role.clone();
     let role = db(project, move |db| db.read(|c| load_role(c, &role_name))).await?;
-    if role.harness != "codex" {
+    let Some(harness) = Harness::parse(&role.harness) else {
         let message = format!("{} 使用 {}，M1 只支持 Codex", role.name, role.harness);
         return end(project, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
-    }
+    };
 
     // The slot was ready when the turn was registered (harness-adapter.md §3).
     let workspace_id = turn.workspace_id.clone().with_context(|| format!("{} has no slot", role.name))?;
     let workspace = db(project, move |db| db.read(|c| load_workspace(c, &workspace_id))).await?;
     let cwd = project.slot_dir(&workspace.name);
-    let gh = project.empty_gh_config_dir();
-    for dir in [&gh, &project.data_dir.join("turns")] {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    }
-    let turn_args = TurnArgs {
-        resume: turn.native_id.clone(),
-        model: role.model.clone(),
-        reasoning_effort: project.host.harness.codex_reasoning_effort.clone(),
-        permission: project.host.permission("codex")?,
-        developer_instructions: instructions(&role),
-        mcp_url: project.mcp_url(&turn.token),
+    let turns_dir = project.data_dir.join("turns");
+    std::fs::create_dir_all(&turns_dir).with_context(|| format!("creating {}", turns_dir.display()))?;
+    let cli = project.host.harness.cli(harness);
+    let args = match harness {
+        Harness::Codex => TurnArgs {
+            resume: turn.native_id.clone(),
+            model: role.model.clone(),
+            reasoning_effort: cli.reasoning_effort.clone(),
+            permission: project.host.permission(harness)?,
+            developer_instructions: instructions(&role),
+            mcp_url: project.mcp_url(&turn.token),
+        }
+        .to_args(),
     };
-    let (program, prefix) = project.host.harness.codex.split_first().context("no Codex program configured")?;
-    let args: Vec<String> = prefix.iter().cloned().chain(turn_args.to_args()).collect();
-    let env = capability::env(&gh);
-    let spec =
-        Spec { program: Path::new(program), args: &args, cwd: &cwd, env: &env, env_remove: capability::REMOVED_VARS };
-    let mut spawned = match process::spawn(&spec) {
+    let (program, prefix) = cli.program()?;
+    let args: Vec<String> = prefix.iter().cloned().chain(args).collect();
+    let what = launch::What::Program { program, args: &args };
+    let mut spawned = match launch::spawn(what, &cwd, &project.empty_gh_config_dir()) {
         Ok(spawned) => spawned,
         Err(e) => {
-            let message = format!("无法启动 Codex（{program}）：{e}");
+            let message = format!("无法启动 {}（{}）：{e:#}", label(harness), program.display());
             return end(project, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
         }
     };
@@ -198,7 +206,7 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     project.update_live(|turns| {
         turns.insert(turn_id.to_owned(), live);
     });
-    let outcome = drive(project, &turn, &mut spawned).await;
+    let outcome = drive(project, harness, &turn, &mut spawned).await;
     project.update_live(|turns| {
         turns.remove(turn_id);
     });
@@ -220,18 +228,18 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
 /// be deleted (data-model.md §7.4).
 async fn drive(
     project: &Arc<Project>,
+    harness: Harness,
     turn: &Turn,
     spawned: &mut Spawned,
 ) -> anyhow::Result<(Outcome, Option<Failure>, bool)> {
-    spawned.resume()?;
-    let mut stdin = spawned.child.stdin.take().context("no stdin")?;
-    let written = async {
-        stdin.write_all(turn.input.as_bytes()).await?;
-        stdin.shutdown().await
-    }
-    .await;
-    drop(stdin);
-    match written {
+    let stderr_path = project.raw_output_path(&turn.id, "stderr");
+    let io = launch::run(spawned, turn.input.as_bytes(), |stderr| async move {
+        let mut file = tokio::fs::File::create(stderr_path).await?;
+        tokio::io::copy(&mut BufReader::new(stderr), &mut file).await
+    })
+    .await?;
+    let stderr_copy = io.stderr;
+    match io.input {
         Ok(()) => {
             runtime(project, InputDelivered { turn_id: turn.id.clone() }).await?;
             store(project, turn, None, "input", json!({ "source": "turn.input" })).await?;
@@ -240,22 +248,17 @@ async fn drive(
         Err(e) => tracing::warn!(turn_id = turn.id, error = %e, "could not deliver the input"),
     }
 
-    let stderr = spawned.child.stderr.take().context("no stderr")?;
-    let stderr_path = project.raw_output_path(&turn.id, "stderr");
-    let stderr_copy = tokio::spawn(async move {
-        let mut file = tokio::fs::File::create(stderr_path).await?;
-        tokio::io::copy(&mut BufReader::new(stderr), &mut file).await
-    });
-
-    let stdout = spawned.child.stdout.take().context("no stdout")?;
     let mut raw = tokio::fs::File::create(project.raw_output_path(&turn.id, "jsonl")).await?;
-    let mut lines = BufReader::new(stdout).lines();
+    let mut lines = BufReader::new(io.stdout).lines();
     let mut seen = Observed::default();
     while let Some(line) = lines.next_line().await? {
         raw.write_all(line.as_bytes()).await?;
         raw.write_all(b"\n").await?;
         seen.output = true;
-        let Some(event) = codex::parse_line(&line) else { continue };
+        let event = match harness {
+            Harness::Codex => codex::parse_line(&line),
+        };
+        let Some(event) = event else { continue };
         if let Err(e) = observe(project, turn, event, &mut seen).await {
             tracing::warn!(turn_id = turn.id, error = format!("{e:#}"), "could not record an event");
             seen.unrecorded = true;
@@ -269,7 +272,8 @@ async fn drive(
     let result = if let Some(error) = seen.session_unrecorded {
         let path = project.raw_output_path(&turn.id, "jsonl");
         let message = format!(
-            "Lobotomy 没能记下这一轮的 Codex 会话 ID：{error}\n接着用原来的会话继续，或新建会话。原始输出保留在 {}",
+            "Lobotomy 没能记下这一轮的 {} 会话 ID：{error}\n接着用原来的会话继续，或新建会话。原始输出保留在 {}",
+            label(harness),
             path.display()
         );
         (Outcome::Failed, Some(Failure::new(FailureKind::Other, message)))
@@ -291,11 +295,14 @@ async fn drive(
             None => status.to_string(),
         };
         let path = project.raw_output_path(&turn.id, "stderr");
-        let mut message = format!("Codex 自行退出（{status}），没有报告 turn 结束。");
+        let mut message = format!("{} 自行退出（{status}），没有报告 turn 结束。", label(harness));
         let mut kind = FailureKind::Other;
         match stderr_excerpt(&path, &turn.token).await {
             Ok(excerpt) if !excerpt.is_empty() => {
-                if codex::permission_refused(&excerpt) {
+                let refused = match harness {
+                    Harness::Codex => codex::permission_refused(&excerpt),
+                };
+                if refused {
                     kind = FailureKind::Permission;
                 }
                 message.push_str(&format!("\nstderr 开头：\n{excerpt}\n完整内容见 {}", path.display()))
@@ -366,13 +373,14 @@ async fn observe(project: &Arc<Project>, turn: &Turn, event: Event, seen: &mut O
 async fn store_harness_item(project: &Arc<Project>, turn: &Turn, item: Item) -> anyhow::Result<()> {
     let mut content = item.content;
     let mut command_id = None;
-    if item.kind == ItemKind::McpCall && content["server"] == "lobotomy" {
-        let reply = content["result"]["content"][0]["text"].as_str().unwrap_or_default();
+    if item.kind == ItemKind::McpCall && content["server"] == MCP_SERVER {
+        let reply = content["result_text"].as_str().unwrap_or_default();
         if let Some(id) = command_id_in(reply) {
             command_id = Some(id.to_owned());
             if let Value::Object(fields) = &mut content {
-                fields.remove("arguments");
-                fields.remove("result");
+                for field in ["arguments", "result", "result_text"] {
+                    fields.remove(field);
+                }
             }
         }
     }

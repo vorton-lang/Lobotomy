@@ -15,6 +15,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0004_results.sql"),
     include_str!("../migrations/0005_workspace_work.sql"),
     include_str!("../migrations/0006_task_boundaries.sql"),
+    include_str!("../migrations/0007_attempt_conflicts.sql"),
 ];
 
 /// One project's database.
@@ -127,7 +128,7 @@ impl Db {
 /// rebuild a table other tables point to, as SQLite's "twelve steps" require for changing a CHECK
 /// constraint: with foreign keys on, dropping the old table would fail (#16). SQLite ignores the
 /// pragma inside a transaction, so a migration cannot switch it itself.
-fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
+pub(crate) fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", false)?;
     let applied = conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))? as usize;
     for (i, sql) in migrations.iter().enumerate().skip(applied) {

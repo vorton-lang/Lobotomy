@@ -13,13 +13,14 @@ use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::id::new_id;
 use crate::project::require_project;
+use crate::sql::sql_enum;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceState {
-    Materializing,
-    Ready,
-    Retired,
+sql_enum! {
+    pub enum WorkspaceState {
+        Materializing = "materializing",
+        Ready = "ready",
+        Retired = "retired",
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,35 +39,22 @@ pub struct Workspace {
 
 const SELECT: &str = "SELECT id, name, generation, target, head, task_id, state FROM workspace";
 
-fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Workspace, String)> {
-    Ok((
-        Workspace {
-            id: r.get(0)?,
-            name: r.get(1)?,
-            generation: r.get(2)?,
-            target: r.get(3)?,
-            head: r.get(4)?,
-            task_id: r.get(5)?,
-            state: WorkspaceState::Ready,
-        },
-        r.get(6)?,
-    ))
-}
-
-fn parse((mut ws, state): (Workspace, String)) -> Result<Workspace> {
-    ws.state = match state.as_str() {
-        "materializing" => WorkspaceState::Materializing,
-        "ready" => WorkspaceState::Ready,
-        "retired" => WorkspaceState::Retired,
-        other => return Err(Error::invariant(format!("unknown workspace state {other}"))),
-    };
-    Ok(ws)
+fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
+    Ok(Workspace {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        generation: r.get(2)?,
+        target: r.get(3)?,
+        head: r.get(4)?,
+        task_id: r.get(5)?,
+        state: r.get(6)?,
+    })
 }
 
 fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Workspace>> {
     let mut stmt = conn.prepare(&format!("{SELECT} {filter}"))?;
     let rows = stmt.query_map(args, from_row)?;
-    rows.map(|r| parse(r?)).collect()
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 pub fn load_workspace(conn: &Connection, id: &str) -> Result<Workspace> {

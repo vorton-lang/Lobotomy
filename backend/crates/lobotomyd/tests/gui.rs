@@ -222,7 +222,14 @@ async fn the_gui_sets_each_harness_permission_mode() {
     assert_eq!(gui.command("set_permission", set.clone()).await.unwrap(), set);
     let snapshot = gui.call("snapshot", json!({})).await.unwrap();
     assert_eq!(snapshot["harnesses"][0]["permission"], "auto_review");
-    assert_eq!(backend.project.host.permission("codex").unwrap(), lobotomy_harness::Permission::AutoReview);
+    assert_eq!(
+        backend.project.host.permission(lobotomy_harness::Harness::Codex).unwrap(),
+        lobotomy_harness::Permission::AutoReview
+    );
+
+    // The raw output turns keep, shown in the settings (#16).
+    let usage = gui.call("disk_usage", json!({})).await.unwrap();
+    assert_eq!(usage["raw_output"]["files"], 0, "{usage}");
 
     for wrong in
         [json!({ "harness": "codex", "permission": "manual" }), json!({ "harness": "nope", "permission": "full" })]

@@ -4,8 +4,10 @@
 
 use lobotomy_core::capture::{CaptureResult, FinishCapture, pending_captures};
 use lobotomy_core::project::Onboard;
-use lobotomy_core::task::{AttemptStarted, StartAttempt};
-use lobotomy_core::workspace::{WorkspaceReady, WorkspaceState, current_workspace};
+use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
+use lobotomy_core::task::{AttemptStarted, CreateTask, SendMessage, StartAttempt};
+use lobotomy_core::turn::{EndTurn, Outcome, RegisterTurn, SessionIdentified, TurnRegistered};
+use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceReady, WorkspaceState, current_workspace};
 use lobotomy_core::{Caller, Db};
 
 pub const ROLE: &str = "Malkuth";
@@ -49,6 +51,69 @@ pub fn start(db: &Db, task: &str) -> AttemptStarted {
     let started = db.execute(&Caller::Runtime, &StartAttempt { task_id: task.into(), code_start: None }).unwrap();
     ready_slot(db);
     started
+}
+
+/// A task for the role, as the user creates it.
+pub fn create(db: &Db, request_id: &str) -> String {
+    create_titled(db, request_id, "加一个 new.txt")
+}
+
+pub fn create_titled(db: &Db, request_id: &str, title: &str) -> String {
+    let task = CreateTask {
+        request_id: request_id.into(),
+        title: title.into(),
+        body: "原话".into(),
+        criteria: "文件存在".into(),
+        executor: ROLE.into(),
+    };
+    db.execute(&Caller::User, &task).unwrap().id
+}
+
+/// Registers the role's next turn and identifies its harness session, as `thread.started` does.
+pub fn register(db: &Db) -> TurnRegistered {
+    let t = db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() }).unwrap();
+    db.execute(&Caller::Runtime, &SessionIdentified { turn_id: t.turn_id.clone(), native_id: "thread-1".into() })
+        .unwrap();
+    t
+}
+
+/// The role's report from its turn.
+pub fn report(
+    db: &Db,
+    turn_id: &str,
+    status: ReportStatus,
+    blocked_on: Option<&str>,
+) -> lobotomy_core::Result<ReportEffect> {
+    let report = OrgReport {
+        title: "完成了".into(),
+        body: "加了 new.txt".into(),
+        status,
+        blocked_on: blocked_on.map(Into::into),
+    };
+    db.execute(&Caller::Role { role: ROLE.into(), turn_id: turn_id.into() }, &report)
+}
+
+/// The turn ends normally; its capture stays pending.
+pub fn end_turn(db: &Db, turn_id: &str) {
+    db.execute(&Caller::Runtime, &EndTurn { turn_id: turn_id.into(), outcome: Outcome::Completed, failure: None })
+        .unwrap();
+}
+
+/// The user's message to the role, for a task or outside any.
+pub fn send(db: &Db, request_id: &str, task: Option<&str>, body: &str) -> String {
+    let message = SendMessage {
+        request_id: request_id.into(),
+        role: ROLE.into(),
+        task_id: task.map(Into::into),
+        body: body.into(),
+    };
+    db.execute(&Caller::User, &message).unwrap().id
+}
+
+/// The idle role's slot at the integration version, as the scheduler prepares it.
+pub fn idle_slot(db: &Db) {
+    db.execute(&Caller::Runtime, &AlignIdleSlot { role: ROLE.into() }).unwrap();
+    ready_slot(db);
 }
 
 /// What the store would report for every pending capture: pinned, with a made-up commit.

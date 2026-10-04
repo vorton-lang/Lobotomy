@@ -11,11 +11,10 @@ use lobotomy_core::Error;
 use lobotomy_core::host::HostDb;
 use lobotomy_core::quota::{CheckOutcome, Domain};
 use lobotomy_harness::event::Event;
-use lobotomy_harness::process::{self, Spec};
-use lobotomy_harness::{HARNESSES, Permission, codex};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use lobotomy_harness::{Harness, Permission, codex};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 
-use crate::capability;
+use crate::launch;
 
 pub struct Host {
     pub dir: PathBuf,
@@ -31,15 +30,28 @@ pub struct Host {
 /// How to start the harness CLIs. Binary detection is host state (data-model.md §10).
 #[derive(Clone, Debug)]
 pub struct HarnessConfig {
-    /// The Codex program and any arguments that go before the adapter's own. Tests put a fake
-    /// CLI here.
-    pub codex: Vec<String>,
+    pub codex: Cli,
     /// The program and arguments that send Ctrl+C to a pid (harness-adapter.md §1.8).
     pub interrupt_helper: Vec<String>,
-    pub codex_reasoning_effort: Option<String>,
     /// A quota check that has not finished by then counts as rejected without a reset time; the
     /// domain stays blocked (data-model.md §8.4). A normal check takes seconds.
     pub probe_timeout: Duration,
+}
+
+/// How to start one harness's CLI.
+#[derive(Clone, Debug)]
+pub struct Cli {
+    /// The program and any arguments that go before the adapter's own. Tests put a fake CLI here.
+    pub command: Vec<String>,
+    pub reasoning_effort: Option<String>,
+}
+
+impl Cli {
+    /// The program, and the arguments that go before the adapter's own.
+    pub fn program(&self) -> anyhow::Result<(&Path, &[String])> {
+        let (program, prefix) = self.command.split_first().context("no program configured")?;
+        Ok((Path::new(program), prefix))
+    }
 }
 
 impl HarnessConfig {
@@ -53,11 +65,16 @@ impl HarnessConfig {
             Err(_) => vec![codex::locate().to_string_lossy().into_owned()],
         };
         Ok(Self {
-            codex,
+            codex: Cli { command: codex, reasoning_effort: None },
             interrupt_helper: vec![exe.to_string_lossy().into_owned(), "ctrl-c".into()],
-            codex_reasoning_effort: None,
             probe_timeout: Duration::from_secs(120),
         })
+    }
+
+    pub fn cli(&self, harness: Harness) -> &Cli {
+        match harness {
+            Harness::Codex => &self.codex,
+        }
     }
 }
 
@@ -108,24 +125,29 @@ impl Host {
 
     /// The harness's permission mode (harness-adapter.md §1.9): full access until the user
     /// changes it. Each turn reads it, so a change applies from the next turn on.
-    pub fn permission(&self, harness: &str) -> anyhow::Result<Permission> {
-        match self.db.permission(harness)? {
+    pub fn permission(&self, harness: Harness) -> anyhow::Result<Permission> {
+        match self.db.permission(harness.as_str())? {
             None => Ok(Permission::default()),
-            Some(value) => Permission::parse(&value)
-                .with_context(|| format!("unknown permission mode {value:?} for {harness} in the host database")),
+            Some(value) => Permission::parse(&value).ok_or_else(|| {
+                Error::invariant(format!(
+                    "unknown permission mode {value:?} for {} in the host database",
+                    harness.as_str()
+                ))
+                .into()
+            }),
         }
     }
 
     /// The user's choice; only the GUI makes it.
     pub fn set_permission(&self, harness: &str, permission: &str) -> anyhow::Result<Permission> {
-        if !HARNESSES.contains(&harness) {
+        let Some(harness) = Harness::parse(harness) else {
             return Err(Error::rejected("unknown_harness", format!("unknown harness {harness}")).into());
-        }
+        };
         let Some(parsed) = Permission::parse(permission) else {
             return Err(Error::rejected("unknown_permission", format!("unknown permission mode {permission}")).into());
         };
-        self.db.set_permission(harness, parsed.as_str(), lobotomy_core::id::now_ms())?;
-        tracing::info!(harness, permission, "permission mode changed");
+        self.db.set_permission(harness.as_str(), parsed.as_str(), lobotomy_core::id::now_ms())?;
+        tracing::info!(harness = harness.as_str(), permission, "permission mode changed");
         Ok(parsed)
     }
 
@@ -144,44 +166,31 @@ impl Host {
         Ok(self.db.record_check(harness, &outcome)?)
     }
 
-    async fn probe(&self, harness: &str) -> anyhow::Result<CheckOutcome> {
-        anyhow::ensure!(harness == "codex", "no quota check for {harness} yet (Claude arrives with M3)");
-        let (program, prefix) = self.harness.codex.split_first().context("no Codex program configured")?;
-        let args: Vec<String> = prefix.iter().cloned().chain(codex::probe_args(self.permission(harness)?)).collect();
-        let cwd = self.dir.join("probe");
-        let gh = self.dir.join("gh-empty");
-        for dir in [&cwd, &gh] {
-            std::fs::create_dir_all(dir)?;
-        }
-        let env = capability::env(&gh);
-        let spec = Spec {
-            program: Path::new(program),
-            args: &args,
-            cwd: &cwd,
-            env: &env,
-            env_remove: capability::REMOVED_VARS,
+    async fn probe(&self, name: &str) -> anyhow::Result<CheckOutcome> {
+        let harness = Harness::parse(name).with_context(|| format!("no quota check for {name}"))?;
+        let (args, input, parse): (_, _, fn(&str) -> Option<Event>) = match harness {
+            Harness::Codex => (codex::probe_args(self.permission(harness)?), codex::PROBE_INPUT, codex::parse_line),
         };
-        let mut spawned = process::spawn(&spec)?;
-        spawned.resume()?;
-        let mut stdin = spawned.child.stdin.take().context("no stdin")?;
-        let _ = stdin.write_all(codex::PROBE_INPUT.as_bytes()).await;
-        drop(stdin);
-        // Both pipes are read, so the CLI never blocks on a full pipe (#10).
-        let stderr = spawned.child.stderr.take().context("no stderr")?;
-        let stderr_tail = tokio::spawn(tail(stderr, 4096));
-        let stdout = spawned.child.stdout.take().context("no stdout")?;
+        let (program, prefix) = self.harness.cli(harness).program()?;
+        let args: Vec<String> = prefix.iter().cloned().chain(args).collect();
+        let cwd = self.dir.join("probe");
+        std::fs::create_dir_all(&cwd)?;
+        let what = launch::What::Program { program, args: &args };
+        let mut spawned = launch::spawn(what, &cwd, &self.dir.join("gh-empty"))?;
+        let io = launch::run(&mut spawned, input.as_bytes(), |stderr| tail(stderr, 4096)).await?;
+        let stderr_tail = io.stderr;
         let read = async {
-            let mut lines = BufReader::new(stdout).lines();
+            let mut lines = BufReader::new(io.stdout).lines();
             let mut completed = false;
             while let Some(line) = lines.next_line().await? {
-                completed |= matches!(codex::parse_line(&line), Some(Event::TurnCompleted { .. }));
+                completed |= matches!(parse(&line), Some(Event::TurnCompleted { .. }));
             }
             Ok::<_, std::io::Error>(completed)
         };
         let completed = match tokio::time::timeout(self.harness.probe_timeout, read).await {
             Ok(completed) => completed?,
             Err(_) => {
-                tracing::warn!(harness, timeout = ?self.harness.probe_timeout, "quota check timed out");
+                tracing::warn!(harness = name, timeout = ?self.harness.probe_timeout, "quota check timed out");
                 false
             }
         };
@@ -189,7 +198,7 @@ impl Host {
         let _ = spawned.child.wait().await;
         spawned.reap();
         if !completed && let Ok(Ok(tail)) = tokio::time::timeout(Duration::from_secs(5), stderr_tail).await {
-            tracing::warn!(harness, stderr = tail, "quota check did not complete");
+            tracing::warn!(harness = name, stderr = tail, "quota check did not complete");
         }
         // Codex's rejection format is not known yet, so a failed check carries no reset time
         // (data-model.md §8.3).

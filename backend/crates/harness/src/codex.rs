@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use crate::Permission;
 use crate::event::{Event, Item, ItemKind};
+use crate::{MCP_SERVER, Permission};
 
 /// Finds the Codex binary. `CODEX_BIN` wins. The desktop app ships the CLI under
 /// `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`, where the hash changes with updates, so
@@ -80,22 +80,7 @@ impl TurnArgs {
         }
         args.push("--json".into());
         args.extend(permission_args(self.permission));
-        args.extend(
-            [
-                "--skip-git-repo-check",
-                // Capability trimming: no user rules, config, connectors or desktop control
-                // (harness-adapter.md §1.6).
-                "--ignore-rules",
-                "--ignore-user-config",
-                "--disable",
-                "apps",
-                "--disable",
-                "computer_use",
-                "--disable",
-                "browser_use",
-            ]
-            .map(String::from),
-        );
+        args.extend(TRIMMED.map(String::from));
         if let Some(model) = &self.model {
             args.extend(["-m".into(), model.clone()]);
         }
@@ -106,12 +91,12 @@ impl TurnArgs {
             "-c".into(),
             format!("developer_instructions={}", toml_string(&self.developer_instructions)),
             "-c".into(),
-            format!("mcp_servers.lobotomy.url={}", toml_string(&self.mcp_url)),
+            format!("mcp_servers.{MCP_SERVER}.url={}", toml_string(&self.mcp_url)),
             // Lobotomy's own tools never wait for an approval. Outside full access, Codex would
             // otherwise refuse org_report: "MCP tool call requires approval, but approval policy
             // is never" (#13).
             "-c".into(),
-            "mcp_servers.lobotomy.default_tools_approval_mode=\"approve\"".into(),
+            format!("mcp_servers.{MCP_SERVER}.default_tools_approval_mode=\"approve\""),
             // The message comes from stdin.
             "-".into(),
         ]);
@@ -123,28 +108,26 @@ impl TurnArgs {
 /// outside every role's session, and `--ephemeral` keeps it out of the user's history. It uses
 /// the roles' permission mode, so an environment that refuses one refuses both alike.
 pub fn probe_args(permission: Permission) -> Vec<String> {
-    let mut args: Vec<String> = ["exec", "--json"].map(String::from).to_vec();
+    let mut args: Vec<String> = ["exec", "--json", "--ephemeral"].map(String::from).to_vec();
     args.extend(permission_args(permission));
-    args.extend(
-        [
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--ignore-rules",
-            "--ignore-user-config",
-            "--disable",
-            "apps",
-            "--disable",
-            "computer_use",
-            "--disable",
-            "browser_use",
-            "-c",
-            "model_reasoning_effort=\"low\"",
-            "-",
-        ]
-        .map(String::from),
-    );
+    args.extend(TRIMMED.map(String::from));
+    args.extend(["-c", "model_reasoning_effort=\"low\"", "-"].map(String::from));
     args
 }
+
+/// Capability trimming, the same for turns and quota checks: no user rules, config, connectors
+/// or desktop control (harness-adapter.md §1.6).
+const TRIMMED: [&str; 9] = [
+    "--skip-git-repo-check",
+    "--ignore-rules",
+    "--ignore-user-config",
+    "--disable",
+    "apps",
+    "--disable",
+    "computer_use",
+    "--disable",
+    "browser_use",
+];
 
 /// The input of [`probe_args`].
 pub const PROBE_INPUT: &str = "Reply with OK.";
@@ -198,17 +181,29 @@ fn item(raw: &Value) -> Option<Item> {
             }),
         ),
         "file_change" => (ItemKind::FileChange, json!({ "changes": field("changes"), "status": field("status") })),
-        "mcp_tool_call" => (
-            ItemKind::McpCall,
-            json!({
-                "server": field("server"),
-                "tool": field("tool"),
-                "arguments": field("arguments"),
-                "result": field("result"),
-                "error": field("error"),
-                "status": field("status"),
-            }),
-        ),
+        "mcp_tool_call" => {
+            // Codex's own shapes stay here: the runtime reads only the two texts (#16).
+            let result_text = raw["result"]["content"][0]["text"].as_str();
+            let error_text = match &raw["error"] {
+                Value::Null => None,
+                error => {
+                    Some(error["message"].as_str().or(error.as_str()).map_or_else(|| error.to_string(), str::to_owned))
+                }
+            };
+            (
+                ItemKind::McpCall,
+                json!({
+                    "server": field("server"),
+                    "tool": field("tool"),
+                    "arguments": field("arguments"),
+                    "result": field("result"),
+                    "error": field("error"),
+                    "status": field("status"),
+                    "result_text": result_text,
+                    "error_text": error_text,
+                }),
+            )
+        }
         "web_search" => (ItemKind::WebSearch, json!({ "query": field("query") })),
         "todo_list" => (ItemKind::TodoList, json!({ "items": field("items") })),
         "error" => (ItemKind::Error, json!({ "message": field("message") })),
@@ -251,7 +246,20 @@ mod tests {
         assert_eq!(done.content["exit_code"], 0);
         let Event::ItemCompleted(call) = &events[5] else { panic!("{:?}", events[5]) };
         assert_eq!((call.kind, call.content["tool"].as_str()), (ItemKind::McpCall, Some("org_report")));
+        assert_eq!(
+            (call.content["result_text"].as_str(), &call.content["error_text"]),
+            (Some("recorded"), &Value::Null)
+        );
         assert!(matches!(&events[6], Event::TurnCompleted { usage } if usage["output_tokens"] == 169));
+    }
+
+    /// A call Codex refused carries its reason in the field every adapter fills (#13, #16).
+    #[test]
+    fn a_refused_tool_call_says_why_in_error_text() {
+        let line = r#"{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"lobotomy","tool":"org_report","arguments":{},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}"#;
+        let Some(Event::ItemCompleted(call)) = parse_line(line) else { panic!() };
+        assert_eq!(call.content["error_text"], "MCP tool call requires approval, but approval policy is never");
+        assert_eq!(call.content["result_text"], Value::Null);
     }
 
     #[test]

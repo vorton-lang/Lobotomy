@@ -52,7 +52,9 @@ pub enum ItemKind {
     Command,
     /// `changes`: `[{path, kind}]`, `status`
     FileChange,
-    /// `server`, `tool`, `arguments`, `result`, `error`, `status`
+    /// `server`, `tool`, `arguments`, `status`; `result_text`, the first text the tool returned,
+    /// and `error_text`, why the call failed, which every adapter fills; `result` and `error` as
+    /// the harness gave them, for display only.
     McpCall,
     /// `query`
     WebSearch,

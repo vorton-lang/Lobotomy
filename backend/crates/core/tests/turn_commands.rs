@@ -1,8 +1,6 @@
 use lobotomy_core::item::{BlobStore, NewItem, STORAGE_THRESHOLD, externalize, record_item};
 use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
-use lobotomy_core::task::{
-    Abandon, CreateTask, Reopen, SendMessage, StartAttempt, load_task, open_attempt, queued_messages,
-};
+use lobotomy_core::task::{Abandon, CreateTask, Reopen, StartAttempt, load_task, open_attempt, queued_messages};
 use lobotomy_core::turn::{
     Continue, EndTurn, Failure, FailureKind, InputDelivered, MarkUnfinishedUnknown, NewNativeSession, Outcome,
     RegisterTurn, SessionIdentified, TurnLaunched, TurnRegistered, TurnState, current_session, load_turn,
@@ -13,7 +11,7 @@ use lobotomy_core::{Caller, Db};
 use serde_json::json;
 
 mod common;
-use common::{ROLE, db, pin_captures, rejection, start};
+use common::{ROLE, db, pin_captures, rejection, report, start};
 
 /// Creates a task and starts its first attempt; the brief waits in the inbox.
 fn started_task(db: &Db) -> String {
@@ -34,34 +32,20 @@ fn started_task(db: &Db) -> String {
     id
 }
 
+/// Registers a turn without identifying its harness session: these tests see what happens before
+/// `thread.started`, or without it (#10). `common::register` identifies it.
 fn register(db: &Db) -> lobotomy_core::Result<TurnRegistered> {
     db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() })
 }
 
 fn send(db: &Db, request_id: &str, body: &str) {
-    db.execute(
-        &Caller::User,
-        &SendMessage { request_id: request_id.into(), role: ROLE.into(), task_id: None, body: body.into() },
-    )
-    .unwrap();
+    common::send(db, request_id, None, body);
 }
 
 /// Ends the turn and lets the store capture the slot.
 fn end(db: &Db, turn_id: &str, outcome: Outcome) {
     db.execute(&Caller::Runtime, &EndTurn { turn_id: turn_id.into(), outcome, failure: None }).unwrap();
     pin_captures(db);
-}
-
-fn report(
-    db: &Db,
-    turn_id: &str,
-    status: ReportStatus,
-    blocked_on: Option<&str>,
-) -> lobotomy_core::Result<ReportEffect> {
-    db.execute(
-        &Caller::Role { role: ROLE.into(), turn_id: turn_id.into() },
-        &OrgReport { title: "汇报".into(), body: "内容".into(), status, blocked_on: blocked_on.map(Into::into) },
-    )
 }
 
 #[test]
@@ -382,6 +366,33 @@ fn blocked_sets_the_reason_once_and_progress_clears_it() {
     assert_eq!(reason(&db).as_deref(), Some("用哪个检查命令？"));
     report(&db, &t.turn_id, ReportStatus::Progress, None).unwrap();
     assert_eq!(reason(&db), None);
+}
+
+/// What the GUI shows as a hold and what registering a turn refuses come from one rule (#16):
+/// while the scene is captured nothing holds and registering waits; after a failed turn, or a
+/// completed one without a session id, the role holds and registering is refused with that hold.
+#[test]
+fn a_hold_is_exactly_what_keeps_a_turn_from_registering() {
+    let hold = |db: &Db| db.read(|c| lobotomy_core::turn::hold(c, ROLE)).unwrap();
+
+    let db = db();
+    started_task(&db);
+    let t = register(&db).unwrap();
+    db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id.clone(), outcome: Outcome::Failed, failure: None })
+        .unwrap();
+    assert_eq!(hold(&db), None, "the capture is the runtime's to finish");
+    assert_eq!(rejection(register(&db)), "capture_pending");
+    pin_captures(&db);
+    assert!(matches!(hold(&db), Some(lobotomy_core::turn::Hold::Abnormal { .. })));
+    assert_eq!(rejection(register(&db)), "held");
+
+    let db = self::db();
+    started_task(&db);
+    let t = register(&db).unwrap();
+    end(&db, &t.turn_id, Outcome::Completed);
+    send(&db, "m1", "下一步");
+    assert!(matches!(hold(&db), Some(lobotomy_core::turn::Hold::SessionUnidentified { .. })));
+    assert_eq!(rejection(register(&db)), "session_unidentified");
 }
 
 /// A question asked before the task was abandoned does not come back when it is reopened: the

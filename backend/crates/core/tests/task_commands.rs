@@ -8,18 +8,7 @@ mod common;
 use common::{db, rejection, start};
 
 fn create(db: &Db, request_id: &str, title: &str) -> String {
-    db.execute(
-        &Caller::User,
-        &CreateTask {
-            request_id: request_id.into(),
-            title: title.into(),
-            body: "原话".into(),
-            criteria: "测试通过".into(),
-            executor: "Malkuth".into(),
-        },
-    )
-    .unwrap()
-    .id
+    common::create_titled(db, request_id, title)
 }
 
 fn task(db: &Db, id: &str) -> lobotomy_core::task::Task {

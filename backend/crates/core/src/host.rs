@@ -10,15 +10,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Result;
 
-/// One row per harness whose setting the user changed; a harness without a row uses the default.
-/// The values are the adapter's (`lobotomy_harness::Permission`), which checks them.
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS harness_setting (
-  harness    TEXT PRIMARY KEY,
-  permission TEXT NOT NULL,
-  changed_at INTEGER NOT NULL
-) STRICT;
-";
+/// Applied like a project's migrations (`db.rs`): numbered, each once, in its own transaction.
+const MIGRATIONS: &[&str] = &[include_str!("../host_migrations/0001_init.sql")];
 
 pub struct HostDb {
     conn: Mutex<Connection>,
@@ -35,10 +28,10 @@ impl HostDb {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(mut conn: Connection) -> Result<Self> {
         conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch(crate::quota::SCHEMA)?;
-        conn.execute_batch(SCHEMA)?;
+        crate::db::migrate(&mut conn, MIGRATIONS)?;
+        conn.pragma_update(None, "foreign_keys", true)?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -67,6 +60,22 @@ impl HostDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Host databases made before migrations existed have the tables and no version (#16).
+    #[test]
+    fn a_host_database_from_before_migrations_keeps_its_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("host.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute("INSERT INTO harness_setting VALUES ('codex', 'auto_review', 1)", []).unwrap();
+        }
+        let host = HostDb::open(&path).unwrap();
+        assert_eq!(host.permission("codex").unwrap().as_deref(), Some("auto_review"));
+        let version: i64 = host.conn().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
+    }
 
     #[test]
     fn each_harness_keeps_its_own_permission() {

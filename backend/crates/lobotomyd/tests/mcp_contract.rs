@@ -241,58 +241,24 @@ fn check(cli: &str, cli_version: &str, service: &Service, run: &Run, final_text:
     assert!(final_text.contains(&service.ack), "the tool result did not reach the model");
 }
 
-fn codex_bin() -> PathBuf {
-    if let Some(path) = std::env::var_os("CODEX_BIN") {
-        return path.into();
-    }
-    // The desktop app ships the CLI under a hash directory that changes with updates
-    // (harness-adapter.md §1.5).
-    let newest = std::env::var_os("LOCALAPPDATA")
-        .map(|dir| PathBuf::from(dir).join("OpenAI").join("Codex").join("bin"))
-        .and_then(|bin| std::fs::read_dir(bin).ok())
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| {
-            let exe = entry.ok()?.path().join("codex.exe");
-            let modified = exe.metadata().ok()?.modified().ok()?;
-            Some((modified, exe))
-        })
-        .max();
-    newest.map_or_else(|| PathBuf::from("codex"), |(_, exe)| exe)
-}
-
 #[tokio::test]
 #[ignore = "runs a real Codex turn"]
 async fn codex() {
     let service = serve().await;
-    let codex = codex_bin();
+    let codex = lobotomy_harness::codex::locate();
     let cwd = scratch_dir("codex");
-    // The arguments of harness-adapter.md §1.2, plus flags that keep the probe out of the
-    // user's history.
-    let args: Vec<String> = [
-        "exec",
-        "--json",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--ignore-rules",
-        "--ignore-user-config",
-        "--disable",
-        "apps",
-        "--disable",
-        "computer_use",
-        "--disable",
-        "browser_use",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "-c",
-        "model_reasoning_effort=\"low\"",
-        "-c",
-        &format!("mcp_servers.lobotomy.url=\"{}\"", service.url),
-        "-c",
-        "mcp_servers.lobotomy.default_tools_approval_mode=\"approve\"",
-        "-",
-    ]
-    .map(str::to_owned)
-    .to_vec();
+    // The arguments the runtime builds (harness-adapter.md §1.2), plus a flag that keeps the
+    // probe out of the user's history.
+    let mut args = lobotomy_harness::codex::TurnArgs {
+        resume: None,
+        model: None,
+        reasoning_effort: Some("low".into()),
+        permission: lobotomy_harness::Permission::Full,
+        developer_instructions: String::new(),
+        mcp_url: service.url.clone(),
+    }
+    .to_args();
+    args.insert(1, "--ephemeral".into());
 
     let result = run(&codex, &args, &cwd).await;
     let final_text: String = events(&result.stdout)

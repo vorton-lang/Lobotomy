@@ -64,6 +64,8 @@ Codex（消息经 stdin，位置参数为 -）
    - CLI 未退出或执行状态不明时，该 turn 保持"待对账"。运行时保留占用，不重放，也不为同一 native session 或执行现场启动替代执行（[#2](https://github.com/vorton-lang/Lobotomy/issues/2)）。
    - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"只核对 CLI 是否已经退出，见 [data-model.md](data-model.md) §3.3。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
+   - harness 自己的格式只在适配层里解析。MCP 调用的结果由适配层整理成 `result_text`（工具返回的第一段文字）和 `error_text`（调用失败的原因）；运行时和 GUI 只读这两个字段（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
+   - 按 harness 不同的代码都对 `Harness` 枚举做匹配。M3 加入 Claude 时，编译器会指出每一处。适配器的接口等拿到 Claude 的真实输出后再定。
 8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。同一 attempt 内接续时，运行时只新建 turn，不新建 attempt（[data-model.md](data-model.md) §3.1、§4.1）。
    - 如果 native session 已有正常结束的 turn，却没有记下 session ID，运行时不再为它登记 turn，role 停下。否则下一个 turn 会不带 resume 启动，悄悄丢掉上下文。用户可以新建 native session（[#10](https://github.com/vorton-lang/Lobotomy/issues/10)，用户确认，2026-10-04）。
 
@@ -172,6 +174,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 - **语义更新：** CLI 退出后，运行时关闭该 turn 的 Job，CLI 留下的进程随之结束，然后才采集。这样采集时没有进程还在写槽位（§4.1 "确认写者已停止"）。代价是 agent 在 turn 中启动的后台进程（例如开发服务器）不会存活到 turn 之后。
 - 句柄继承：没有使用 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`，因为 Rust 稳定版的 `Command` 不能设置这个属性。改为后端启动时把自己的 stdin、stdout、stderr 设为不可继承。标准库打开的文件和 socket 本来就不可继承；标准库为子进程准备管道时持有锁，管道不会泄漏给同时启动的其他子进程。
 - Ctrl+C 辅助进程是后端程序自身：`lobotomyd ctrl-c <pid>`。
+- 后端启动的所有进程（role 的 turn、额度检查、项目检查命令）经同一个启动函数（[lobotomyd/src/launch.rs](../backend/crates/lobotomyd/src/launch.rs)，[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）：裁剪过的环境（§1.6），各自的 Job，进程开始运行时就读取 stderr，然后才写 stdin。这样进程在读输入之前往 stderr 写很多内容，也不会因管道写满而卡住（#10）。
 - 已知缺口：后端如果恰好在创建进程与加入 Job 之间崩溃，会留下一个挂起、从未运行的进程。这个窗口极短，暂不处理。
 - 测试：[backend/crates/harness/tests/process.rs](../backend/crates/harness/tests/process.rs)（挂起、存活检查、关闭 Job 结束孙进程），[backend/crates/lobotomyd/tests/backend.rs](../backend/crates/lobotomyd/tests/backend.rs)（经辅助进程中断）。
 
