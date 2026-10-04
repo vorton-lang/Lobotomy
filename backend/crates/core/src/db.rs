@@ -43,18 +43,27 @@ impl Db {
         let scope = caller.scope();
 
         if let Some(key) = cmd.idem_key() {
-            let prior: Option<(String, String)> = tx
+            let prior: Option<(String, String, String)> = tx
                 .query_row(
-                    "SELECT name, result FROM command_record WHERE caller = ?1 AND idem_key = ?2",
+                    "SELECT name, args, result FROM command_record WHERE caller = ?1 AND idem_key = ?2",
                     params![scope, key],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
-            if let Some((name, result)) = prior {
+            if let Some((name, args, result)) = prior {
+                // A retry must be the same command with the same arguments. Anything else that
+                // reuses the key is rejected, so it can neither run nor receive another
+                // command's result.
                 if name != C::NAME {
                     return Err(Error::rejected(
                         "idempotency_key_reused",
                         format!("key {key} was already used by {name}"),
+                    ));
+                }
+                if serde_json::from_str::<serde_json::Value>(&args)? != serde_json::to_value(cmd)? {
+                    return Err(Error::rejected(
+                        "idempotency_key_reused",
+                        format!("key {key} was already used by {name} with other arguments"),
                     ));
                 }
                 return Ok(serde_json::from_str(&result)?);

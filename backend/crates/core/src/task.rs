@@ -336,6 +336,10 @@ impl Command for SetPaused {
 }
 
 /// Moves a queued task to a new position in its executor's queue.
+///
+/// The queue keeps its existing position values and hands them out in the new order, so only
+/// tasks whose position really changes are written, and each of them gets a new revision
+/// (data-model.md §9.1). Moving a task to where it already is changes nothing and emits no event.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MoveInQueue {
     pub request_id: String,
@@ -357,18 +361,28 @@ impl Command for MoveInQueue {
         if task.phase != Phase::Queued {
             return Err(Error::rejected("not_queued", format!("task {} is {}", task.id, task.phase.as_str())));
         }
-        let mut order: Vec<String> = {
-            let mut stmt = cx
-                .tx
-                .prepare("SELECT id FROM task WHERE executor = ?1 AND phase = 'queued' ORDER BY queue_pos, id")?;
-            stmt.query_map([&task.executor], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        let queue: Vec<(String, i64)> = {
+            let mut stmt = cx.tx.prepare(
+                "SELECT id, queue_pos FROM task WHERE executor = ?1 AND phase = 'queued' ORDER BY queue_pos, id",
+            )?;
+            stmt.query_map([&task.executor], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?
         };
-        order.retain(|id| id != &task.id);
-        order.insert(self.to_index.min(order.len()), task.id.clone());
-        for (i, id) in order.iter().enumerate() {
-            cx.tx.execute("UPDATE task SET queue_pos = ?2 WHERE id = ?1", params![id, i as i64 + 1])?;
+        let mut order: Vec<&str> = queue.iter().map(|(id, _)| id.as_str()).filter(|id| *id != task.id).collect();
+        order.insert(self.to_index.min(order.len()), &task.id);
+
+        let mut changed = false;
+        for (id, (_, pos)) in order.iter().zip(&queue) {
+            let old = queue.iter().find(|(other, _)| other == id).map(|(_, p)| *p);
+            if old != Some(*pos) {
+                cx.tx.execute("UPDATE task SET queue_pos = ?2 WHERE id = ?1", params![id, pos])?;
+                bump_revision(cx, id)?;
+                changed = true;
+            }
         }
-        cx.emit("task.queue_changed", &task.executor, json!({ "order": order }))?;
+        if changed {
+            cx.emit("task.queue_changed", &task.executor, json!({ "order": order }))?;
+        }
         Ok(())
     }
 }
