@@ -17,13 +17,13 @@
 
 | 名字 | 类型 | harness | 工作目录 |
 |---|---|---|---|
-| Angela | manager | Claude | 项目外层，全局一个；具体位置在 M3 设计 |
+| Angela | manager | Claude | 在 host，全局一个；不占槽位（data-model.md §10.6，M4） |
 | Binah | tech_lead | Claude | 槽位 `tl` |
 | Malkuth | worker | Codex | 槽位 `worker` |
 | Yesod | reviewer | Codex | 在固定的候选成果上单独物化的审查现场 |
 
 - 表中的 harness 是默认值。每个 role 都能换 harness，Angela 也一样（harness-adapter.md §0，用户确认，2026-10-09）。
-- Angela 原来是每个项目一个，工作目录是用户的主仓库（只读）。现在全局只有一个，属于用户（**语义更新**，data-model.md §10）。
+- Angela 原来是每个项目一个，工作目录是用户的主仓库（只读）。现在全局只有一个，属于用户（**语义更新**，data-model.md §10.6）。
 
 ### 1.3 类型职责
 
@@ -88,7 +88,7 @@ v1 优先稳定而不是吞吐：任务真正完成前，所有参与者都不�
 
 ### 2.3 任务与成果
 
-每份成果在采集时就记录来源：task、attempt、基线与采集范围（见 harness-adapter.md §4.1）。"这个任务改了什么"以及审查范围由成果记录直接得出，不靠时间段推断。在导出的 git 提交中加 trailer 标注来源的想法见 [ideas.md](ideas.md)。
+每份成果在采集时就记录来源：task、attempt、基线与采集范围（见 harness-adapter.md §4.1）。"这个任务改了什么"以及审查范围由成果记录直接得出，不靠时间段推断。发布到集成版本的提交用 trailer 标注任务与执行者（harness-adapter.md §4.3）。
 
 ## 3. Workboard
 
@@ -120,7 +120,6 @@ Yesod    审查：实现 Codex adapter               进行中
 
 ## 5. 未决
 
-- ~~Worker 跨任务是否换会话。~~ 已决定：执行者每个任务新开 native session，任务关闭时结束；同一任务的多个 attempt 沿用（[#11](https://github.com/vorton-lang/Lobotomy/issues/11)，用户确认，2026-10-04，见 data-model.md §4.1）。
 - 通知策略见 [manager-actions.md](manager-actions.md) §6。
 - #5 中列出的每类对象的完整契约（研究任务的交付证据、完成条件修改后在途工作的处理、多个旧基线成果的整合责任等）尚未逐项回答。
-- M1 的业务对象、身份与唯一约束、命令清单在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论，结果写入 [data-model.md](data-model.md)。已确认：命令按领域命名，占用分任务层与 turn 层。
+- 业务对象、命令与唯一约束见 [data-model.md](data-model.md)。

@@ -158,7 +158,7 @@ v1 中 Lobotomy 不 push。用户的主仓库是集成版本的只读预览（�
 
 Lobotomy 管理项目的全部状态，包括 GitHub 上的状态。外部系统的连接由 Lobotomy 持有，role 经 Lobotomy MCP 访问，权限集中控制。GitHub 是第一个实例，之后的外部系统沿用同一模式。
 
-- **接入方式**：守护进程调用 `gh` CLI，使用用户自己的登录，Lobotomy 不读取、不保存 token。原则与 harness adapter 相同：官方 CLI、正常用法。role 进程看不到这份登录（见 5.1），凭据只在守护进程这一层。
+- **接入方式**：后端调用 `gh` CLI，使用用户自己的登录，Lobotomy 不读取、不保存 token。原则与 harness adapter 相同：官方 CLI、正常用法。role 进程看不到这份登录（见 5.1），凭据只在后端这一层。
 - **权限**：按 role × 动作配置 allow / confirm / deny。默认值：
 
   | 动作 | Manager | TL | Worker |
@@ -169,7 +169,7 @@ Lobotomy 管理项目的全部状态，包括 GitHub 上的状态。外部系统
 - **v1 开放的写操作**：只有建 issue 和评论（例如把暂缓的 TL 意见转成 issue）。v1 不 push，因此不需要建 PR。
 - **confirm = 对外操作通道**：role 通过 `request_external_action(kind, draft)` 提交完整草稿。下层的申请先由 Manager 判断是否转给用户，Manager 自己的申请直接到用户。用户在 GUI 中看到草稿原文并一键确认，由运行时执行。
 - **审计**：每次 GitHub 访问（读和写）都记入事件日志：哪个 role、什么动作、什么时间。
-- **项目状态投影**：守护进程定期轮询（条件请求，304 不计入额度），关注默认分支与相关 PR 的 CI 状态、新 issue、评论、review。产生的事件机械地投影到 Workboard（如 CI 徽章、新评论数），同时进入 Manager 收件箱，由它决定是否在对话中提起。
+- **项目状态投影**：后端定期轮询（条件请求，304 不计入额度），关注默认分支与相关 PR 的 CI 状态、新 issue、评论、review。产生的事件机械地投影到 Workboard（如 CI 徽章、新评论数），同时进入 Manager 收件箱，由它决定是否在对话中提起。
 - **附件快照**：GitHub 条目被引用为附件时，运行时保存引用当时的快照，确保附件内容就是 Manager 当时看到的内容。
 
 ## 6. 通知

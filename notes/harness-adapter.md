@@ -68,7 +68,7 @@ Codex（消息经 stdin，位置参数为 -）
    - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"只核对 CLI 是否已经退出，见 [data-model.md](data-model.md) §3.3。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
    - harness 自己的格式只在适配层里解析。MCP 调用的结果由适配层整理成 `result_text`（工具返回的第一段文字）和 `error_text`（调用失败的原因）；运行时和 GUI 只读这两个字段（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
-   - 按 harness 不同的代码都对 `Harness` 枚举做匹配。M2 加入 Claude 时，编译器会指出每一处。
+   - 按 harness 不同的代码都对 `Harness` 枚举做匹配。加入新的 harness 时，编译器会指出每一处。
    - **适配器接口**（M2，2026-10-10）：接入两个真实 harness 后，仍按枚举匹配，没有抽象成 trait。按 harness 不同的只有四处：拼参数、解析输出（`Output`）、识别权限被拒、额度检查。两个都是 CLI，抽出的接口也只会是 CLI 的形状。自建的 API harness（roadmap.md 原则）可以做成同样形状的可执行程序：从 stdin 读输入，按参数接续会话，输出与某一家相同的 JSON 事件，会话记录由它自己保存在 Lobotomy 的数据目录中。这样运行时不需要改动。真有第三种 harness 时，再按它的需要调整。
 8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。同一 attempt 内接续时，运行时只新建 turn，不新建 attempt（[data-model.md](data-model.md) §3.1、§4.1）。
    - 如果 native session 已有正常结束的 turn，却没有记下 session ID，运行时不再为它登记 turn，role 停下。否则下一个 turn 会不带 resume 启动，悄悄丢掉上下文。用户可以新建 native session（[#10](https://github.com/vorton-lang/Lobotomy/issues/10)，用户确认，2026-10-04）。
@@ -89,8 +89,8 @@ Codex（消息经 stdin，位置参数为 -）
 | 工具输出流式 | 不流式：命令结束后一次给出完整 `tool_result`；之前只有 `tool_use` 和不带输出的 `system/task_started` | 不流式：`item.started`（带命令，in_progress）之后，`item.completed` 一次给出完整 `aggregated_output` |
 | turn 结束事件到进程退出 | 约 0.5s | 约 4s |
 
-| 每个 turn 更换 MCP URL | 未测（M2） | 不影响缓存：第二个 turn 的缓存命中均为 98.7%，与不更换相同 |
-| 全局指令文件 | 未测（M2） | `--ignore-user-config` 或 `-c project_doc_max_bytes=0` 下，`~/.codex/AGENTS.md` 仍然生效 |
+| 每个 turn 更换 MCP URL | 未测 | 不影响缓存：第二个 turn 的缓存命中均为 98.7%，与不更换相同 |
+| 全局指令文件 | 未测 | `--ignore-user-config` 或 `-c project_doc_max_bytes=0` 下，`~/.codex/AGENTS.md` 仍然生效 |
 
 流式与退出间隔三行来自一次探针（[spikes/harness-cli/stream-probe.mjs](../spikes/harness-cli/stream-probe.mjs)，2026-10-04）：命令每秒打印一行，共 5 秒。MCP URL 与全局指令文件两行分别来自 [cache-probe.mjs](../spikes/harness-cli/cache-probe.mjs) 与 [agents-md-probe.mjs](../spikes/harness-cli/agents-md-probe.mjs)（2026-10-04）。两家的事件格式不在稳定承诺内，CLI 升级后需重测。
 
@@ -127,7 +127,7 @@ Codex（消息经 stdin，位置参数为 -）
 - 每个 turn 的 MCP 配置写到数据目录的 `turns/<turn_id>.mcp.json`，turn 结束时删除：文件中有这个 turn 的 token。
 - 新会话的第一个 turn 用运行时生成的 ID（`--session-id`），之后用 `--resume`。会话 ID 仍以 `system/init` 读回的为准，规则与 Codex 相同（§1.3 第 8 条）。
 - 额度检查用 `--no-session-persistence` 和 haiku，被拒时取 `rate_limit_event` 中的重置时间。
-- 后端测试用假 Claude CLI（[lobotomyd/tests/fixtures/fake-claude.mjs](../backend/crates/lobotomyd/tests/fixtures/fake-claude.mjs)）覆盖完成到验收、续用会话、额度被拒。
+- 后端测试用假 Claude CLI（[lobotomyd/tests/fixtures/fake-claude.mjs](../backend/crates/lobotomyd/tests/fixtures/fake-claude.mjs)）覆盖完成到验收、续用会话、额度被拒、中断。
 
 ### 1.5 二进制定位
 
@@ -212,13 +212,13 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 **语义更新**（用户确认，2026-10-04）：原来所有 role 固定关闭审批与沙箱。#13 的测试环境中，管理员通过 Codex 的 requirements 不允许完全放开，Codex 一启动就退出。现在每个 harness 有一项权限设置。设置属于本机（data-model.md §10），所有项目共用。Codex 与 Claude 分开设置：同一个环境可能允许一个完全放开，而不允许另一个。
 
-| 模式 | 什么时候用 | Codex | Claude（M2，未实测） |
+| 模式 | 什么时候用 | Codex | Claude（自动审批未在受管环境中实测） |
 |---|---|---|---|
 | 完全放开（默认） | 不审批，不用沙箱 | `--dangerously-bypass-approvals-and-sandbox` | `--dangerously-skip-permissions` |
 | 自动审批 | 管理员不允许完全放开 | `-c approval_policy="on-request" -c approvals_reviewer="auto_review" -c sandbox_mode="workspace-write"` | `--permission-mode auto --permission-prompts none`：需要提示的操作直接被拒 |
 | Lobotomy 的 MCP 工具 | 两种模式都免审批 | `-c mcp_servers.lobotomy.default_tools_approval_mode="approve"` | `--allowed-tools mcp__lobotomy` |
 
-- **没有人工审批。** Lobotomy 不把审批请求交给用户（hci-rationale.md）。`codex exec` 中没有人能回答审批请求，需要审批的操作当场被拒。turn 照常结束，但工作和报告都做不成（实测见下）。
+- **没有人工审批。** Lobotomy 不把审批请求交给用户（[research/hci-rationale.md](research/hci-rationale.md)）。`codex exec` 中没有人能回答审批请求，需要审批的操作当场被拒。turn 照常结束，但工作和报告都做不成（实测见下）。
 - **不继承用户自己的 Codex 配置。** `--ignore-user-config` 用于能力裁剪（1.6）。用户为交互使用设置的审批方式假定有人在场，不适用于 role。管理员的 requirements 不受 `--ignore-user-config` 影响，照常生效。
 - **Lobotomy 自己的 MCP 工具在任何模式下都免审批**：`-c mcp_servers.lobotomy.default_tools_approval_mode="approve"`。否则在完全放开以外的模式下，Codex 可能拒绝 `org_report`（#13 记录的 "MCP tool call requires approval, but approval policy is never"）。
 - **自动审批的代价**：沙箱默认断网，不能写工作目录以外的地方。超出沙箱的操作由 Codex 的自动审核决定，多花 token 和时间。
@@ -250,7 +250,8 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 **实现**（2026-10-04）：
 
-- 使用官方 Rust SDK rmcp 3.5（[m1-plan.md](m1-plan.md) §2）。URL 为 `/mcp/{token}`；路由先取出 token，放进 HTTP 请求的扩展中，工具处理函数从请求上下文读取。
+- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{token}`；路由先取出 token，放进 HTTP 请求的扩展中，工具处理函数从请求上下文读取。
+- M3 起 URL 改为 `/mcp/{project}/{token}`：后端先按项目 ID 找到项目实例，再在其中按 token 找到 turn（data-model.md §10.3）。
 - 服务不保存 MCP 会话（rmcp 的 stateless 模式），工具调用以单个 JSON 响应返回，不用 SSE 流，不提供 GET 流（返回 405）。调用者已由 URL 中的 token 识别，会话没有额外作用。
 - `Host` 只接受 loopback 名称，防止 DNS 重绑定。
 - 两家 CLI 协商的协议版本不同（§1.4）：Claude 已使用 2026-07-28 的无状态协议，Codex 仍使用 2025-06-18 的 `initialize` 握手。stateless 模式对两者逐个请求应答，两者都能工作。
@@ -271,12 +272,12 @@ cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-thre
 
 | Role | 执行现场 |
 |---|---|
-| Angela（manager） | 用户的主仓库，即集成版本的只读预览（见 4.3） |
+| Angela（manager） | 不占槽位；工作目录与读取项目代码的方式在 M4 设计（data-model.md §10.6） |
 | Binah（tech_lead） | 槽位 `tl` |
 | Malkuth（worker） | 槽位 `worker` |
 | Yesod（reviewer） | 在固定的候选成果上单独物化的审查现场；现场中的改动不影响成果 |
 
-Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。
+角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。Angela 原来每个项目一个，执行现场是用户的主仓库（只读），与用户看到同一份代码。她改为全局一个之后（data-model.md §10.6），这一条待 M4 重新设计。
 
 - **执行现场不是事实来源。** 工作目录只是 CLI 的执行环境，不能反过来推断业务事实；业务事实以 SQLite 为准（#6 §1）。
 - **只有 Lobotomy 创建执行现场。** 不使用 `claude -w`、`codex --worktree`，`EnterWorktree` 已在 1.6 中禁用。
@@ -352,7 +353,7 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
   - 基线中已跟踪的文件始终采集，即使后来被 ignore 规则匹配。预期这是 jj 的默认行为，实现时确认。
   - 项目配置可以声明强制采集的路径（`force_tracking_matcher`），以及始终排除的路径（例如 `target/`、`node_modules/`）。排除的路径在重新物化时按缓存保留。
   - `.gitignore` 的修改本身属于成果，验收时在 diff 中可见。
-- **体积护栏**：一次采集中新增文件的总大小或数量超过阈值时，运行时在 pin 之前停止，不写入 jj。阈值在 M1 中用真实项目测量典型新增量后确定。
+- **体积护栏**：一次采集中新增文件的总大小或数量超过阈值时，运行时在 pin 之前停止，不写入 jj。阈值用真实项目测量典型新增量后确定。
 - 特殊文件、嵌套仓库等 fail closed：报告未覆盖的内容并保留现场（#3）。
 - **采集被挡下时 role 停下，等用户选择**（用户确认，2026-10-04）。被挡下指超过体积护栏，或有未覆盖的内容；对所有 turn 的采集都一样，不只 `done`。GUI 列出新增的文件或未覆盖的内容，用户选择：
   1. **放行新增文件**：这些文件应当进入成果。运行时不受体积护栏限制，重新采集。
@@ -371,7 +372,7 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
   2. 用户明确确认丢弃未能采集的内容（上面的第 2 项）。
 - 每轮采集取代了 v0.1 的 `git stash create` 快照。
 
-**实现**（2026-10-04，第 3 个增量）：
+**实现**（2026-10-04）：
 
 1. turn 结束时，运行时在结束 turn 的同一个事务中写入采集意图。报告 `done` 的 turn，其采集标为候选成果。
 2. CLI 退出后，运行时先遍历槽位。遍历的规则与 jj 的快照相同：各级 `.gitignore`、项目配置的排除路径与强制采集路径。遍历找出两类内容：
@@ -402,7 +403,7 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
 - **未验收的候选成果不进入预览，也不能被其他任务依赖。** 需要用到它的任务排在它之后。
 - **撤销已发布的代码**只能作为新任务向前发布，例如一个 revert 成果，同样经过验证、审查与验收。
 
-**实现**（2026-10-04，第 3 个增量）：
+**实现**（2026-10-04）：
 
 - rebase 由 jj 的树合并完成：以候选成果的父提交为基，合并当前集成版本与候选成果。冲突记录在提交中，rebase 不中断。写入文件的冲突标记采用 git 的格式。
 - 合成的提交以集成版本头为唯一父提交，提交信息与作者按 §4.3，并以验证记录的 ID 建立 pin。验收时发布的就是这个提交，所以验收只是一个 SQLite 事务。
@@ -435,13 +436,13 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
 - 用户的主仓库是集成版本的**单向物化**，由运行时机械写入，不是任何事实的来源。只包含已验收的成果。
 - 预览物化经 outbox 执行。物化失败时，预览暂时落后于集成版本（见 4.2）。
 - 写入前，运行时确认主仓库的工作区仍等于上次物化的版本。不一致时，运行时停止物化并通知，不覆盖文件（data-model.md §5）。
-- 前提是用户不手工修改项目文件（#5）。Angela 在这里只读运行，与用户看到同一份代码。
+- 前提是用户不手工修改项目文件（#5）。
 - 进行中的工作通过 GUI 查看（Inspector 的"改动"页：按执行轮的成果与 diff），不进入预览。
 - push 与 GitHub 导出的内容范围、触发和批准单独处理，v1 中 Lobotomy 不 push。
 
-**实现**（2026-10-04，第 3 个增量）：
+**实现**（2026-10-04）：
 
-- GUI 完成之前，接入由第一次启动时的 `lobotomyd --data-dir <目录> --repo <仓库>` 完成。
+- 用户在 GUI 中接入仓库；测试与脚本用 `lobotomyd --data-dir <目录> --repo <仓库>`。M3 起，接入是新建项目的一步（data-model.md §10.4）。
 - 接入时，运行时把用户分支 fetch 进私有存储，并记下用户在该仓库的 git 身份（`user.name`、`user.email`）。没有配置身份时，运行时拒绝接入。
 - 物化预览时，运行时把集成版本提交导出为私有存储中的一个 ref；主仓库从私有存储 fetch 这个 ref，再执行 `git merge --ff-only`。主仓库已经在目标版本上时，运行时视为已写入：上一次写入的回执丢失了（data-model.md §5）。
 - 集成版本的提交是普通的 git 提交，不带 jj 的 change-id 头。提交信息依次为任务标题、`done` 汇报的标题与正文、两个 trailer。
@@ -464,9 +465,8 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 
 ## 6. 待验证 / 未决
 
-- ~~jj-lib 的版本锁定与封装边界~~：已实现（2026-10-04）。jj-lib 锁定为 0.45.1，封装在 `backend/crates/store` 中，jj 的类型不出这个 crate。只用到 jj 的存储（git backend）、树合并和本地工作副本状态（`TreeState`），不使用 jj 的操作日志与视图：业务事实在 SQLite 中，成果靠 pin 保留。
 - 原生中断与中断后的 resume：Codex 与 Claude 在 Windows 上已实测（§1.3 第 6 条、§1.4）。Linux 上的两家仍待实测。结果也决定 ideas.md 中的"中断并发送"能否加入。
-- 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。Claude 的 `~/.claude/CLAUDE.md` 在 M2 时确认。
+- 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。role 的 Claude 用 `--setting-sources ""` 启动（§1.6），这时是否仍读取 `~/.claude/CLAUDE.md`，还没有确认。
 - Codex 0.159.2 的 `codex queue`（向已有会话排队一条消息）能否在 `exec` 的 turn 运行中投递消息，待查。若可以，它可能替代 ideas.md 中的"中断并发送"。`codex delete --force <id>` 可以按 ID 删除会话，清理探针或临时会话时使用。
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。
 - `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。交互式 CLI 中的形式已有记录；`-p` 下下次自然发生时记录，并核对适配器认的三种信号（§1.4）。Codex 被拒的形式暂不处理。
@@ -478,4 +478,4 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 - Claude `--append-system-prompt-file`：帮助文本中出现过，尚未实测。
 - Codex 的长指令方案：`-p` profile 文件，还是 `model_instructions_file`。暂不需要：Windows 命令行上限约 32K 字符，role 指令预计远小于此，先用 `-c developer_instructions`；指令实际接近上限时再研究。
 - Codex `--thread-source` 的取值。
-- 权限模式（1.9）：自动审批在真实受管环境中的长期表现，例如联网安装依赖、写工作目录以外的缓存时自动审核的结果与开销；"没有任何输出就退出"能否作为"harness 没有开始这个 turn"的依据，Claude 与 Linux 上待确认；Claude 的 `--permission-mode auto` 与 `--permission-prompts none` 在 M2 实测。
+- 权限模式（1.9）：自动审批在真实受管环境中的长期表现，例如联网安装依赖、写工作目录以外的缓存时自动审核的结果与开销；"没有任何输出就退出"能否作为"harness 没有开始这个 turn"的依据，Claude 与 Linux 上待确认；Claude 的自动审批（`--permission-mode auto`、`--permission-prompts none`）在受管环境中的表现还没有实测，本机没有受管环境。

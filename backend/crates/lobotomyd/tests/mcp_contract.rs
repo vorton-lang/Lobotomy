@@ -1,4 +1,4 @@
-//! Contract test: the official CLIs against Lobotomy's MCP service (m1-plan.md §3, increment 2).
+//! Contract test: the official CLIs against Lobotomy's MCP service (harness-adapter.md §2).
 //!
 //! Each test serves `lobotomyd::mcp::router` with a probe tool, runs one real turn of a CLI with
 //! the URL of a fresh token, and checks three things:

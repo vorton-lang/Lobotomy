@@ -74,8 +74,8 @@ npm run bench
 
 | 内容 | 原因 |
 |---|---|
-| 多个 agent 同时流式输出 | M1 只有 Malkuth；M3 加入 Angela 后补上 |
-| 会话切换 | M1 只有一个 Thread；Inspector 做出来后补上 |
+| 多个 agent 同时流式输出 | 现在只有 Malkuth；M3 的多项目或 M4 加入 Angela 后补上 |
+| 会话切换 | 现在只有一个 Thread；M3 的项目切换或 Inspector 做出来后补上 |
 | 窗口中的按键到呈现 | 见 §4 |
 | 客户端读得慢时的重新同步 | 后端测试已覆盖：落后超过推送缓冲的客户端会收到 `resync`（`backend/crates/lobotomyd/tests/gui.rs`）。GUI 收到后重新取快照的耗时，与"刷新后再打开"相近，没有单独测 |
 | macOS 上的数据 | CI 只在 Windows 和 Ubuntu 上运行 |

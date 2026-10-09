@@ -1,6 +1,7 @@
 # Ember Organization Runtime & UX Notes
 
 > Status: early architecture notes  
+> 2026-09-30 从 Ember 复制，2026-10-10 移入 research/。已经设计或实现的部分以 [data-model.md](../data-model.md)、[harness-adapter.md](../harness-adapter.md)、[frontend.md](../frontend.md)、[manager-actions.md](../manager-actions.md) 为准；会话轮换、上下文物化等还没有设计的部分仍可参考。
 > 目标不是先做一个“多 agent 聊天工具”，而是定义一个长期在线的组织运行时：它位于各类模型专用 harness 之上，承载角色、session、状态、事件、项目世界与用户控制面。
 
 ## 1. Why a higher-level runtime is needed

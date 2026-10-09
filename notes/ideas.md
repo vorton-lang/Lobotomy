@@ -1,19 +1,13 @@
 # Ideas
 
-> 暂不实现、但值得记下的小功能。每条注明来源和已知代价。
-
-## 提交 trailer 标注来源
-
-已采用，形式改变：运行时在发布时自己写最终提交，trailer 直接写进提交信息（[harness-adapter.md](harness-adapter.md) §4.3）。原先设想的 `core.hooksPath` 方案及其代价（仓库自己的 hook 失效）不再需要。
-
-- 来源：2026-10-01 任务模型讨论；2026-10-04 采用。
+> 暂不实现、但值得记下的小功能。每条注明来源和已知代价。采用后的条目移到相应的设计文档，从这里删除。
 
 ## 中断并发送
 
 用户发一条消息后立即中断当前 turn，运行时随即经 resume 启动新 turn，让 agent 马上看到这条消息。这相当于在 turn 进行中插话（[harness-adapter.md](harness-adapter.md) §1.1）。
 
 - 现状：用户可以手动组合现有操作，达到同样效果：先发消息，再中断，再选择继续。运行时不阻止这种组合，也不提供专门命令。
-- 加入条件：实测确认两家 CLI 在工具调用中途被中断后，会话记录完整，resume 能正常接续（harness-adapter.md §6）。Codex 在 Windows 上已满足：Ctrl+C 中断后，rollout 记录了工具的中止结果和 `turn_aborted`，resume 正常（harness-adapter.md §1.4）。Claude 与 Linux 待实测。
+- 加入条件：实测确认两家 CLI 在工具调用中途被中断后，会话记录完整，resume 能正常接续（harness-adapter.md §6）。Codex 在 Windows 上已满足：Ctrl+C 中断后，rollout 记录了工具的中止结果和 `turn_aborted`，resume 正常（harness-adapter.md §1.4）。Claude 在 Windows 上中断命令后 resume 同一会话，任务照常完成（harness-adapter.md §1.3 第 6 条，2026-10-10）。Linux 待实测。
 - 设想的做法：
   1. 消息进入收件箱。
   2. 运行时调用原生中断，等待 CLI 退出，turn 记为 interrupted。

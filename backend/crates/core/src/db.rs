@@ -22,7 +22,7 @@ const MIGRATIONS: &[&str] = &[
 /// One project's database.
 ///
 /// Every write goes through `execute`, which holds the only write connection, so command
-/// transactions never interleave (notes/m1-plan.md §2). Reads have a read-only connection of
+/// transactions never interleave (notes/architecture.md §3). Reads have a read-only connection of
 /// their own: with WAL, a read never waits for a write transaction, nor a write for a read (#16).
 pub struct Db {
     conn: Mutex<Connection>,

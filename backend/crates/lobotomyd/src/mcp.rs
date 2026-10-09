@@ -1,6 +1,6 @@
 //! The MCP service that roles call (harness-adapter.md §2).
 //!
-//! rmcp types stay inside this module (m1-plan.md §2). Each turn gets its own URL,
+//! rmcp types stay inside this module (architecture.md §3). Each turn gets its own URL,
 //! `/mcp/{token}`, so the URL identifies the caller (data-model.md §3.1) and the service keeps
 //! no MCP sessions. Stateless serving also covers clients that still use the `initialize`
 //! handshake of the protocol versions before 2026-07-28: rmcp answers each of their requests on
