@@ -197,11 +197,13 @@ async function reloadAll() {
 
 // Refreshes can overlap: a host setting has no event sequence to order its snapshots.
 let snapshotRequest = 0;
+let appliedSnapshot = 0;
 
 async function loadSnapshot() {
   const request = ++snapshotRequest;
   const snapshot = await call<Snapshot>('snapshot');
-  if (request !== snapshotRequest) return;
+  if (request < appliedSnapshot) return;
+  appliedSnapshot = request;
   useStore.setState({ snapshot, live: snapshot.live });
 }
 
