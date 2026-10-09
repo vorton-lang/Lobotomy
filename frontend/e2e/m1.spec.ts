@@ -6,6 +6,38 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createTask, expect, open, taskPanel, test } from './fixtures';
 
+// On a slow machine an older page arrives later than the next render. Scrolling up must still
+// load page after page to the start (the baseline found it stuck at the top in CI).
+// Run the longest independent scenario early so it does not leave one worker idle at the end.
+test('scrolling up on a slow machine loads every older page', async ({ page, backend }) => {
+  await open(page, backend);
+  // Three hundred items: the thread opens three pages after the task's brief.
+  await createTask(page, '很长的任务', 'FAKE:many=300');
+  await expect(page.locator('.attention .card').filter({ hasText: '还没有完成' })).toBeVisible();
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  await page.reload();
+  await expect(page.getByText('已连接')).toBeVisible();
+  const reached = await page.evaluate(
+    (marker) =>
+      new Promise<boolean>((resolve) => {
+        const thread = document.querySelector('.thread') as HTMLElement;
+        const start = performance.now();
+        const step = () => {
+          if (thread.textContent?.includes(marker)) resolve(true);
+          else if (performance.now() - start > 60_000) resolve(false);
+          else {
+            thread.scrollTop -= 1500;
+            requestAnimationFrame(step);
+          }
+        };
+        step();
+      }),
+    '任务：很长的任务（第 1 轮执行）',
+  );
+  expect(reached).toBe(true);
+});
+
 test('a task goes from creation to the user repository', async ({ page, backend }) => {
   await open(page, backend);
   // Pressing twice creates one task (#16).
@@ -313,35 +345,4 @@ test('search goes to a match pages back', async ({ page, backend }) => {
   await bar.getByLabel('搜索对话').press('Escape');
   await expect(bar).toBeHidden();
   expect(await page.evaluate(() => CSS.highlights.has('search-current'))).toBe(false);
-});
-
-// On a slow machine an older page arrives later than the next render. Scrolling up must still
-// load page after page to the start (the baseline found it stuck at the top in CI).
-test('scrolling up on a slow machine loads every older page', async ({ page, backend }) => {
-  await open(page, backend);
-  // Three hundred items: the thread opens three pages after the task's brief.
-  await createTask(page, '很长的任务', 'FAKE:many=300');
-  await expect(page.locator('.attention .card').filter({ hasText: '还没有完成' })).toBeVisible();
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
-  await page.reload();
-  await expect(page.getByText('已连接')).toBeVisible();
-  const reached = await page.evaluate(
-    (marker) =>
-      new Promise<boolean>((resolve) => {
-        const thread = document.querySelector('.thread') as HTMLElement;
-        const start = performance.now();
-        const step = () => {
-          if (thread.textContent?.includes(marker)) resolve(true);
-          else if (performance.now() - start > 60_000) resolve(false);
-          else {
-            thread.scrollTop -= 1500;
-            requestAnimationFrame(step);
-          }
-        };
-        step();
-      }),
-    '任务：很长的任务（第 1 轮执行）',
-  );
-  expect(reached).toBe(true);
 });

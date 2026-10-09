@@ -8,7 +8,10 @@ export default defineConfig({
   timeout: 120_000,
   // A step of the organization (writing a slot, a turn, a capture, a verification) takes seconds.
   expect: { timeout: 30_000 },
-  workers: 1,
+  // Fixtures own their host, project, repository and backend; independent scenarios can run
+  // together, including scenarios in the same file. Keep the limit small for CI and Electron.
+  fullyParallel: true,
+  workers: 2,
   use: { channel: process.platform === 'win32' ? 'msedge' : undefined, trace: 'retain-on-failure' },
   webServer: { command: 'npx vite', url: 'http://127.0.0.1:5173', reuseExistingServer: true },
 });

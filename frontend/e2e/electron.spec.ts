@@ -12,6 +12,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Electron's single-instance lock uses a shared profile, even with separate Lobotomy hosts.
+// Keep shell tests together in one worker while the isolated browser scenarios run in parallel.
+test.describe.configure({ mode: 'default' });
+
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const backendExe = path.join(app, '..', 'backend', 'target', 'debug', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
 
