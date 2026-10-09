@@ -382,8 +382,8 @@ async fn a_second_backend_cannot_open_the_same_data_directory() {
     Project::open(&data, host).unwrap();
 }
 
-/// Shutdown joins every service that owns the project, so an idle backend can be restarted
-/// immediately in the same runtime without retrying the data-directory lock.
+/// An idle backend with no GUI clients, turns or store jobs releases its project on shutdown,
+/// so the data directory can be reopened immediately in the same runtime without lock retries.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_idle_backend_releases_its_project_lock_on_shutdown() {
     let dir = tempfile::tempdir().unwrap();
