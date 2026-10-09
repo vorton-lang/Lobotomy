@@ -13,7 +13,7 @@ use lobotomy_core::task::{
 use lobotomy_core::turn::{Continue, RegisterTurn, current_session};
 use lobotomy_core::verify::{
     Accept, CheckOutcome, FinishPreview, FinishVerification, PreviewResult, RetryPreview, Reverify, SendBack,
-    StartVerification, VerificationState, latest_verification, next_preview, preview_stopped,
+    StartVerification, VerificationState, latest_verification, next_preview, preview_stopped, verification_plan,
 };
 use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceState, current_workspace};
 use lobotomy_core::{Caller, Db};
@@ -105,15 +105,36 @@ fn a_verified_candidate_is_published_by_accepting_it() {
     assert_eq!(accept(&db, "a1", &task, &v, BASE).unwrap(), "rebased");
 }
 
+/// The report's title and body, kept with the attempt: the command log's form of the report does
+/// not matter (#16).
 #[test]
 fn the_commit_message_names_the_task_the_report_and_the_role() {
     let db = db();
     let (task, _) = candidate(&db);
+    db.write(|tx| Ok(tx.execute("UPDATE command_record SET args = '{}' WHERE name = 'org_report'", [])?)).unwrap();
     let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
-    let plan = db.read(|c| lobotomy_core::verify::verification_plan(c, &v)).unwrap();
+    let plan = db.read(|c| verification_plan(c, &v)).unwrap();
     assert!(plan.message.starts_with("加一个 new.txt\n\n完成了\n\n加了 new.txt\n\n"), "{}", plan.message);
     assert!(plan.message.ends_with(&format!("Lobotomy-Task: {task}\nLobotomy-Role: Malkuth\n")), "{}", plan.message);
     assert_eq!((plan.author_name.as_str(), plan.base.as_str()), ("Test User", BASE));
+}
+
+/// A done reported before attempts kept the summary: upgrading the database takes it from the
+/// command log.
+#[test]
+fn an_upgraded_database_keeps_the_summary_of_an_earlier_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lobotomy.db");
+    let (task, _) = candidate(&common::onboard(Db::open(&path).unwrap()));
+    // The database as migration 7 left it.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("ALTER TABLE attempt DROP COLUMN done_summary; PRAGMA user_version = 7;").unwrap();
+    drop(conn);
+
+    let db = Db::open(&path).unwrap();
+    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task }).unwrap();
+    let plan = db.read(|c| verification_plan(c, &v)).unwrap();
+    assert!(plan.message.starts_with("加一个 new.txt\n\n完成了\n\n加了 new.txt\n\n"), "{}", plan.message);
 }
 
 #[test]
@@ -265,7 +286,8 @@ fn continuing_past_a_stopped_done_hands_the_list_to_the_executor() {
     let next = db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: ROLE.into() }).unwrap();
     let input = db.read(|c| lobotomy_core::turn::load_turn(c, &next.turn_id)).unwrap().input;
     assert!(input.contains("venv/lib.py") && input.contains("done 因此没有生效"), "{input}");
-    assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap().unwrap().done_turn_id, None, "the stopped done is void");
+    let attempt = db.read(|c| open_attempt(c, &task)).unwrap().unwrap();
+    assert_eq!((attempt.done_turn_id, attempt.done_summary), (None, None), "the stopped done is void");
 
     // The executor cleans up and reports done again.
     report_done(&db, &next.turn_id);

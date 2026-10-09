@@ -26,6 +26,15 @@ pub struct OrgReport {
     pub blocked_on: Option<String>,
 }
 
+impl OrgReport {
+    /// The title and the body, an empty one left out; `None` when both are empty. A done keeps it
+    /// with its attempt for the candidate's commit message (harness-adapter.md §4.3).
+    fn summary(&self) -> Option<String> {
+        let parts: Vec<&str> = [self.title.trim(), self.body.trim()].into_iter().filter(|s| !s.is_empty()).collect();
+        (!parts.is_empty()).then(|| parts.join("\n\n"))
+    }
+}
+
 /// What the report changed. Every report is kept as a command record, including reports that
 /// change nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,8 +106,9 @@ impl Command for OrgReport {
                     // occupied meanwhile (harness-adapter.md §4.1).
                     cx.tx.execute("UPDATE turn SET done_at = ?2 WHERE id = ?1", params![turn.id, cx.now])?;
                     cx.tx.execute(
-                        "UPDATE attempt SET done_turn_id = ?2 WHERE id = ?1 AND done_turn_id IS NULL",
-                        params![turn.attempt_id, turn.id],
+                        "UPDATE attempt SET done_turn_id = ?2, done_summary = ?3
+                         WHERE id = ?1 AND done_turn_id IS NULL",
+                        params![turn.attempt_id, turn.id, self.summary()],
                     )?;
                     set_blocked(cx, &task, None)?;
                     ReportEffect::Recorded

@@ -17,7 +17,11 @@ pub const BASE: &str = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0";
 
 /// A database with a connected repository.
 pub fn db() -> Db {
-    let db = Db::open_in_memory().unwrap();
+    onboard(Db::open_in_memory().unwrap())
+}
+
+/// Connects a repository to the database, as the user does first.
+pub fn onboard(db: Db) -> Db {
     db.execute(
         &Caller::User,
         &Onboard {

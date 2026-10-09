@@ -166,6 +166,7 @@ const attempt = (seq: number, started: number, ended: number | null): Attempt =>
   end_reason: ended ? 'candidate' : null,
   code_start: null,
   done_turn_id: null,
+  done_summary: null,
   candidate_id: null,
   conflicts: [],
 });

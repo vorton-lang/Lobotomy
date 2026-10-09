@@ -412,6 +412,7 @@ Manager 与用户看到的是同一份代码。角色定义见 [roles-and-tasks.
 - 接入时，运行时把用户分支 fetch 进私有存储，并记下用户在该仓库的 git 身份（`user.name`、`user.email`）。没有配置身份时，运行时拒绝接入。
 - 物化预览时，运行时把集成版本提交导出为私有存储中的一个 ref；主仓库从私有存储 fetch 这个 ref，再执行 `git merge --ff-only`。主仓库已经在目标版本上时，运行时视为已写入：上一次写入的回执丢失了（data-model.md §5）。
 - 集成版本的提交是普通的 git 提交，不带 jj 的 change-id 头。提交信息依次为任务标题、`done` 汇报的标题与正文、两个 trailer。
+- 执行者报告 `done` 时，运行时把汇报的标题与正文存到 attempt 上，生成提交信息时从这里读取。原来是回头解析命令记录中的报告参数，参数改名时摘要会悄悄消失（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)，2026-10-09）。
 
 ### 4.4 GUI 可见性
 

@@ -162,24 +162,11 @@ pub fn verification_plan(conn: &Connection, id: &str) -> Result<VerificationPlan
     let capture = load_capture(conn, &v.capture_id)?;
     let task = load_task(conn, &v.task_id)?;
     let project = require_project(conn)?;
-    let report: Option<String> = conn
-        .query_row(
-            "SELECT args FROM command_record WHERE turn_id = ?1 AND name = 'org_report'
-             AND json_extract(args, '$.status') = 'done' ORDER BY created_at LIMIT 1",
-            [&capture.turn_id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let summary = match report.as_deref().map(serde_json::from_str::<Value>).transpose()? {
-        Some(args) => {
-            let title = args["title"].as_str().unwrap_or_default().trim();
-            let body = args["body"].as_str().unwrap_or_default().trim();
-            [title, body].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n\n")
-        }
-        None => String::new(),
-    };
+    // What the done that made the candidate said, kept with its attempt (#16).
+    let summary: Option<String> =
+        conn.query_row("SELECT done_summary FROM attempt WHERE id = ?1", [&v.attempt_id], |r| r.get(0))?;
     let mut message = task.title.trim().to_owned();
-    if !summary.is_empty() {
+    if let Some(summary) = summary.filter(|s| !s.is_empty()) {
         message.push_str("\n\n");
         message.push_str(&summary);
     }

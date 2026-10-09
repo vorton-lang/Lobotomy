@@ -119,6 +119,8 @@ pub struct Attempt {
     /// Where its code starts; `None` when the slot stayed as it was (data-model.md §4.3).
     pub code_start: Option<String>,
     pub done_turn_id: Option<String>,
+    /// The title and body of that turn's done, for the candidate's commit message.
+    pub done_summary: Option<String>,
     pub candidate_id: Option<String>,
     /// Files its code start left with conflict markers.
     pub conflicts: Vec<String>,
@@ -126,7 +128,8 @@ pub struct Attempt {
 
 fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attempt>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, task_id, seq, started_at, ended_at, end_reason, code_start, done_turn_id, candidate_id, conflicts
+        "SELECT id, task_id, seq, started_at, ended_at, end_reason, code_start, done_turn_id, candidate_id, conflicts,
+                done_summary
          FROM attempt WHERE task_id = ?1 {filter}"
     ))?;
     let rows = stmt.query_map([task_id], |r| {
@@ -139,6 +142,7 @@ fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attemp
             end_reason: r.get(5)?,
             code_start: r.get(6)?,
             done_turn_id: r.get(7)?,
+            done_summary: r.get(10)?,
             candidate_id: r.get(8)?,
             conflicts: vec![],
         };

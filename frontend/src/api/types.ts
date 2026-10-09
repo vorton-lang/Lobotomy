@@ -349,6 +349,8 @@ export interface Attempt {
   /** Where its code starts; null when the slot stayed as it was. */
   code_start: string | null;
   done_turn_id: string | null;
+  /** The title and body of that turn's done, for the candidate's commit message. */
+  done_summary: string | null;
   candidate_id: string | null;
   /** Files its code start left with conflict markers. */
   conflicts: string[];
