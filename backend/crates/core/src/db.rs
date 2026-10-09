@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
@@ -21,16 +21,26 @@ const MIGRATIONS: &[&str] = &[
 /// One project's database.
 ///
 /// Every write goes through `execute`, which holds the only write connection, so command
-/// transactions never interleave (notes/m1-plan.md §2).
+/// transactions never interleave (notes/m1-plan.md §2). Reads have a read-only connection of
+/// their own: with WAL, a read never waits for a write transaction, nor a write for a read (#16).
 pub struct Db {
     conn: Mutex<Connection>,
+    /// `None` for a database in memory, which a second connection cannot open; reads then use the
+    /// write connection.
+    reader: Option<Mutex<Connection>>,
 }
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
-        Self::init(conn)
+        let mut db = Self::init(conn)?;
+        // Opened after the migrations, so it never sees a schema in between.
+        let reader =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        reader.busy_timeout(Duration::from_secs(5))?;
+        db.reader = Some(Mutex::new(reader));
+        Ok(db)
     }
 
     pub fn open_in_memory() -> Result<Self> {
@@ -41,7 +51,7 @@ impl Db {
         conn.busy_timeout(Duration::from_secs(5))?;
         migrate(&mut conn, MIGRATIONS)?;
         conn.pragma_update(None, "foreign_keys", true)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self { conn: Mutex::new(conn), reader: None })
     }
 
     /// Runs a command in one transaction and records it in the command log.
@@ -115,10 +125,15 @@ impl Db {
         Ok(out)
     }
 
-    /// Runs a read-only query on the write connection.
+    /// Runs read-only queries in one read transaction: all of them see the same committed state,
+    /// although commands commit meanwhile.
     pub fn read<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        f(&conn)
+        let Some(reader) = &self.reader else {
+            return f(&self.conn.lock().unwrap_or_else(|e| e.into_inner()));
+        };
+        let mut conn = reader.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.transaction()?;
+        f(&tx)
     }
 }
 
@@ -181,5 +196,64 @@ mod tests {
         assert_eq!(version, 1, "the broken migration rolled back");
         let parents: i64 = conn.query_row("SELECT COUNT(*) FROM parent", [], |r| r.get(0)).unwrap();
         assert_eq!(parents, 1);
+    }
+
+    /// A database in a file, as a project's is; one in memory has no read connection.
+    fn file_db() -> (tempfile::TempDir, std::sync::Arc<Db>) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("lobotomy.db")).unwrap();
+        (dir, std::sync::Arc::new(db))
+    }
+
+    fn roles(conn: &Connection) -> Result<i64> {
+        Ok(conn.query_row("SELECT COUNT(*) FROM role", [], |r| r.get(0))?)
+    }
+
+    fn add_role(tx: &Transaction<'_>) -> Result<()> {
+        tx.execute("INSERT INTO role (name, kind, harness) VALUES ('Yesod', 'worker', 'codex')", [])?;
+        Ok(())
+    }
+
+    /// Runs `f` on another thread; `None` when it has not returned within five seconds.
+    fn within_seconds<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || done.send(f()));
+        result.recv_timeout(Duration::from_secs(5)).ok()
+    }
+
+    #[test]
+    fn a_read_does_not_wait_for_a_write_in_progress() {
+        let (_dir, db) = file_db();
+        db.write(|tx| {
+            add_role(tx)?;
+            let other = db.clone();
+            let seen = within_seconds(move || other.read(roles).unwrap());
+            assert_eq!(seen, Some(1), "the read sees the last commit, not the write in progress");
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(db.read(roles).unwrap(), 2);
+    }
+
+    #[test]
+    fn a_read_sees_one_state_while_others_commit() {
+        let (_dir, db) = file_db();
+        db.read(|conn| {
+            let before = roles(conn)?;
+            let other = db.clone();
+            let committed = within_seconds(move || other.write(add_role).is_ok());
+            assert_eq!(committed, Some(true), "a write does not wait for a read");
+            assert_eq!(roles(conn)?, before, "the read goes on with the state it started from");
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(db.read(roles).unwrap(), 2);
+    }
+
+    #[test]
+    fn the_read_connection_cannot_write() {
+        let (_dir, db) = file_db();
+        assert!(db.read(|conn| Ok(conn.execute("DELETE FROM role", [])?)).is_err());
+        assert_eq!(db.read(roles).unwrap(), 1);
     }
 }

@@ -42,7 +42,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className={wide ? 'modal wide' : 'modal'} role="dialog" aria-label={title}>
+      <div className={wide ? 'modal wide' : 'modal'} role="dialog" aria-modal="true" aria-label={title}>
         <header>
           <h2>{title}</h2>
           <button className="ghost" onClick={onClose} aria-label="关闭">

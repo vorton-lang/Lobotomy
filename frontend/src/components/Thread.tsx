@@ -1,11 +1,13 @@
-// Malkuth's thread (frontend.md §2 "M1 的布局", §4.2): a virtualized list that loads older pages
-// when scrolled to the top and follows the end while the user is at the end.
+// The main role's thread (frontend.md §2 "M1 的布局", §4.2): a virtualized list that loads older
+// pages when scrolled to the top and follows the end while the user is at the end. Whether it
+// follows is kept in the store (`following`).
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { VList, type VListHandle } from 'virtua';
+import type { CommandRecord } from '../api/types';
 import { buildRows, clock, sourceLabel, turnOutcome, type Row } from '../format';
 import { clearHighlight, highlight } from '../highlight';
-import { loadOlder, matchRowKey, useStore } from '../store';
+import { loadOlder, matchRowKey, setFollowing, useStore } from '../store';
 import { Markdown } from './common';
 import { ItemView, LiveItemView, RunningView } from './ItemView';
 
@@ -17,13 +19,11 @@ export function Thread() {
   const tasks = useStore((s) => s.snapshot?.tasks);
   const rows = useMemo(() => buildRows(thread, live), [thread, live]);
   const list = useRef<VListHandle>(null);
-  const atEnd = useRef(true);
   const [prepending, setPrepending] = useState(false);
-  const loading = useRef(false);
 
   // The list follows the end only while the user is there; scrolling is otherwise theirs.
   useLayoutEffect(() => {
-    if (atEnd.current && rows.length > 0) list.current?.scrollToIndex(rows.length - 1, { align: 'end' });
+    if (useStore.getState().following && rows.length > 0) list.current?.scrollToIndex(rows.length - 1, { align: 'end' });
   }, [rows.length]);
   // While an older page loads, the list keeps the visible rows in place as items arrive above
   // them (`shift`). Only the oldest item changing says the page is in: other changes, such as a
@@ -45,7 +45,7 @@ export function Thread() {
     // Not loaded yet: the search is loading older pages, and the rows change when they arrive.
     if (index < 0) return;
     handledJump.current = search.jump;
-    atEnd.current = false;
+    setFollowing(false);
     toOpen.current = target;
     list.current?.scrollToIndex(index, { align: 'center' });
   }, [search, target, rows]);
@@ -74,11 +74,10 @@ export function Thread() {
   const onScroll = (offset: number) => {
     const handle = list.current;
     if (!handle) return;
-    atEnd.current = offset + handle.viewportSize >= handle.scrollSize - AT_END_SLACK;
-    if (offset < 200 && thread.hasMore && !loading.current) {
-      loading.current = true;
+    setFollowing(offset + handle.viewportSize >= handle.scrollSize - AT_END_SLACK);
+    if (offset < 200 && thread.hasMore) {
       setPrepending(true);
-      void loadOlder().finally(() => (loading.current = false));
+      void loadOlder();
     }
   };
 
@@ -86,7 +85,7 @@ export function Thread() {
   if (rows.length === 0) {
     return (
       <div className="thread empty">
-        <p>还没有对话。在右侧建一个任务，或者直接给 Malkuth 发消息。</p>
+        <p>还没有对话。在右侧建一个任务，或者直接给 {thread.role} 发消息。</p>
       </div>
     );
   }
@@ -95,7 +94,7 @@ export function Thread() {
     <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} keepMounted={[rows.length - 1]}>
       {rows.map((row) => (
         <div key={row.key} className="row" data-key={row.key}>
-          <RowView row={row} title={title} commands={thread.commands} />
+          <RowView row={row} role={thread.role} title={title} commands={thread.commands} />
         </div>
       ))}
     </VList>
@@ -104,12 +103,14 @@ export function Thread() {
 
 function RowView({
   row,
+  role,
   title,
   commands,
 }: {
   row: Row;
+  role: string;
   title: (taskId: string | null) => string | undefined;
-  commands: ReturnType<typeof useStore.getState>['thread']['commands'];
+  commands: Record<string, CommandRecord>;
 }) {
   switch (row.kind) {
     case 'turn': {
@@ -131,16 +132,15 @@ function RowView({
     case 'queued':
       return <MessageView source={row.message.source} body={row.message.body} queued />;
     case 'item':
-      return <ItemView item={row.item} commands={commands} />;
+      return <ItemView item={row.item} role={role} commands={commands} />;
     case 'live':
       return <LiveItemView item={row.item} />;
     case 'running':
-      return <RunningView since={row.since} />;
+      return <RunningView role={row.role} since={row.since} />;
   }
 }
 
 function MessageView({ source, body, queued }: { source: string; body: string; queued?: boolean }) {
-  const mine = source === 'user';
   // The runtime's messages repeat the task and carry instructions for the executor; the first
   // line says what each is about, the rest opens on demand (#13).
   if (source === 'runtime') {
@@ -156,7 +156,7 @@ function MessageView({ source, body, queued }: { source: string; body: string; q
     );
   }
   return (
-    <div className={`message ${mine ? 'mine' : source === 'runtime' ? 'runtime' : 'other'} ${queued ? 'queued' : ''}`}>
+    <div className={`message ${source === 'user' ? 'mine' : 'other'} ${queued ? 'queued' : ''}`}>
       <div className="who">
         {sourceLabel(source)}
         {queued && <span className="muted"> · 排队中，下一个 turn 投递</span>}

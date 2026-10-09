@@ -1,27 +1,22 @@
 // Not a test: captures the main states for review. Run with `npx playwright test screenshots`.
 
-import { expect, test, type Page } from '@playwright/test';
-import fs from 'node:fs';
-import { infoFile } from './setup';
+import { expect, open as connect, taskPanel, test, type Backend } from './fixtures';
+import type { Page } from '@playwright/test';
 
 const out = process.env.SCREENSHOT_DIR ?? 'test-results/screenshots';
 
-async function open(page: Page) {
-  const { port, token } = JSON.parse(fs.readFileSync(infoFile, 'utf8'));
+async function open(page: Page, backend: Backend) {
   await page.setViewportSize({ width: 1400, height: 860 });
-  await page.goto(`http://127.0.0.1:5173/?backend=${encodeURIComponent(`ws://127.0.0.1:${port}/gui`)}&token=${encodeURIComponent(token)}`);
-  await expect(page.getByText('已连接')).toBeVisible();
+  await connect(page, backend);
 }
 
-// A Codex that does not allow full access, and the settings (harness-adapter.md §1.9). The task is
-// accepted at the end, so the next screenshots start with Malkuth free.
-test('screenshots of a managed Codex', async ({ page }) => {
+// A Codex that does not allow full access, and the settings (harness-adapter.md §1.9).
+test('screenshots of a managed Codex', async ({ page, backend }) => {
   test.skip(!process.env.SCREENSHOT_DIR, 'review only');
-  await open(page);
+  await open(page, backend);
   await page.getByRole('button', { name: '+ 新任务' }).click();
   const dialog = page.getByRole('dialog', { name: '新任务' });
   await dialog.getByLabel('标题').fill('受管环境的任务');
-  // No file: the later screenshots expect the repository as it started.
   await dialog.getByLabel('你的原话').fill('FAKE:managed FAKE:done FAKE:nowrite');
   await dialog.getByRole('button', { name: '交给 Malkuth' }).click();
   const card = page.locator('.attention .card').filter({ hasText: '没能启动' });
@@ -38,14 +33,14 @@ test('screenshots of a managed Codex', async ({ page }) => {
   await expect(settings.getByRole('radio', { name: /^完全放开/ })).toBeChecked();
   await settings.getByRole('button', { name: '关闭' }).click();
   await accept.getByRole('button', { name: '查看并验收' }).click();
-  const panel = page.getByRole('dialog', { name: '受管环境的任务' });
+  const panel = taskPanel(page, '受管环境的任务');
   await panel.getByRole('button', { name: '验收', exact: true }).click();
   await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
-test('screenshots', async ({ page }) => {
+test('screenshots', async ({ page, backend }) => {
   test.skip(!process.env.SCREENSHOT_DIR, 'review only');
-  await open(page);
+  await open(page, backend);
   for (const [title, body] of [
     ['写 work.txt', 'FAKE:done'],
     ['会失败的任务', 'FAKE:fail'],
@@ -70,7 +65,7 @@ test('screenshots', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' });
 
   // A send-back: the panel tells the rounds apart, the history reads in time order.
-  const panel = page.getByRole('dialog', { name: '写 work.txt' });
+  const panel = taskPanel(page, '写 work.txt');
   await panel.getByRole('button', { name: '退回…' }).click();
   const sendBack = page.getByRole('dialog', { name: '退回候选成果' });
   await sendBack.getByLabel(/理由/).fill('内容改成 second。FAKE:done FAKE:text=second');

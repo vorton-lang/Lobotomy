@@ -44,10 +44,12 @@ pub struct Verification {
     pub commit_id: Option<String>,
     pub conflicts: Vec<String>,
     pub state: VerificationState,
+    pub created_at: i64,
+    pub finished_at: Option<i64>,
 }
 
-const SELECT: &str =
-    "SELECT id, task_id, attempt_id, capture_id, base, config_version, commit_id, conflicts, state FROM verification";
+const SELECT: &str = "SELECT id, task_id, attempt_id, capture_id, base, config_version, commit_id, conflicts, state,
+                             created_at, finished_at FROM verification";
 
 fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Verification>> {
     let mut stmt = conn.prepare(&format!("{SELECT} {filter}"))?;
@@ -62,6 +64,8 @@ fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result
             commit_id: r.get(6)?,
             conflicts: vec![],
             state: r.get(8)?,
+            created_at: r.get(9)?,
+            finished_at: r.get(10)?,
         };
         Ok((v, r.get::<_, Option<String>>(7)?))
     })?;
@@ -81,6 +85,11 @@ pub fn load_verification(conn: &Connection, id: &str) -> Result<Verification> {
 
 pub fn latest_verification(conn: &Connection, task_id: &str) -> Result<Option<Verification>> {
     Ok(query(conn, "WHERE task_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1", [task_id])?.pop())
+}
+
+/// The task's verifications, the oldest first.
+pub fn task_verifications(conn: &Connection, task_id: &str) -> Result<Vec<Verification>> {
+    query(conn, "WHERE task_id = ?1 ORDER BY created_at, id", [task_id])
 }
 
 pub fn running_verifications(conn: &Connection) -> Result<Vec<Verification>> {

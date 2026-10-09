@@ -132,6 +132,11 @@ pub fn pending_captures(conn: &Connection) -> Result<Vec<Capture>> {
     query(conn, "WHERE state = 'intent' ORDER BY created_at, id", [])
 }
 
+/// The task's captures, the oldest first.
+pub fn task_captures(conn: &Connection, task_id: &str) -> Result<Vec<Capture>> {
+    query(conn, "WHERE task_id = ?1 ORDER BY created_at, id", [task_id])
+}
+
 /// The role's latest capture: the state of its slot as far as the store knows.
 pub fn latest_capture(conn: &Connection, role: &str) -> Result<Option<Capture>> {
     Ok(query(conn, "WHERE role = ?1 ORDER BY created_at DESC, id DESC LIMIT 1", [role])?.pop())

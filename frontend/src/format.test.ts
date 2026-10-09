@@ -1,16 +1,38 @@
 import { describe, expect, it } from 'vitest';
-import type { Attempt, Attention, Capture, Failure, Item, Message, TaskDetail, Turn, VerificationRow } from './api/types';
+import type {
+  Attempt,
+  Attention,
+  Capture,
+  CheckRun,
+  CommandRecord,
+  Failure,
+  Item,
+  LiveTurn,
+  Message,
+  RoleView,
+  TaskDetail,
+  TaskView,
+  Turn,
+  Verification,
+} from './api/types';
 import {
   abnormalEnd,
+  asReport,
   attentionKey,
   buildRows,
+  checkSummary,
+  commandSummary,
+  composerHint,
   continueNote,
   firstLines,
   fits,
   lastLines,
-  preview,
+  roleActivity,
+  stoppedPaths,
+  textOf,
   timeline,
   turnOutcome,
+  voidReport,
   workRange,
 } from './format';
 import { mergePage, type ThreadState } from './store';
@@ -18,6 +40,7 @@ import { mergePage, type ThreadState } from './store';
 const turn = (id: string, input = '【来自 你】\n做点事'): Turn => ({
   id,
   role: 'Malkuth',
+  harness: 'codex',
   task_id: null,
   attempt_id: null,
   input,
@@ -31,18 +54,19 @@ const turn = (id: string, input = '【来自 你】\n做点事'): Turn => ({
   ended_at: 2,
 });
 
-const item = (id: string, seq: number, turnId: string, kind = 'agent_message'): Item => ({
+const item = (id: string, seq: number, turnId: string, kind: 'input' | 'agent_message' = 'agent_message'): Item => ({
   id,
   seq,
   turn_id: turnId,
-  kind,
-  content: kind === 'input' ? { source: 'turn.input' } : { text: id },
+  ...(kind === 'input' ? { kind, content: { source: 'turn.input' } } : { kind, content: { text: id } }),
   command_id: null,
   created_at: seq,
 });
 
 const message = (id: string, turnId: string | null): Message => ({
   id,
+  seq: 1,
+  role: 'Malkuth',
   source: 'user',
   task_id: null,
   body: id,
@@ -77,12 +101,13 @@ describe('buildRows', () => {
   });
 
   it('shows the items of a running turn, or that it runs', () => {
-    const live = {
-      t3: { role: 'Malkuth', started_at: 5, items: { c1: { kind: 'command', content: { command: 'ls' }, started_at: 6 } } },
+    const live: Record<string, LiveTurn> = {
+      t3: { role: 'Malkuth', started_at: 5, items: { c1: { kind: 'command', content: { command: 'ls', output: null }, started_at: 6 } } },
       t4: { role: 'Yesod', started_at: 5, items: {} },
     };
     expect(buildRows(thread({}), live).map((r) => r.kind)).toEqual(['live']);
-    expect(buildRows(thread({}), { t3: { ...live.t3, items: {} } }).map((r) => r.kind)).toEqual(['running']);
+    const running = buildRows(thread({}), { t3: { ...live.t3, items: {} } });
+    expect(running).toMatchObject([{ kind: 'running', role: 'Malkuth' }]);
   });
 });
 
@@ -107,15 +132,20 @@ describe('continueNote', () => {
 
 const attempt = (seq: number, started: number, ended: number | null): Attempt => ({
   id: `att${seq}`,
+  task_id: 't',
   seq,
   started_at: started,
   ended_at: ended,
   end_reason: ended ? 'candidate' : null,
+  code_start: null,
+  done_turn_id: null,
   candidate_id: null,
+  conflicts: [],
 });
 
-const verification = (seq: number, at: number, state: VerificationRow['state']): VerificationRow => ({
+const verification = (seq: number, at: number, state: Verification['state']): Verification => ({
   id: `ver${seq}`,
+  task_id: 't',
   attempt_id: `att${seq}`,
   capture_id: `cap${seq}`,
   base: 'base0000',
@@ -186,11 +216,114 @@ describe('output clipping', () => {
   });
 });
 
-describe('preview', () => {
+describe('textOf', () => {
   it('shows head and tail of a field in the blob store', () => {
-    const { text, blob } = preview({ blob: 'h', size: 300_000, head: 'start', tail: 'end' });
-    expect(blob?.blob).toBe('h');
+    const text = textOf({ blob: 'h', size: 300_000, head: 'start', tail: 'end' });
     expect(text.startsWith('start') && text.endsWith('end')).toBe(true);
+    expect(textOf('whole')).toBe('whole');
+    expect(textOf(null)).toBe('');
+  });
+});
+
+describe('commandSummary', () => {
+  it('shows a short command whole and a long one by its first line and size', () => {
+    expect(commandSummary('ls -la')).toEqual({ line: 'ls -la', size: null });
+    const heredoc = ["cat > a.txt <<'EOF'", 'x', 'EOF'].join('\n');
+    expect(commandSummary(heredoc)).toEqual({ line: "cat > a.txt <<'EOF'", size: `共 3 行，${heredoc.length} 个字符` });
+    const wide = commandSummary('x'.repeat(200));
+    expect(wide.line).toBe(`${'x'.repeat(120)}…`);
+    expect(commandSummary({ blob: 'h', size: 300_000, head: 'echo start\nmore', tail: 'end' })).toEqual({ line: 'echo start', size: '300000 个字符' });
+  });
+});
+
+const role = (patch: Partial<RoleView>): RoleView => ({
+  name: 'Malkuth',
+  kind: 'worker',
+  harness: 'codex',
+  model: null,
+  slot: 'worker',
+  task_id: null,
+  unfinished: null,
+  last_turn: null,
+  hold: null,
+  stalled: null,
+  outside: null,
+  workspace: null,
+  queued_messages: 0,
+  ...patch,
+});
+
+const taskView = (phase: TaskView['phase']): TaskView => ({
+  ...detail({}).task,
+  title: '写 work.txt',
+  phase,
+  attempt_seq: 1,
+  attempt_open: phase === 'executing',
+  verification: null,
+  undelivered_messages: 0,
+});
+
+describe('roleActivity', () => {
+  it('says what keeps the role, the most pressing first', () => {
+    const running = { ...turn('t'), state: 'running' as const, outcome: null, started_at: 1_000 };
+    expect(roleActivity(role({ unfinished: running }), undefined, 66_000)).toBe('正在跑 turn · 1:05');
+    expect(roleActivity(role({ unfinished: { ...running, state: 'unknown' } }), undefined, 0)).toBe('上一个 turn 状态未知');
+    const hold = { kind: 'session_unidentified' as const, session_id: 's' };
+    expect(roleActivity(role({ hold, stalled: { task_id: 't', turn_id: 't', report_error: null } }), undefined, 0)).toBe('停下，等你决定');
+    expect(roleActivity(role({}), taskView('verifying'), 0)).toBe('验证中');
+    expect(roleActivity(role({}), undefined, 0)).toBe('空闲');
+  });
+});
+
+describe('composerHint', () => {
+  it('says where a message goes, naming the role', () => {
+    expect(composerHint('Yesod', undefined)).toBe('发给 Yesod（不属于任何任务）');
+    expect(composerHint('Yesod', taskView('executing'))).toBe('发给 Yesod · 任务「写 work.txt」');
+    expect(composerHint('Yesod', taskView('accepting'))).toContain('退回后交给 Yesod；直接验收则不再投递');
+  });
+});
+
+describe('checkSummary', () => {
+  const check = (patch: Partial<CheckRun>): CheckRun => ({
+    id: 'c',
+    verification_id: 'v',
+    seq: 0,
+    command: 'cargo test',
+    exit_code: 0,
+    timed_out: false,
+    output: {},
+    duration_ms: 1500,
+    ...patch,
+  });
+  it('gives the exit code or the timeout, and the time', () => {
+    expect(checkSummary(check({}))).toBe('退出码 0 · 1.5 秒');
+    expect(checkSummary(check({ exit_code: null, timed_out: true }))).toBe('超时 · 1.5 秒');
+  });
+});
+
+describe('reports', () => {
+  const record = (result: string): CommandRecord => ({
+    name: 'org_report',
+    args: { title: 't', body: 'b', status: 'done', blocked_on: null },
+    result,
+  });
+  it('tells a report that took effect from one that did not', () => {
+    expect(voidReport(asReport(record('recorded'))!)).toBeNull();
+    expect(voidReport(asReport(record('no_task'))!)).toContain('不属于任何任务');
+    expect(asReport({ name: 'other_tool', args: {}, result: null })).toBeNull();
+  });
+});
+
+describe('stoppedPaths', () => {
+  it('lists the new files over the guardrail with their size, or what cannot be captured', () => {
+    const capture: Capture = {
+      id: 'c', turn_id: 't', role: 'Malkuth', task_id: null, attempt_id: null, kind: 'turn', base: 'b',
+      state: 'oversized', commit_id: null, detail: { files: [{ path: 'big.bin', size: 2048 }], total_bytes: 2048 },
+      created_at: 1, outside: null,
+    };
+    expect(stoppedPaths(capture)).toEqual(['big.bin（2.0 KB）']);
+    const uncovered = { ...capture, state: 'uncovered' as const, detail: { paths: [{ path: 'vendor/x', kind: 'nested_repo' }] } };
+    expect(stoppedPaths(uncovered)).toEqual(['vendor/x（nested_repo）']);
   });
 });
 

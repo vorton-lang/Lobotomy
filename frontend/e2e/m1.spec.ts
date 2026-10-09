@@ -1,34 +1,13 @@
 // The M1 chain through the GUI (roadmap.md M1): create a task, watch Malkuth work, look at the
-// candidate's diff, accept it, and find the work in the user's repository.
+// candidate's diff, accept it, and find the work in the user's repository. Each test has a backend
+// of its own (fixtures.ts).
 
-import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { infoFile } from './setup';
+import { createTask, expect, open, taskPanel, test } from './fixtures';
 
-const info = () => JSON.parse(fs.readFileSync(infoFile, 'utf8')) as { port: number; token: string; repo: string };
-
-async function open(page: Page) {
-  const { port, token } = info();
-  await page.goto(`/?backend=${encodeURIComponent(`ws://127.0.0.1:${port}/gui`)}&token=${encodeURIComponent(token)}`);
-  await expect(page.getByText('已连接')).toBeVisible();
-}
-
-async function createTask(page: Page, title: string, body: string, { twice = false } = {}) {
-  await page.getByRole('button', { name: '+ 新任务' }).click();
-  const dialog = page.getByRole('dialog', { name: '新任务' });
-  await dialog.getByLabel('标题').fill(title);
-  await dialog.getByLabel('你的原话').fill(body);
-  await dialog.getByLabel('完成条件').fill('work.txt 存在');
-  const submit = dialog.getByRole('button', { name: '交给 Malkuth' });
-  if (twice) await submit.dblclick();
-  else await submit.click();
-}
-
-test.use({ baseURL: 'http://127.0.0.1:5173' });
-
-test('a task goes from creation to the user repository', async ({ page }) => {
-  await open(page);
+test('a task goes from creation to the user repository', async ({ page, backend }) => {
+  await open(page, backend);
   // Pressing twice creates one task (#16).
   await createTask(page, '写 work.txt', 'FAKE:done', { twice: true });
   await expect(page.locator('.task-line', { hasText: '写 work.txt' })).toHaveCount(1);
@@ -41,13 +20,13 @@ test('a task goes from creation to the user repository', async ({ page }) => {
   await expect(card).toBeVisible();
   await card.getByRole('button', { name: '查看并验收' }).click();
 
-  const panel = page.getByRole('dialog', { name: '写 work.txt' });
+  const panel = taskPanel(page, '写 work.txt');
   await expect(panel.locator('.badge.passed')).toHaveText('通过');
   await expect(panel.getByText('1 个文件')).toBeVisible();
   await panel.getByRole('button', { name: '验收', exact: true }).click();
   await expect(panel.locator('.phase')).toHaveText('已完成');
 
-  const file = path.join(info().repo, 'work.txt');
+  const file = path.join(backend.repo, 'work.txt');
   await expect.poll(() => fs.existsSync(file), { timeout: 20_000 }).toBe(true);
   expect(fs.readFileSync(file, 'utf8')).toBe('hi');
   await expect(page.getByText('现在没有需要你处理的事。')).toBeVisible();
@@ -55,8 +34,8 @@ test('a task goes from creation to the user repository', async ({ page }) => {
 
 // The panel stays open from one candidate to the next: what it shows is always the candidate the
 // "验收" button would accept (#13).
-test('an open task panel follows the candidate through a send-back', async ({ page }) => {
-  await open(page);
+test('an open task panel follows the candidate through a send-back', async ({ page, backend }) => {
+  await open(page, backend);
   // A slow check keeps each candidate in verification long enough to look at it there.
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '设置' });
@@ -68,7 +47,7 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   await createTask(page, '改 work.txt', 'FAKE:done FAKE:text=first');
   const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
   await card.getByRole('button', { name: '查看并验收' }).click();
-  const panel = page.getByRole('dialog', { name: '改 work.txt' });
+  const panel = taskPanel(page, '改 work.txt');
   await expect(panel.locator('.diff')).toContainText('first');
 
   await panel.getByRole('button', { name: '退回…' }).click();
@@ -89,8 +68,8 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
-test('a failed turn waits for the user to continue', async ({ page }) => {
-  await open(page);
+test('a failed turn waits for the user to continue', async ({ page, backend }) => {
+  await open(page, backend);
   await createTask(page, '会失败的任务', 'FAKE:fail');
   const card = page.locator('.attention .card').filter({ hasText: '失败，它停下等你决定' });
   await expect(card).toBeVisible();
@@ -103,7 +82,7 @@ test('a failed turn waits for the user to continue', async ({ page }) => {
   const stalled = page.locator('.attention .card').filter({ hasText: '还没有完成' });
   await expect(stalled).toBeVisible();
   await stalled.getByRole('button', { name: '查看任务' }).click();
-  const panel = page.getByRole('dialog', { name: '会失败的任务' });
+  const panel = taskPanel(page, '会失败的任务');
   await expect(panel.locator('.now')).toHaveText('第 1 轮执行中，还没有交出候选成果。');
   await panel.getByRole('button', { name: '放弃' }).click();
   await expect(stalled).toBeHidden();
@@ -112,8 +91,8 @@ test('a failed turn waits for the user to continue', async ({ page }) => {
 // A Codex whose administrator does not allow full access refuses to start. One click switches
 // Codex to auto review and sends the brief again; the setting stays until the user changes it
 // back (harness-adapter.md §1.9).
-test('a managed Codex goes on after switching to auto review', async ({ page }) => {
-  await open(page);
+test('a managed Codex goes on after switching to auto review', async ({ page, backend }) => {
+  await open(page, backend);
   await createTask(page, '受管环境的任务', 'FAKE:managed FAKE:done');
   const card = page.locator('.attention .card').filter({ hasText: '没能启动' });
   await expect(card).toContainText('不允许 Codex 以「完全放开」运行');
@@ -136,15 +115,15 @@ test('a managed Codex goes on after switching to auto review', async ({ page }) 
   await settings.getByRole('button', { name: '关闭' }).click();
 
   await accept.getByRole('button', { name: '查看并验收' }).click();
-  const panel = page.getByRole('dialog', { name: '受管环境的任务' });
+  const panel = taskPanel(page, '受管环境的任务');
   await panel.getByRole('button', { name: '验收', exact: true }).click();
   await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
 // A message sent while the executor's turn finishes the task never reaches the executor. It
 // does not slip away at acceptance: the user lets it go explicitly (#14).
-test('a message the executor never got waits for the user at acceptance', async ({ page }) => {
-  await open(page);
+test('a message the executor never got waits for the user at acceptance', async ({ page, backend }) => {
+  await open(page, backend);
   await createTask(page, '补充要求的任务', 'FAKE:wait=2500 FAKE:done FAKE:text=v1');
   await expect(page.getByRole('button', { name: '中断' })).toBeVisible();
   const composer = page.getByLabel('消息');
@@ -156,7 +135,7 @@ test('a message the executor never got waits for the user at acceptance', async 
   // The composer says the same: closing the task does not deliver them (#15).
   await expect(composer).toHaveAttribute('placeholder', /退回后交给 Malkuth；直接验收则不再投递/);
   await card.getByRole('button', { name: '查看并验收' }).click();
-  const panel = page.getByRole('dialog', { name: '补充要求的任务' });
+  const panel = taskPanel(page, '补充要求的任务');
   await expect(panel.locator('.undelivered')).toContainText('异常行要能看到原始行号');
   await expect(panel.getByRole('button', { name: '验收', exact: true })).toHaveCount(0);
   await panel.getByRole('button', { name: '验收，不再投递这些消息' }).click();
@@ -167,8 +146,8 @@ test('a message the executor never got waits for the user at acceptance', async 
 
 // What a turn outside any task changed waits for the user; its done is shown as having no effect;
 // a task made from the changes carries them to the user's repository (#14).
-test('changes made outside any task become a task', async ({ page }) => {
-  await open(page);
+test('changes made outside any task become a task', async ({ page, backend }) => {
+  await open(page, backend);
   const composer = page.getByLabel('消息');
   await composer.fill('FAKE:done FAKE:text=outside');
   await composer.press('Enter');
@@ -184,18 +163,19 @@ test('changes made outside any task become a task', async ({ page }) => {
 
   const accept = page.locator('.attention .card').filter({ hasText: '「保留任务之外的改动」通过了验证' });
   await accept.getByRole('button', { name: '查看并验收' }).click();
-  const panel = page.getByRole('dialog', { name: '保留任务之外的改动' });
+  const panel = taskPanel(page, '保留任务之外的改动');
   await panel.getByRole('button', { name: '验收', exact: true }).click();
   await expect(panel.locator('.phase')).toHaveText('已完成');
-  const file = path.join(info().repo, 'work.txt');
-  await expect.poll(() => fs.readFileSync(file, 'utf8'), { timeout: 20_000 }).toBe('outside');
+  // The preview writes the file a moment after the acceptance; a fresh repository has none before.
+  const file = path.join(backend.repo, 'work.txt');
+  await expect.poll(() => fs.existsSync(file) && fs.readFileSync(file, 'utf8'), { timeout: 20_000 }).toBe('outside');
   await panel.getByRole('button', { name: '关闭' }).click();
 });
 
 // A command that writes a file through a heredoc takes a line or two until opened; search still
 // reaches its end (#14). Its whole text opens over the window and copies whole (#15).
-test('a long command stays short until opened', async ({ page }) => {
-  await open(page);
+test('a long command stays short until opened', async ({ page, backend }) => {
+  await open(page, backend);
   const composer = page.getByLabel('消息');
   // Forty items before it make the thread taller than the window.
   await composer.fill('FAKE:many=40 FAKE:longcmd');
@@ -247,8 +227,8 @@ test('a long command stays short until opened', async ({ page }) => {
 
 // Ctrl+F finds what the virtualized thread has not loaded, loads it and scrolls there
 // (frontend.md §4.1 "搜索").
-test('search goes to a match pages back', async ({ page }) => {
-  await open(page);
+test('search goes to a match pages back', async ({ page, backend }) => {
+  await open(page, backend);
   await createTask(page, '搜索目标任务', 'FAKE:many=250');
   // The turn is over: its brief is now more than a page above the newest item.
   await expect(page.locator('.attention .card').filter({ hasText: '还没有完成' })).toBeVisible();
@@ -269,10 +249,15 @@ test('search goes to a match pages back', async ({ page }) => {
 
 // On a slow machine an older page arrives later than the next render. Scrolling up must still
 // load page after page to the start (the baseline found it stuck at the top in CI).
-test('scrolling up on a slow machine loads every older page', async ({ page }) => {
+test('scrolling up on a slow machine loads every older page', async ({ page, backend }) => {
+  await open(page, backend);
+  // Three hundred items: the thread opens three pages after the task's brief.
+  await createTask(page, '很长的任务', 'FAKE:many=300');
+  await expect(page.locator('.attention .card').filter({ hasText: '还没有完成' })).toBeVisible();
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
-  await open(page);
+  await page.reload();
+  await expect(page.getByText('已连接')).toBeVisible();
   const reached = await page.evaluate(
     (marker) =>
       new Promise<boolean>((resolve) => {
@@ -288,7 +273,7 @@ test('scrolling up on a slow machine loads every older page', async ({ page }) =
         };
         step();
       }),
-    '任务：写 work.txt（第 1 轮执行）',
+    '任务：很长的任务（第 1 轮执行）',
   );
   expect(reached).toBe(true);
 });

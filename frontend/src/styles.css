@@ -11,7 +11,7 @@
   --warn-line: #f0c36d;
   --error: #c4332b;
   --ok: #2f8f4e;
-  --malkuth: #8a5a2b;
+  --agent: #8a5a2b;
   --mine: #e9eefc;
   --runtime: #f1efe9;
   --radius: 8px;
@@ -34,7 +34,7 @@
     --warn-line: #7a5f22;
     --error: #ff7b72;
     --ok: #5cc27e;
-    --malkuth: #d9a066;
+    --agent: #d9a066;
     --mine: #23304f;
     --runtime: #26262b;
     color-scheme: dark;
@@ -133,6 +133,7 @@ pre {
 .error {
   color: var(--error);
 }
+/* A small pill: a state, a phase, a kind. */
 .badge {
   display: inline-block;
   font-size: 11px;
@@ -140,6 +141,7 @@ pre {
   border-radius: 10px;
   background: var(--sunken);
   color: var(--muted);
+  white-space: nowrap;
 }
 .badge.passed {
   color: var(--ok);
@@ -270,7 +272,7 @@ pre {
   border: 1px solid var(--line);
 }
 .message.other .who {
-  color: var(--malkuth);
+  color: var(--agent);
   font-weight: 600;
 }
 .message.queued {
@@ -317,7 +319,6 @@ pre {
 .item.command.failed {
   border-left-color: var(--error);
 }
-.item.running,
 .running {
   color: var(--accent);
 }
@@ -335,7 +336,6 @@ pre {
   padding: 6px 8px;
   border-radius: 6px;
   margin-top: 4px;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .failure {
@@ -387,12 +387,6 @@ pre {
   color: var(--muted);
   font-size: 13px;
   margin: 4px 0;
-}
-.task-panel .undelivered {
-  border: 1px solid var(--warn-line);
-  background: var(--warn-bg);
-  border-radius: var(--radius);
-  padding: 8px 12px;
 }
 
 .composer {
@@ -485,20 +479,32 @@ pre {
   padding: 4px 0 8px;
 }
 .role-name {
-  color: var(--malkuth);
+  color: var(--agent);
   font-weight: 600;
 }
 .task-line {
   display: flex;
-  gap: 6px;
   align-items: center;
-  padding: 5px 6px;
   border-radius: 6px;
-  cursor: pointer;
 }
 .task-line:hover,
 .task-line.selected {
   background: var(--sunken);
+}
+/* The row opens the task: a button the width of the row, without a button's frame. */
+.task-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 6px;
+  border: none;
+  background: none;
+  text-align: left;
+}
+.task-open:focus-visible {
+  outline: 2px solid var(--accent);
 }
 .task-title {
   flex: 1;
@@ -508,13 +514,6 @@ pre {
 }
 .reorder button {
   padding: 0 3px;
-}
-.phase {
-  font-size: 11px;
-  padding: 0 6px;
-  border-radius: 10px;
-  background: var(--sunken);
-  white-space: nowrap;
 }
 .phase.executing {
   color: var(--accent);

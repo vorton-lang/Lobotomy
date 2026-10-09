@@ -179,7 +179,7 @@ fn a_candidate_rebased_onto_a_newer_version_is_written_into_the_slot() {
     let db = db();
     let (task, _) = candidate(&db);
     // Another candidate was accepted meanwhile; the integration version moved.
-    db.read(|c| Ok(c.execute("UPDATE project SET integration = 'newer'", [])?)).unwrap();
+    db.write(|c| Ok(c.execute("UPDATE project SET integration = 'newer'", [])?)).unwrap();
     verify(&db, &task, "merged", vec!["a.txt".into()], vec![]);
     assert_eq!(phase(&db, &task), Phase::Executing);
     let body = db.read(|c| queued_messages(c, ROLE)).unwrap().pop().unwrap().body;

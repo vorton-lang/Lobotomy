@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import type { Check, HarnessView, Permission, ProjectConfig } from '../api/types';
-import { bytes, HARNESS_LABEL, PERMISSION_LABEL } from '../format';
+import { bytes, harnessName, PERMISSION_LABEL } from '../format';
 import { call, run, setPermission, useStore } from '../store';
 import { Modal } from './common';
 
@@ -22,7 +22,7 @@ function Permissions({ harnesses }: { harnesses: HarnessView[] }) {
         每个 harness 单独设置，下一个 turn 生效。没有人回答审批请求，所以没有"手动审批"这一项。
       </p>
       {harnesses.map((h) => {
-        const name = HARNESS_LABEL[h.harness] ?? h.harness;
+        const name = harnessName(h.harness);
         return (
           <fieldset key={h.harness} className="choices">
             <legend>{name}</legend>

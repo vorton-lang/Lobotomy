@@ -99,39 +99,72 @@ pub fn occupant(conn: &Connection, role: &str) -> Result<Option<String>> {
     Ok(conn.query_row("SELECT task_id FROM occupancy WHERE role = ?1", [role], |r| r.get(0)).optional()?)
 }
 
+sql_enum! {
+    /// How an attempt ended.
+    pub enum AttemptEnd {
+        /// Its executor's done was captured as the candidate.
+        Candidate = "candidate",
+        Abandoned = "abandoned",
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Attempt {
     pub id: String,
     pub task_id: String,
     pub seq: i64,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub end_reason: Option<AttemptEnd>,
+    /// Where its code starts; `None` when the slot stayed as it was (data-model.md §4.3).
+    pub code_start: Option<String>,
     pub done_turn_id: Option<String>,
+    pub candidate_id: Option<String>,
     /// Files its code start left with conflict markers.
     pub conflicts: Vec<String>,
 }
 
-/// The task's open attempt, if any (data-model.md §4.1).
-pub fn open_attempt(conn: &Connection, task_id: &str) -> Result<Option<Attempt>> {
-    let row = conn
-        .query_row(
-            "SELECT id, task_id, seq, done_turn_id, conflicts FROM attempt WHERE task_id = ?1 AND ended_at IS NULL",
-            [task_id],
-            |r| {
-                let attempt = Attempt {
-                    id: r.get(0)?,
-                    task_id: r.get(1)?,
-                    seq: r.get(2)?,
-                    done_turn_id: r.get(3)?,
-                    conflicts: vec![],
-                };
-                Ok((attempt, r.get::<_, Option<String>>(4)?))
-            },
-        )
-        .optional()?;
-    row.map(|(mut attempt, conflicts)| {
+fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attempt>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, task_id, seq, started_at, ended_at, end_reason, code_start, done_turn_id, candidate_id, conflicts
+         FROM attempt WHERE task_id = ?1 {filter}"
+    ))?;
+    let rows = stmt.query_map([task_id], |r| {
+        let attempt = Attempt {
+            id: r.get(0)?,
+            task_id: r.get(1)?,
+            seq: r.get(2)?,
+            started_at: r.get(3)?,
+            ended_at: r.get(4)?,
+            end_reason: r.get(5)?,
+            code_start: r.get(6)?,
+            done_turn_id: r.get(7)?,
+            candidate_id: r.get(8)?,
+            conflicts: vec![],
+        };
+        Ok((attempt, r.get::<_, Option<String>>(9)?))
+    })?;
+    rows.map(|row| {
+        let (mut attempt, conflicts) = row?;
         attempt.conflicts = conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
         Ok(attempt)
     })
-    .transpose()
+    .collect()
+}
+
+/// The task's open attempt, if any (data-model.md §4.1).
+pub fn open_attempt(conn: &Connection, task_id: &str) -> Result<Option<Attempt>> {
+    Ok(attempts(conn, "AND ended_at IS NULL", task_id)?.pop())
+}
+
+/// The task's attempts, the first first.
+pub fn list_attempts(conn: &Connection, task_id: &str) -> Result<Vec<Attempt>> {
+    attempts(conn, "ORDER BY seq", task_id)
+}
+
+/// The task's latest attempt, open or ended.
+pub fn latest_attempt(conn: &Connection, task_id: &str) -> Result<Option<Attempt>> {
+    Ok(attempts(conn, "ORDER BY seq DESC LIMIT 1", task_id)?.pop())
 }
 
 pub fn criteria_text(conn: &Connection, task_id: &str, version: i64) -> Result<String> {
@@ -176,11 +209,19 @@ pub struct Message {
     pub source: String,
     pub task_id: Option<String>,
     pub body: String,
+    /// The turn it was delivered in, once bound.
+    pub turn_id: Option<String>,
+    pub created_at: i64,
 }
 
 /// Messages waiting in a role's inbox, in arrival order (data-model.md §3.4).
 pub fn queued_messages(conn: &Connection, role: &str) -> Result<Vec<Message>> {
     messages(conn, "role = ?1 AND state = 'queued'", role)
+}
+
+/// The messages a turn delivered, in arrival order.
+pub fn turn_messages(conn: &Connection, turn_id: &str) -> Result<Vec<Message>> {
+    messages(conn, "turn_id = ?1", turn_id)
 }
 
 /// The user's messages to a task that its executor has not got: sent after the executor reported
@@ -209,8 +250,9 @@ pub(crate) fn dropped_detail(messages: &[Message]) -> serde_json::Value {
 }
 
 fn messages(conn: &Connection, filter: &str, arg: &str) -> Result<Vec<Message>> {
-    let mut stmt =
-        conn.prepare(&format!("SELECT id, seq, role, source, task_id, body FROM message WHERE {filter} ORDER BY seq"))?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, seq, role, source, task_id, body, turn_id, created_at FROM message WHERE {filter} ORDER BY seq"
+    ))?;
     let rows = stmt.query_map([arg], |r| {
         Ok(Message {
             id: r.get(0)?,
@@ -219,6 +261,8 @@ fn messages(conn: &Connection, filter: &str, arg: &str) -> Result<Vec<Message>> 
             source: r.get(3)?,
             task_id: r.get(4)?,
             body: r.get(5)?,
+            turn_id: r.get(6)?,
+            created_at: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)

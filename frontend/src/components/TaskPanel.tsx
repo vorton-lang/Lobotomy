@@ -1,9 +1,10 @@
 // A task's detail over the thread: what the user asked, the criteria, the latest verification,
-// the candidate's changes, and the actions of its phase (data-model.md §9.2).
+// the candidate's changes, and the actions of its phase (data-model.md §9.2). It is a region of
+// the window, not a dialog: the thread and the sidebar stay usable while it is open.
 
 import { useState } from 'react';
-import type { CheckRunRow, Phase, TaskDetail, VerificationRow } from '../api/types';
-import { clock, PHASE_LABEL, shortSha, timeline, workRange } from '../format';
+import type { CheckRun, TaskDetail } from '../api/types';
+import { checkPassed, checkSummary, clock, PHASE_LABEL, shortSha, taskNow, timeline, VERIFICATION_LABEL, workRange } from '../format';
 import { run, selectTask, useStore } from '../store';
 import { Markdown, Modal, Output } from './common';
 import { DiffPool, DiffView } from './DiffView';
@@ -17,6 +18,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const [editing, setEditing] = useState(false);
   if (!task) return null;
   const close = () => selectTask(null);
+  const closed = task.phase === 'done' || task.phase === 'abandoned';
   const loaded = detail?.task.id === taskId ? detail : null;
   const verification = loaded?.verifications.at(-1);
   const criteria = loaded?.criteria.at(-1);
@@ -41,9 +43,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     });
 
   return (
-    <div className="task-panel" role="dialog" aria-label={task.title}>
+    <section className="task-panel" aria-label={task.title}>
       <header>
-        <span className={`phase ${task.phase}`}>{PHASE_LABEL[task.phase]}</span>
+        <span className={`badge phase ${task.phase}`}>{PHASE_LABEL[task.phase]}</span>
         <h2>{task.title}</h2>
         <button className="ghost" onClick={close} aria-label="关闭">
           ✕
@@ -58,21 +60,22 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             <button onClick={() => setSendingBack('')}>退回…</button>
           </>
         )}
-        {!['done', 'abandoned'].includes(task.phase) && (
+        {closed ? (
+          <button onClick={() => run('reopen', { task_id: task.id })}>重开</button>
+        ) : (
           <>
             <button onClick={() => run('set_paused', { task_id: task.id, paused: !task.paused })}>{task.paused ? '恢复' : '暂停'}</button>
             <button onClick={() => run('abandon', { task_id: task.id, reason: '用户放弃' })}>放弃</button>
           </>
         )}
-        {['done', 'abandoned'].includes(task.phase) && <button onClick={() => run('reopen', { task_id: task.id })}>重开</button>}
       </div>
       {!loaded ? (
         <p className="muted">正在加载…</p>
       ) : (
         <div className="panel-body">
-          <p className="now">{now(task.phase, latest?.seq, verification && !earlier ? verification.state : null)}</p>
+          <p className="now">{taskNow(task.phase, latest?.seq, verification && !earlier ? verification.state : null)}</p>
           {acceptable && undelivered.length > 0 && (
-            <section className="undelivered">
+            <section className="card warn undelivered">
               <h3>还有 {undelivered.length} 条消息没有交给执行者</h3>
               <p className="muted">它们排在执行者交出候选成果之后，候选成果没有处理它们。验收后，它们不会再投递。</p>
               {undelivered.map((m) => (
@@ -95,7 +98,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           <section>
             <h3>
               完成条件 <span className="muted">第 {criteria?.version} 版</span>
-              {!['done', 'abandoned'].includes(task.phase) && (
+              {!closed && (
                 <button className="small" onClick={() => setEditing(true)}>
                   修改
                 </button>
@@ -107,20 +110,20 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             <section className={earlier ? 'earlier' : ''}>
               <h3>
                 {earlier ? `上一轮的验证（第 ${verifiedRound} 轮）` : `验证（第 ${verifiedRound} 轮）`}{' '}
-                <span className={`badge ${verification.state}`}>{{ running: '进行中', passed: '通过', failed: '未通过' }[verification.state]}</span>
+                <span className={`badge ${verification.state}`}>{VERIFICATION_LABEL[verification.state]}</span>
               </h3>
               <p className="muted">
                 {earlier && `第 ${latest?.seq} 轮还没有验证。`}基于集成版本 {shortSha(verification.base)} · 检查设置第 {verification.config_version} 版 ·{' '}
                 {clock(verification.created_at)}
               </p>
-              {verification.conflicts?.length > 0 && <p className="error">冲突：{verification.conflicts.join('、')}</p>}
+              {verification.conflicts.length > 0 && <p className="error">冲突：{verification.conflicts.join('、')}</p>}
               {loaded.checks
                 .filter((c) => c.verification_id === verification.id)
                 .map((check) => (
                   <CheckView key={check.id} check={check} earlier={earlier} />
                 ))}
               {verification.state !== 'running' &&
-                !verification.conflicts?.length &&
+                verification.conflicts.length === 0 &&
                 !loaded.checks.some((c) => c.verification_id === verification.id) && (
                   <p className="muted">没有设置检查命令，验证只确认采集完整、没有冲突。可以在 ⚙ 设置里添加。</p>
                 )}
@@ -132,34 +135,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       )}
       {sendingBack !== null && <SendBack taskId={task.id} initial={sendingBack} onClose={() => setSendingBack(null)} />}
       {editing && criteria && <EditCriteria taskId={task.id} version={criteria.version} text={criteria.text} onClose={() => setEditing(false)} />}
-    </div>
+    </section>
   );
 }
 
-/** Where the task stands, in one line: which round, and what it waits for. */
-function now(phase: Phase, round: number | undefined, verification: VerificationRow['state'] | null): string {
-  switch (phase) {
-    case 'queued':
-      return round ? `排队中，轮到时开始第 ${round + 1} 轮执行。` : '排队中，还没有开始执行。';
-    case 'executing':
-      return `第 ${round} 轮执行中，还没有交出候选成果。`;
-    case 'verifying':
-      return verification === 'running' ? `第 ${round} 轮的候选成果正在验证。` : `第 ${round} 轮的候选成果等待验证。`;
-    case 'accepting':
-      return `第 ${round} 轮的候选成果通过了验证，等你验收。`;
-    case 'done':
-      return `已完成，验收的是第 ${round} 轮的候选成果。`;
-    case 'abandoned':
-      return '已放弃。';
-  }
-}
-
-function CheckView({ check, earlier }: { check: CheckRunRow; earlier: boolean }) {
-  const ok = !check.timed_out && check.exit_code === 0;
+function CheckView({ check, earlier }: { check: CheckRun; earlier: boolean }) {
+  const ok = checkPassed(check);
   return (
     <details className={`check ${ok ? 'ok' : 'failed'}`} open={!ok && !earlier}>
       <summary>
-        <code>{check.command}</code> · {check.timed_out ? '超时' : `退出码 ${check.exit_code}`} · {(check.duration_ms / 1000).toFixed(1)} 秒
+        <code>{check.command}</code> · {checkSummary(check)}
       </summary>
       <Output value={check.output.stdout} />
       <Output value={check.output.stderr} />

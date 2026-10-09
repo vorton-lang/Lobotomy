@@ -18,6 +18,7 @@ mod sql;
 pub mod task;
 pub mod turn;
 pub mod verify;
+pub mod view;
 pub mod workspace;
 
 pub use command::{Caller, Command, Cx};

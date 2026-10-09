@@ -1,4 +1,4 @@
-// The M1 window (frontend.md §2 "M1 的布局"): Malkuth's thread in the main area, what waits for
+// The M1 window (frontend.md §2 "M1 的布局"): the executor's thread in the main area, what waits for
 // the user and the Workboard on the right, a task's detail in a panel over the thread.
 
 import { useEffect, useState } from 'react';

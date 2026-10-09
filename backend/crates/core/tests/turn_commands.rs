@@ -70,7 +70,7 @@ fn a_session_runs_one_turn_at_a_time() {
     send(&db, "m1", "再看一下");
     assert_eq!(rejection(register(&db)), "turn_unfinished");
     // The database enforces it too.
-    let duplicate = db.read(|c| {
+    let duplicate = db.write(|c| {
         Ok(c.execute(
             "INSERT INTO turn (id, role, native_session_id, token, input, state, registered_at)
              SELECT 'turn_dup', role, native_session_id, 'tok_dup', '', 'registered', 0 FROM turn WHERE id = ?1",
@@ -235,7 +235,7 @@ fn a_running_turn_of_an_abandoned_task_blocks_the_next_task() {
     let start_b = StartAttempt { task_id: b.clone(), code_start: None };
     assert_eq!(rejection(db.execute(&Caller::Runtime, &start_b)), "turn_unfinished");
     // The database allows one unfinished turn per role, whatever the session.
-    let second = db.read(|c| {
+    let second = db.write(|c| {
         Ok(c.execute(
             "INSERT INTO native_session (id, role, harness, started_at) VALUES ('ns_other', 'Malkuth', 'codex', 0);
              ",
@@ -312,9 +312,9 @@ fn a_completed_session_without_a_harness_id_stops_the_role() {
 fn messages_wait_while_the_task_is_outside_execution_or_paused() {
     let db = db();
     let task = started_task(&db);
-    db.read(|c| Ok(c.execute("UPDATE task SET phase = 'verifying' WHERE id = ?1", [&task])?)).unwrap();
+    db.write(|c| Ok(c.execute("UPDATE task SET phase = 'verifying' WHERE id = ?1", [&task])?)).unwrap();
     assert_eq!(rejection(register(&db)), "not_executing");
-    db.read(|c| Ok(c.execute("UPDATE task SET phase = 'executing', paused = 1 WHERE id = ?1", [&task])?)).unwrap();
+    db.write(|c| Ok(c.execute("UPDATE task SET phase = 'executing', paused = 1 WHERE id = ?1", [&task])?)).unwrap();
     assert_eq!(rejection(register(&db)), "paused");
 }
 

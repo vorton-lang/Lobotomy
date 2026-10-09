@@ -5,14 +5,27 @@ import { useCallback, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { Connection, RequestFailed, type Status } from './api/connection';
 import { findBackend } from './bridge';
-import type { CommandRow, Item, LiveTurn, Message, Permission, Push, SearchMatch, Snapshot, TaskDetail, ThreadPage, Turn } from './api/types';
+import type {
+  CommandRecord,
+  Item,
+  LiveTurn,
+  Message,
+  Permission,
+  Push,
+  RoleView,
+  SearchMatch,
+  Snapshot,
+  TaskDetail,
+  ThreadPage,
+  Turn,
+} from './api/types';
 
 export interface ThreadState {
   role: string;
   items: Item[];
   turns: Record<string, Turn>;
   messages: Message[];
-  commands: Record<string, CommandRow>;
+  commands: Record<string, CommandRecord>;
   queued: Message[];
   hasMore: boolean;
   loaded: boolean;
@@ -42,14 +55,23 @@ interface State {
   snapshot: Snapshot | null;
   live: Record<string, LiveTurn>;
   thread: ThreadState;
+  /**
+   * The thread follows its end: new rows scroll into view. True while the user is at the end;
+   * scrolling up, or going to a search match, stops it.
+   */
+  following: boolean;
   selectedTask: string | null;
   taskDetail: TaskDetail | null;
   toasts: Toast[];
   search: SearchState | null;
 }
 
-/** M1 has one role in the main area (frontend.md §2 "M1 的布局"). */
-export const MAIN_ROLE = 'Malkuth';
+/** The role whose thread fills the main area. M1 has one, its executor (frontend.md §2 "M1 的布局"). */
+export function mainRole(snapshot: Snapshot | null): RoleView | undefined {
+  return snapshot?.roles.find((r) => r.kind === 'worker') ?? snapshot?.roles[0];
+}
+
+export const useMainRole = () => useStore((s) => mainRole(s.snapshot));
 
 const emptyThread = (role: string): ThreadState => ({
   role,
@@ -66,7 +88,8 @@ export const useStore = create<State>(() => ({
   status: 'connecting',
   snapshot: null,
   live: {},
-  thread: emptyThread(MAIN_ROLE),
+  thread: emptyThread(''),
+  following: true,
   selectedTask: null,
   taskDetail: null,
   toasts: [],
@@ -164,8 +187,10 @@ export function setPermission(harness: string, permission: Permission) {
   return act('set_permission', { harness, permission });
 }
 
+/** The snapshot names the main role, whose thread loads next. */
 async function reloadAll() {
-  await Promise.all([loadSnapshot(), loadNewestThread()]);
+  await loadSnapshot();
+  await loadNewestThread();
   const selected = useStore.getState().selectedTask;
   if (selected) await loadTaskDetail(selected);
 }
@@ -175,17 +200,30 @@ async function loadSnapshot() {
   useStore.setState({ snapshot, live: snapshot.live });
 }
 
+/** The newest page replaces the thread; the list follows its end again. */
 async function loadNewestThread() {
-  const role = useStore.getState().thread.role;
+  const role = mainRole(useStore.getState().snapshot)?.name;
+  if (!role) return;
   const page = await call<ThreadPage>('thread', { role });
-  useStore.setState({ thread: { ...mergePage(emptyThread(role), page, 'replace'), loaded: true } });
+  useStore.setState({ thread: { ...mergePage(emptyThread(role), page, 'replace'), loaded: true }, following: true });
 }
 
-export async function loadOlder() {
-  const thread = useStore.getState().thread;
-  if (!thread.hasMore || thread.items.length === 0) return;
-  const page = await call<ThreadPage>('thread', { role: thread.role, before: thread.items[0].seq });
-  useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'older') }));
+/** Called on every scroll; changes the state only when following starts or stops. */
+export function setFollowing(following: boolean) {
+  if (useStore.getState().following !== following) useStore.setState({ following });
+}
+
+let older: Promise<void> | null = null;
+
+/** Loads the page before the oldest item. A call while a page loads waits for that one. */
+export function loadOlder(): Promise<void> {
+  older ??= (async () => {
+    const thread = useStore.getState().thread;
+    if (!thread.hasMore || thread.items.length === 0) return;
+    const page = await call<ThreadPage>('thread', { role: thread.role, before: thread.items[0].seq });
+    useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'older') }));
+  })().finally(() => (older = null));
+  return older;
 }
 
 async function catchUp() {

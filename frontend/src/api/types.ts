@@ -1,5 +1,6 @@
-// What the backend's GUI service sends (backend/crates/lobotomyd/src/gui.rs). Field names follow
-// the Rust structs.
+// What the backend's GUI service sends: the read models of `lobotomy_core::view`
+// (backend/crates/core/src/view/) and what `backend/crates/lobotomyd/src/gui/` adds. Field names
+// follow the Rust structs.
 
 export type Phase = 'queued' | 'executing' | 'verifying' | 'accepting' | 'done' | 'abandoned';
 
@@ -48,6 +49,7 @@ export interface HarnessView {
 export interface Turn {
   id: string;
   role: string;
+  harness: string;
   task_id: string | null;
   attempt_id: string | null;
   input: string;
@@ -64,14 +66,20 @@ export interface Turn {
 export interface Verification {
   id: string;
   task_id: string;
+  attempt_id: string;
   capture_id: string;
+  /** The integration version the candidate was rebased onto. */
   base: string;
   config_version: number;
+  /** The rebased commit: the next integration version if the user accepts it. */
   commit_id: string | null;
   conflicts: string[];
   state: 'running' | 'passed' | 'failed';
+  created_at: number;
+  finished_at: number | null;
 }
 
+/** A task as stored. */
 export interface Task {
   id: string;
   title: string;
@@ -85,13 +93,17 @@ export interface Task {
   revision: number;
   created_at: number;
   closed_at: number | null;
+  /** For a task made from changes outside any task: their capture. */
+  origin_capture: string | null;
+}
+
+/** A task in the snapshot: the record and where its work stands. */
+export interface TaskView extends Task {
   attempt_seq: number | null;
   attempt_open: boolean;
   verification: Verification | null;
   /** The user's messages its executor never got; accepting needs the user to let them go. */
   undelivered_messages: number;
-  /** For a task made from changes outside any task: their capture. */
-  origin_capture: string | null;
 }
 
 export interface NewFile {
@@ -137,7 +149,7 @@ export interface Workspace {
 
 export interface RoleView {
   name: string;
-  kind: string;
+  kind: 'manager' | 'tech_lead' | 'worker' | 'reviewer';
   harness: string;
   model: string | null;
   slot: string | null;
@@ -178,24 +190,12 @@ export type Attention =
   | { kind: 'job_failed'; key: string; reason: string }
   | { kind: 'preview_stopped'; reason: string };
 
-export interface LiveItem {
-  kind: string;
-  content: Record<string, unknown>;
-  started_at: number;
-}
-
-export interface LiveTurn {
-  role: string;
-  started_at: number;
-  items: Record<string, LiveItem>;
-}
-
 export interface Snapshot {
   seq: number;
   project: Project | null;
   config: { version: number; config: ProjectConfig } | null;
   roles: RoleView[];
-  tasks: Task[];
+  tasks: TaskView[];
   attention: Attention[];
   quota: Domain[];
   harnesses: HarnessView[];
@@ -210,29 +210,93 @@ export interface BlobRef {
   tail: string;
 }
 
-export interface Item {
+/** A text field of an item; any of them goes to the blob store when it is large. */
+export type Text = string | BlobRef;
+
+/**
+ * What an item holds, by kind (backend/crates/harness/src/event.rs `ItemKind`). `input` marks
+ * where a turn's input was delivered; the messages it carried show on their own.
+ */
+export type ItemBody =
+  | { kind: 'input'; content: { source: string } }
+  | { kind: 'agent_message'; content: { text: Text } }
+  | { kind: 'reasoning'; content: { text: Text } }
+  | { kind: 'command'; content: { command: Text; output: Text | null; exit_code?: number | null; status?: string } }
+  | { kind: 'file_change'; content: { changes: { path: string; kind: string }[] | null; status?: string } }
+  | {
+      kind: 'mcp_call';
+      content: {
+        server: string;
+        tool: string;
+        arguments: unknown;
+        /** The first text the tool returned, and why the call failed; every adapter fills them. */
+        result_text: string | null;
+        error_text: string | null;
+        /** As the harness gave them, for display only. */
+        result?: unknown;
+        error?: unknown;
+        status?: string;
+      };
+    }
+  | { kind: 'web_search'; content: { query: Text } }
+  | { kind: 'todo_list'; content: { items: { text: string; completed: boolean }[] | null } }
+  | { kind: 'error'; content: { message: Text } }
+  /** A kind the adapter does not know: the harness's raw item. */
+  | { kind: 'other'; content: Record<string, unknown> };
+
+export type Item = ItemBody & {
   id: string;
   seq: number;
   turn_id: string;
-  kind: string;
-  content: Record<string, unknown>;
+  /** For a call to a Lobotomy tool: the command it ran. */
   command_id: string | null;
   created_at: number;
+};
+
+/** An item of a running turn: shown while it runs, never stored (frontend.md §3). */
+export type LiveItem = ItemBody & { started_at: number };
+
+export interface LiveTurn {
+  role: string;
+  started_at: number;
+  /** By the harness's item id. */
+  items: Record<string, LiveItem>;
 }
 
 export interface Message {
   id: string;
+  seq: number;
+  role: string;
+  /** The caller that sent it: `user`, `runtime` or `role:<name>`. */
   source: string;
   task_id: string | null;
   body: string;
+  /** The turn it was delivered in, once bound. */
   turn_id: string | null;
   created_at: number;
 }
 
-export interface CommandRow {
+export interface CommandRecord {
   name: string;
   args: Record<string, unknown>;
   result: unknown;
+}
+
+/** An executor's `org_report` (backend/crates/core/src/report.rs). */
+export interface ReportArgs {
+  title: string;
+  body: string;
+  status: 'progress' | 'blocked' | 'done';
+  blocked_on: string | null;
+}
+
+/** What a report changed; `late` and `no_task` changed nothing. */
+export type ReportEffect = 'recorded' | 'unchanged' | 'late' | 'no_task';
+
+export interface ReportRecord {
+  name: 'org_report';
+  args: ReportArgs;
+  result: ReportEffect;
 }
 
 export interface ThreadPage {
@@ -240,7 +304,7 @@ export interface ThreadPage {
   has_more: boolean;
   turns: Record<string, Turn>;
   messages: Message[];
-  commands: Record<string, CommandRow>;
+  commands: Record<string, CommandRecord>;
   queued: Message[];
 }
 
@@ -264,39 +328,51 @@ export interface FileChange {
   new: Content | null;
 }
 
-export interface CheckRunRow {
+export interface CheckRun {
   id: string;
   verification_id: string;
   seq: number;
   command: string;
   exit_code: number | null;
-  timed_out: number;
-  output: { stdout?: string | BlobRef; stderr?: string | BlobRef };
+  timed_out: boolean;
+  output: { stdout?: Text; stderr?: Text };
   duration_ms: number;
 }
 
 export interface Attempt {
   id: string;
+  task_id: string;
   seq: number;
   started_at: number;
   ended_at: number | null;
-  end_reason: string | null;
+  end_reason: 'candidate' | 'abandoned' | null;
+  /** Where its code starts; null when the slot stayed as it was. */
+  code_start: string | null;
+  done_turn_id: string | null;
   candidate_id: string | null;
+  /** Files its code start left with conflict markers. */
+  conflicts: string[];
 }
 
-export type VerificationRow = Omit<Verification, 'task_id'> & { created_at: number; finished_at: number | null; attempt_id: string };
+export interface Decision {
+  id: string;
+  kind: string;
+  actor: string;
+  detail: Record<string, unknown>;
+  created_at: number;
+}
 
 export interface TaskDetail {
-  task: Omit<Task, 'attempt_seq' | 'attempt_open' | 'verification' | 'undelivered_messages'>;
+  task: Task;
   criteria: { version: number; text: string; created_by: string; created_at: number }[];
   attempts: Attempt[];
   captures: Capture[];
-  verifications: VerificationRow[];
-  checks: CheckRunRow[];
-  decisions: { id: string; kind: string; actor: string; detail: Record<string, unknown>; created_at: number }[];
+  verifications: Verification[];
+  checks: CheckRun[];
+  decisions: Decision[];
   publications: { rev: number; commit_id: string; previous: string; created_at: number }[];
   /** The user's messages to the task that its executor never got (data-model.md §4.2). */
-  undelivered_messages: { id: string; body: string }[];
+  undelivered_messages: Message[];
 }
 
 export interface RemoteError {
@@ -304,8 +380,16 @@ export interface RemoteError {
   message: string;
 }
 
+/** An entry of the global event log: `<object>.<what happened>`, such as `task.created`. */
+export interface LogEvent {
+  seq: number;
+  kind: `${'attempt' | 'capture' | 'integration' | 'message' | 'native_session' | 'preview' | 'project' | 'report' | 'task' | 'turn' | 'verification' | 'workspace'}.${string}`;
+  entity: string;
+  payload: { task_id?: string | null } & Record<string, unknown>;
+}
+
 export type Push =
-  | { type: 'events'; events: { seq: number; kind: string; entity: string; payload: Record<string, unknown> }[] }
+  | { type: 'events'; events: LogEvent[] }
   | { type: 'live'; live: Record<string, LiveTurn> }
   | { type: 'thread'; role: string; seq: number }
   | { type: 'host' }

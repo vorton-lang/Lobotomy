@@ -1,6 +1,29 @@
-// Labels and pure transformations for display.
+// Labels and pure transformations for display. Components show what these return, so what the GUI
+// says is tested without rendering (#16).
 
-import type { Attention, BlobRef, Item, LiveItem, LiveTurn, Message, Permission, Phase, TaskDetail, Turn } from './api/types';
+import type {
+  Attention,
+  BlobRef,
+  Capture,
+  CheckRun,
+  CommandRecord,
+  Domain,
+  Item,
+  LiveItem,
+  LiveTurn,
+  Message,
+  Permission,
+  Phase,
+  ReportArgs,
+  ReportEffect,
+  ReportRecord,
+  RoleView,
+  TaskDetail,
+  TaskView,
+  Text,
+  Turn,
+  Verification,
+} from './api/types';
 import type { ThreadState } from './store';
 
 export const PHASE_LABEL: Record<Phase, string> = {
@@ -11,6 +34,17 @@ export const PHASE_LABEL: Record<Phase, string> = {
   done: '已完成',
   abandoned: '已放弃',
 };
+
+export const VERIFICATION_LABEL: Record<Verification['state'], string> = { running: '进行中', passed: '通过', failed: '未通过' };
+
+export const PERMISSION_LABEL: Record<Permission, string> = { full: '完全放开', auto_review: '自动审批' };
+
+const HARNESS_LABEL: Record<string, string> = { codex: 'Codex', claude: 'Claude' };
+
+/** A harness's product name, such as Codex for `codex`. */
+export function harnessName(harness: string): string {
+  return HARNESS_LABEL[harness] ?? harness;
+}
 
 export function clock(ms: number | null | undefined): string {
   if (!ms) return '';
@@ -40,10 +74,10 @@ export function isBlob(value: unknown): value is BlobRef {
   return typeof value === 'object' && value !== null && 'blob' in value;
 }
 
-/** Text of a field that may have gone to the blob store: the full text, or head and tail. */
-export function preview(value: unknown): { text: string; blob: BlobRef | null } {
-  if (isBlob(value)) return { text: `${value.head}\n…（共 ${bytes(value.size)}，已省略中间部分）…\n${value.tail}`, blob: value };
-  return { text: typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value, null, 2), blob: null };
+/** A text field as the thread shows it: whole, or the head and tail of one in the blob store. */
+export function textOf(value: Text | null | undefined): string {
+  if (value == null) return '';
+  return isBlob(value) ? `${value.head}\n…\n${value.tail}` : value;
 }
 
 /** Lines and characters an output shows before the rest goes behind "查看全文". */
@@ -62,6 +96,22 @@ export function lastLines(text: string, lines = SHOWN.tail, chars = SHOWN.chars)
 /** Whether a text is short enough to show whole. */
 export function fits(text: string): boolean {
   return text.length <= SHOWN.chars && text.split('\n').length <= SHOWN.head + SHOWN.tail;
+}
+
+/** A command's first line shows at most this many characters while folded. */
+const COMMAND_LINE = 120;
+
+/**
+ * How a command shows folded (#14): a short one whole; a long one, such as a heredoc that writes a
+ * file, by its first line, with its size.
+ */
+export function commandSummary(raw: Text | null | undefined): { line: string; size: string | null } {
+  const command = isBlob(raw) ? raw.head : (raw ?? '');
+  const lines = command.split('\n');
+  if (!isBlob(raw) && lines.length === 1 && command.length <= COMMAND_LINE) return { line: command, size: null };
+  const line = lines[0].length > COMMAND_LINE ? `${lines[0].slice(0, COMMAND_LINE)}…` : lines[0];
+  const size = isBlob(raw) ? `${raw.size} 个字符` : `共 ${lines.length} 行，${command.length} 个字符`;
+  return { line, size };
 }
 
 export function sourceLabel(source: string): string {
@@ -91,6 +141,90 @@ export function abnormalEnd(turn: Turn): string {
   return '失败';
 }
 
+/** What the role does now, in a few words, for its line in the Workboard. */
+export function roleActivity(role: RoleView, task: TaskView | undefined, now: number): string {
+  const turn = role.unfinished;
+  if (turn?.state === 'running' && turn.started_at) return `正在跑 turn · ${elapsed(turn.started_at, now)}`;
+  if (turn) return turn.state === 'unknown' ? '上一个 turn 状态未知' : '即将开始 turn';
+  if (role.hold) return '停下，等你决定';
+  if (role.outside) return '任务之外有改动，等你决定';
+  if (role.stalled) return 'turn 已结束，任务还没完成，等你发消息';
+  if (role.workspace?.state === 'materializing') return '正在准备工作目录';
+  if (task) return PHASE_LABEL[task.phase];
+  return '空闲';
+}
+
+/**
+ * Where a message to the role goes, said before it is sent. While the role works on a task, the
+ * message belongs to it; outside execution it waits for the task to return to execution, and
+ * accepting the task lets it go (data-model.md §4.2, #14, #15).
+ */
+export function composerHint(role: string, task: TaskView | undefined): string {
+  if (!task) return `发给 ${role}（不属于任何任务）`;
+  if (task.phase === 'executing') return `发给 ${role} · 任务「${task.title}」`;
+  if (task.phase === 'verifying') {
+    return `任务「${task.title}」正在验证。消息先排队，任务回到执行时交给 ${role}；验收前要你决定退回还是不再投递`;
+  }
+  return `任务「${task.title}」等你验收。消息先排队，退回后交给 ${role}；直接验收则不再投递`;
+}
+
+/** Where the task stands, in one line: which round, and what it waits for. */
+export function taskNow(phase: Phase, round: number | undefined, verification: Verification['state'] | null): string {
+  switch (phase) {
+    case 'queued':
+      return round ? `排队中，轮到时开始第 ${round + 1} 轮执行。` : '排队中，还没有开始执行。';
+    case 'executing':
+      return `第 ${round} 轮执行中，还没有交出候选成果。`;
+    case 'verifying':
+      return verification === 'running' ? `第 ${round} 轮的候选成果正在验证。` : `第 ${round} 轮的候选成果等待验证。`;
+    case 'accepting':
+      return `第 ${round} 轮的候选成果通过了验证，等你验收。`;
+    case 'done':
+      return `已完成，验收的是第 ${round} 轮的候选成果。`;
+    case 'abandoned':
+      return '已放弃。';
+  }
+}
+
+export function checkPassed(check: CheckRun): boolean {
+  return !check.timed_out && check.exit_code === 0;
+}
+
+/** A check's result in one line: its exit code or the timeout, and how long it ran. */
+export function checkSummary(check: CheckRun): string {
+  return `${check.timed_out ? '超时' : `退出码 ${check.exit_code}`} · ${(check.duration_ms / 1000).toFixed(1)} 秒`;
+}
+
+/** A blocked quota domain, in one line (data-model.md §8.7). */
+export function quotaNote(domain: Domain): string {
+  const reset = domain.resets_at ? ` · ${clock(domain.resets_at)} 重置` : ' · 重置时间未知';
+  return `额度不足（${harnessName(domain.harness)}）${reset} · 等待手动重试`;
+}
+
+/** What a capture the runtime stopped holds back, one line per path. */
+export function stoppedPaths(capture: Capture): string[] {
+  if (capture.state === 'oversized') return (capture.detail?.files ?? []).map((f) => `${f.path}（${bytes(f.size)}）`);
+  return (capture.detail?.paths ?? []).map((p) => `${p.path}（${p.kind}）`);
+}
+
+export const REPORT_LABEL: Record<ReportArgs['status'], string> = { progress: '进展', blocked: '需要你决定', done: '完成' };
+
+/** Why a report the backend recorded changed nothing (#14). */
+const VOID_REPORT: Partial<Record<ReportEffect, string>> = {
+  late: '这次报告没有生效：它所属的执行轮已经结束，报告没有推进任务。',
+  no_task: '这次报告没有生效：这个 turn 不属于任何任务，报告没有推进任务。它做的改动不会被验收或发布，要保留就建成任务。',
+};
+
+/** The report a Lobotomy tool call recorded, if it was one. */
+export function asReport(record: CommandRecord | undefined): ReportRecord | null {
+  return record?.name === 'org_report' ? (record as unknown as ReportRecord) : null;
+}
+
+/** Why the report changed nothing, or `null` when it took effect: what it did, not what it asked for (#14). */
+export function voidReport(report: ReportRecord): string | null {
+  return VOID_REPORT[report.result] ?? null;
+}
+
 /** A stable key for a card that waits for the user: a card keeps its draft while others come and go (#16). */
 export function attentionKey(a: Attention): string {
   switch (a.kind) {
@@ -115,10 +249,6 @@ export function attentionKey(a: Attention): string {
   }
 }
 
-export const HARNESS_LABEL: Record<string, string> = { codex: 'Codex', claude: 'Claude' };
-
-export const PERMISSION_LABEL: Record<Permission, string> = { full: '完全放开', auto_review: '自动审批' };
-
 /**
  * The note a continue put in front of the turn's input, without the queued messages after it;
  * those show as messages of their own. The format is the backend's (`register` in turn.rs).
@@ -137,7 +267,7 @@ export type Row =
   | { key: string; kind: 'input'; turn: Turn; note: string }
   | { key: string; kind: 'item'; item: Item }
   | { key: string; kind: 'live'; turnId: string; itemId: string; item: LiveItem }
-  | { key: string; kind: 'running'; turnId: string; since: number }
+  | { key: string; kind: 'running'; turnId: string; role: string; since: number }
   | { key: string; kind: 'queued'; message: Message };
 
 /**
@@ -170,7 +300,7 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
   for (const [turnId, turn] of Object.entries(live)) {
     if (turn.role !== thread.role) continue;
     const items = Object.entries(turn.items);
-    if (items.length === 0) rows.push({ key: `running-${turnId}`, kind: 'running', turnId, since: turn.started_at });
+    if (items.length === 0) rows.push({ key: `running-${turnId}`, kind: 'running', turnId, role: turn.role, since: turn.started_at });
     for (const [itemId, item] of items) rows.push({ key: `live-${turnId}-${itemId}`, kind: 'live', turnId, itemId, item });
   }
   for (const message of thread.queued) rows.push({ key: `queued-${message.id}`, kind: 'queued', message });
@@ -218,7 +348,7 @@ export function timeline(detail: TaskDetail): TimelineEntry[] {
   for (const v of detail.verifications) {
     add(v.created_at, 0, `第 ${round(v.attempt_id)} 轮的候选成果开始验证，基于集成版本 ${shortSha(v.base)}`);
     if (v.state !== 'running') {
-      const result = v.state === 'passed' ? '通过' : v.conflicts?.length ? '未通过：有冲突' : '未通过';
+      const result = v.state === 'passed' ? '通过' : v.conflicts.length ? '未通过：有冲突' : '未通过';
       add(v.finished_at, 0, `第 ${round(v.attempt_id)} 轮的验证${result}`);
     }
   }

@@ -90,7 +90,7 @@ fn the_database_allows_one_open_attempt_per_task_and_one_occupant_per_role() {
     let a = create(&db, "r1", "a");
     let b = create(&db, "r2", "b");
     start(&db, &a);
-    db.read(|c| {
+    db.write(|c| {
         let second_open =
             c.execute("INSERT INTO attempt (id, task_id, seq, started_at) VALUES ('att_dup', ?1, 2, 0)", [&a]);
         assert!(second_open.is_err(), "a second open attempt must violate the unique index");
