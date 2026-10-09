@@ -10,7 +10,10 @@
 //   FAKE:fail     ends the turn with an error
 //   FAKE:quota    the session limit: a refused rate_limit_event, Claude Code's made-up error
 //                 message, and a result with status 429 (data-model.md §8.3)
-//   FAKE:sleep    starts a command and waits; Ctrl+C ends it without a result
+//   FAKE:sleep    starts a command and waits; Ctrl+C ends it with an error result, as Claude does
+//   FAKE:textstream=<s>  a reply that streams for s seconds, a line every 20 ms; each line carries
+//                 the time it was written, so the GUI's lag can be measured (perf-baseline.md)
+//   FAKE:marker=<w>  the turn's last reply is "bench <w>"
 //   otherwise     completes the turn with a message
 // Flags placed before Claude's own arguments change the process itself:
 //   --fake-start-error  rejects its arguments: an error on stderr, nothing on stdout, exit code 1
@@ -98,7 +101,11 @@ if (input.includes('FAKE:quota')) {
 }
 
 if (input.includes('FAKE:sleep')) {
-  process.on('SIGINT', () => process.exit(130));
+  // Claude Code 2.1.283 ends an interrupted turn with an error result (2026-10-10).
+  process.on('SIGINT', () => {
+    emit({ type: 'result', subtype: 'error_during_execution', is_error: true, stop_reason: 'tool_use' });
+    process.exit(130);
+  });
   message({ type: 'tool_use', id: 'toolu_sleep', name: 'PowerShell', input: { command: 'sleep' } });
   await new Promise(r => setTimeout(r, 120_000));
   process.exit(0);
@@ -116,6 +123,26 @@ if (input.includes('FAKE:done')) {
   tool('Read', { file_path: file }, `1\t${fs.readFileSync(file, 'utf8')}`);
   await report({ title: '完成', body: '写了 work.txt', status: 'done' });
 }
+
+const stream = /FAKE:textstream=(\d+)/.exec(input);
+if (stream) {
+  const id = `msg_fake_${messages++}`;
+  const until = Date.now() + Number(stream[1]) * 1000;
+  let text = '';
+  emit({ type: 'stream_event', event: { type: 'message_start', message: { id, type: 'message', role: 'assistant', content: [] } }, parent_tool_use_id: null });
+  emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text' } }, parent_tool_use_id: null });
+  for (let n = 0; Date.now() < until; n++) {
+    const line = `tick ${n} at ${Date.now()}\n`;
+    text += line;
+    emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: line } }, parent_tool_use_id: null });
+    await new Promise(r => setTimeout(r, 20));
+  }
+  emit({ type: 'assistant', message: { id, type: 'message', role: 'assistant', content: [{ type: 'text', text }] }, parent_tool_use_id: null });
+  emit({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 }, parent_tool_use_id: null });
+}
+
+const marker = /FAKE:marker=(\S+)/.exec(input);
+if (marker) message({ type: 'text', text: `bench ${marker[1]}` });
 
 message({ type: 'text', text: 'finished' });
 emit({ type: 'result', subtype: 'success', is_error: false, result: 'finished', usage: { input_tokens: 1, output_tokens: 1 } });

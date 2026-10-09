@@ -14,7 +14,7 @@ npm run bench
 
 脚本会先编译 release 版后端和前端的生产构建，再运行场景。
 
-- **被测对象**：前端用生产构建，由 `vite preview` 提供；后端是 release 构建，接假 Codex（`backend/crates/lobotomyd/tests/fixtures/fake-bench.mjs`）。数据都是合成的，内容固定，所以不同次运行的结果可以比较。
+- **被测对象**：前端用生产构建，由 `vite preview` 提供；后端是 release 构建，接假 Codex（`backend/crates/lobotomyd/tests/fixtures/fake-bench.mjs`）和假 Claude（`fake-claude.mjs`）。数据都是合成的，内容固定，所以不同次运行的结果可以比较。
 - **浏览器**：Windows 上用本机 Edge，其他平台用 Playwright 自带的 Chromium（需要先运行 `npx playwright install chromium`）。两者都基于 Chromium，内存数据取自 DevTools 协议。默认无头运行。
 - **结果**：写入 `frontend/bench-results/`，不提交。参考数据记在本文 §3。
 - **CI**：每次推送到 main，在 Windows 和 Ubuntu 的 GitHub 托管机器上各运行一次（`.github/workflows/ci.yml`）。结果写在 job 的摘要里，并作为 artifact 保留；只记录，不设门槛。共享机器的数据波动大，所以 §3 的本机数据仍是参考。
@@ -32,6 +32,7 @@ npm run bench
 | 十万行输出 | 在查看器中打开全文，测到第一行出现的时间；再按 Ctrl+End，测到最后一行出现的时间 |
 | 流式更新 | 一条命令运行 8 秒，每 20 ms 更新一次输出。每行带有写入时间，测屏幕比输出落后多少；同时测帧间隔、长任务，以及期间打字的输入延迟 |
 | 后端重启 | 杀掉后端，在同一端口重启。测后端开始监听后，GUI 多久重新连上、对话多久恢复 |
+| Claude 的流式回复 | 在设置中把 Malkuth 切换到 Claude。一条回复流式输出 8 秒，每 20 ms 一行，每行带有写入时间。测屏幕比回复落后多少，同时测帧间隔、长任务和期间打字的输入延迟。测完切回 Codex。放在最后，因为它让对话末尾多出很长一条回复 |
 
 没有闭合的 Markdown 只检查一件事：它要按 Markdown 渲染出来，而不是退回纯文本。
 
@@ -49,6 +50,7 @@ npm run bench
 | 十万行输出 | 查看器 88–112 ms 显示第一行；Ctrl+End 后 160 ms 显示最后一行；没有长任务；堆 12.9 MB |
 | 流式更新 | 屏幕落后输出：中位数 18–19 ms，p95 28–34 ms，最大 41–137 ms；帧间隔最大 9.7 ms；没有长任务；期间打字中位数 5.5–5.9 ms |
 | 后端重启 | 后端 180 ms 内开始监听，GUI 再过约 330 ms 重新连上，对话随即恢复 |
+| Claude 的流式回复 | 屏幕落后回复：中位数 14–20 ms，p95 28–29 ms，最大 31–42 ms；帧间隔最大 10.4 ms；没有长任务；期间打字中位数 5.5–6.4 ms。同一台机器，2026-10-10 连续两次运行，M2 加入 |
 
 ## 4. 测量中弄清的两件事
 
@@ -74,7 +76,6 @@ npm run bench
 |---|---|
 | 多个 agent 同时流式输出 | M1 只有 Malkuth；M3 加入 Angela 后补上 |
 | 会话切换 | M1 只有一个 Thread；Inspector 做出来后补上 |
-| Claude 的流式文本 | M2 接入 Claude 后补上。Codex 的文本在完成时整块到达 |
 | 窗口中的按键到呈现 | 见 §4 |
 | 客户端读得慢时的重新同步 | 后端测试已覆盖：落后超过推送缓冲的客户端会收到 `resync`（`backend/crates/lobotomyd/tests/gui.rs`）。GUI 收到后重新取快照的耗时，与"刷新后再打开"相近，没有单独测 |
 | macOS 上的数据 | CI 只在 Windows 和 Ubuntu 上运行 |

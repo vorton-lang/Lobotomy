@@ -483,7 +483,7 @@ async fn a_large_field_is_stored_even_when_its_blob_cannot_be_written() {
 #[ignore = "runs a real Codex turn"]
 async fn a_real_codex_turn_reports_done() {
     let dir = tempfile::tempdir().unwrap();
-    let backend = start_with(dir.path(), real_codex()).await;
+    let backend = start_with(dir.path(), real_clis()).await;
     let db = backend.project.db.clone();
     db.execute(
         &Caller::User,
@@ -522,6 +522,131 @@ async fn a_real_codex_turn_reports_done() {
     assert_eq!(git(&slot(dir.path()), &["status", "--porcelain", "--untracked-files=all"]), "?? hello.txt");
     let task = turn.task_id.clone().unwrap();
     phase(&db, &task, Phase::Accepting).await;
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// One real Claude turn on the user's subscription, on the smallest model: the role writes a file
+/// and reports done through the turn's MCP configuration (M2).
+#[tokio::test]
+#[ignore = "runs a real Claude Code turn"]
+async fn a_real_claude_turn_reports_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start_with(dir.path(), real_clis()).await;
+    let db = backend.project.db.clone();
+    on_claude(&db);
+    db.write(|tx| Ok(tx.execute("UPDATE role SET model = 'haiku' WHERE name = 'Malkuth'", [])?)).unwrap();
+    db.execute(
+        &Caller::User,
+        &CreateTask {
+            request_id: "c1".into(),
+            title: "创建 hello.txt".into(),
+            body: "在工作目录中创建 hello.txt，内容只有一行：hi".into(),
+            criteria: "hello.txt 存在，内容为 hi".into(),
+            executor: "Malkuth".into(),
+        },
+    )
+    .unwrap();
+    let turn = ended_turn(&db).await;
+    let items: Vec<(String, Option<String>)> = db
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT kind, command_id FROM item WHERE turn_id = ?1 ORDER BY seq")?;
+            Ok(stmt.query_map([&turn.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    eprintln!("outcome {:?}, failure {:?}, items {items:?}", turn.outcome, turn.failure);
+    // A clean turn leaves no raw output. What is kept had lines the parser does not know.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    if let Ok(raw) = std::fs::read_to_string(backend.project.raw_output_path(&turn.id, "jsonl")) {
+        let mut parser = lobotomy_harness::claude::Parser::default();
+        for line in raw.lines() {
+            for event in parser.parse_line(line) {
+                if matches!(
+                    event,
+                    lobotomy_harness::event::Event::Unknown(_) | lobotomy_harness::event::Event::Unparsed(_)
+                ) {
+                    eprintln!("not known: {}", &line[..line.len().min(300)]);
+                }
+            }
+        }
+    }
+    // Role sessions persist so they can resume; this one is a test, so keep it out of the user's
+    // Claude history: its file is ~/.claude/projects/<the slot's path>/<session>.jsonl.
+    if let (Some(session), Some(home)) = (&turn.native_id, std::env::var_os("USERPROFILE").or(std::env::var_os("HOME")))
+    {
+        let projects = std::path::Path::new(&home).join(".claude").join("projects");
+        for project in std::fs::read_dir(&projects).into_iter().flatten().flatten() {
+            let file = project.path().join(format!("{session}.jsonl"));
+            if file.exists() {
+                eprintln!("deleted Claude session {session}: {:?}", std::fs::remove_file(&file));
+            }
+        }
+    }
+    assert_eq!((turn.harness.as_str(), turn.outcome), ("claude", Some(Outcome::Completed)));
+    assert!(turn.done_at.is_some(), "the role reported done");
+    assert!(items.iter().any(|(kind, id)| kind == "mcp_call" && id.is_some()), "the call refers to its command record");
+    let hello = std::fs::read_to_string(slot(dir.path()).join("hello.txt")).unwrap();
+    assert_eq!(hello.trim(), "hi");
+    // Claude leaves nothing else in the slot that a capture would pick up.
+    assert_eq!(git(&slot(dir.path()), &["status", "--porcelain", "--untracked-files=all"]), "?? hello.txt");
+    let task = turn.task_id.clone().unwrap();
+    phase(&db, &task, Phase::Accepting).await;
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// A real Claude turn interrupted while its command runs ends as interrupted, and continuing resumes
+/// the same session (harness-adapter.md §1.3 rule 6, §1.7): the native interrupt on Claude (M2).
+#[tokio::test]
+#[ignore = "runs real Claude Code turns"]
+async fn a_real_claude_turn_is_interrupted_and_continued() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start_with(dir.path(), real_clis()).await;
+    let db = backend.project.db.clone();
+    on_claude(&db);
+    db.write(|tx| Ok(tx.execute("UPDATE role SET model = 'haiku' WHERE name = 'Malkuth'", [])?)).unwrap();
+    let body = "运行这条命令并等它结束：Start-Sleep -Seconds 120。然后报告完成。";
+    create_task(&db, body);
+
+    let turn = wait_for("the turn to run", || last(&db).filter(|t| t.state == TurnState::Running)).await;
+    let project = backend.project.clone();
+    wait_for("the command to run", || {
+        let live = project.live.lock().unwrap();
+        live.get(&turn.id).is_some_and(|t| t.items.values().any(|i| i.kind == "command")).then_some(())
+    })
+    .await;
+    let asked = Instant::now();
+    lobotomyd::runner::interrupt(&backend.project, &turn.id).await.unwrap();
+    let ended = ended_turn(&db).await;
+    eprintln!("ended {:?} after {:?}", ended.outcome, asked.elapsed());
+    let raw = std::fs::read_to_string(backend.project.raw_output_path(&ended.id, "jsonl")).unwrap_or_default();
+    for line in raw.lines().filter(|l| l.contains("\"type\":\"result\"")) {
+        eprintln!("result on Ctrl+C: {}", &line[..line.len().min(400)]);
+    }
+    assert_eq!(ended.outcome, Some(Outcome::Interrupted));
+    assert!(asked.elapsed() < Duration::from_secs(60), "Ctrl+C stopped the turn, not the command's end");
+    assert!(!lobotomy_harness::process::is_running(ended.pid.unwrap() as u32, ended.process_start.unwrap()));
+
+    wait_for("the role to hold", || db.read(|c| hold(c, "Malkuth")).unwrap()).await;
+    let reply = SendMessage {
+        request_id: "m1".into(),
+        role: "Malkuth".into(),
+        task_id: ended.task_id.clone(),
+        body: "不用再等了，直接报告完成。".into(),
+    };
+    db.execute(&Caller::User, &reply).unwrap();
+    db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
+    backend.project.wake.notify_one();
+    let next =
+        wait_for("the continued turn", || last(&db).filter(|t| t.id != ended.id && t.state == TurnState::Ended)).await;
+    eprintln!("continued {:?}, done {:?}", next.outcome, next.done_at);
+    if let (Some(session), Some(home)) = (&next.native_id, std::env::var_os("USERPROFILE").or(std::env::var_os("HOME")))
+    {
+        let projects = std::path::Path::new(&home).join(".claude").join("projects");
+        for project in std::fs::read_dir(&projects).into_iter().flatten().flatten() {
+            let _ = std::fs::remove_file(project.path().join(format!("{session}.jsonl")));
+        }
+    }
+    assert_eq!(next.native_id, ended.native_id, "continuing resumes the same session");
+    assert_eq!(next.outcome, Some(Outcome::Completed));
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
@@ -604,7 +729,7 @@ async fn abandoning_a_failed_task_lets_the_next_one_run() {
 #[ignore = "runs a real Codex call"]
 async fn a_real_quota_check_passes() {
     let dir = tempfile::tempdir().unwrap();
-    let host = Arc::new(Host::open(dir.path(), real_codex()).unwrap());
+    let host = Arc::new(Host::open(dir.path(), real_clis()).unwrap());
     host.db.block("codex", None, "test", now_ms()).unwrap();
     assert!(!host.retry("codex").await.unwrap().is_blocked());
 }
@@ -665,6 +790,25 @@ fn item_kinds(db: &Db, turn: &str) -> Vec<String> {
         Ok(stmt.query_map([turn], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
     })
     .unwrap()
+}
+
+/// Claude ends an interrupted turn with an error result. The user asked for the interruption, so
+/// the turn is interrupted, not failed: continuing it is the same choice as after Codex.
+#[tokio::test]
+async fn interrupting_a_claude_turn_ends_it_as_interrupted() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    on_claude(&db);
+    create_task(&db, "FAKE:sleep");
+
+    let turn = wait_for("the turn to run", || last(&db).filter(|t| t.state == TurnState::Running)).await;
+    // Give the fake time to install its SIGINT handler.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    lobotomyd::runner::interrupt(&backend.project, &turn.id).await.unwrap();
+    let ended = ended_turn(&db).await;
+    assert_eq!((ended.outcome, ended.failure), (Some(Outcome::Interrupted), None));
+    backend.shutdown(Duration::from_secs(5)).await;
 }
 
 /// The M1 chain on Claude: the runtime names the session, Claude reports done through the MCP

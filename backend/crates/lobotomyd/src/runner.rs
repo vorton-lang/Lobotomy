@@ -308,12 +308,14 @@ async fn drive(
         (Outcome::Failed, Some(failure))
     } else if seen.completed {
         (Outcome::Completed, None)
+    } else if interrupted {
+        // The user asked for it. Codex stops without a turn end event; Claude ends the turn with
+        // an error, which is the interruption, not a failure of its own.
+        (Outcome::Interrupted, None)
     } else if let Some(message) = seen.failed {
         // Codex's quota rejections are not known yet; they count as ordinary failures
         // (data-model.md §8.3).
         (Outcome::Failed, Some(Failure::new(FailureKind::Other, message)))
-    } else if interrupted {
-        (Outcome::Interrupted, None)
     } else if let Some(message) = seen.last_error {
         (Outcome::Failed, Some(Failure::new(FailureKind::Other, message)))
     } else {

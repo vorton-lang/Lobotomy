@@ -18,7 +18,7 @@
 | 里程碑 | 内容 |
 |---|---|
 | **M1 执行闭环**（完成） | 用户在 GUI 中给 Malkuth 建任务 → 执行 → 采集并固定成果 → 验证 → 用户验收 → 发布 → 物化预览。Rust 后端、SQLite 命令入口、Codex adapter、jj 采集与发布、Electron 界面、性能基线框架 |
-| **M2 第二个 harness** | Claude adapter，见下 |
+| **M2 第二个 harness**（完成，2026-10-10） | Claude adapter，见下 |
 | **M3 最小的全局 Angela** | 见下 |
 
 ### M2 第二个 harness
@@ -30,6 +30,12 @@
   - Malkuth 改用 Claude，走完 M1 的全链路；
   - 后端测试用假 Claude CLI 覆盖与 Codex 相同的场景；
   - MCP 契约测试、性能基线补上 Claude 的流式文本。
+- 完成情况（2026-10-10）：
+  - 真实 Claude（haiku）走完建任务、done、采集、验证到等待验收；中断后继续，resume 同一个会话。都写成了默认不运行的后端测试（harness-adapter.md §2）。
+  - 假 Claude 的后端测试覆盖与 Claude 有关的路径：完成到验收、续用会话、额度被拒只阻塞 Claude 的额度域、中断。采集、验证、验收等其余场景走同一套运行时代码，没有逐个复制一遍。
+  - 适配器接口：仍按 `Harness` 枚举匹配，没有抽象成 trait；自建的 API harness 可以做成同样形状的可执行程序（harness-adapter.md §1.3 第 7 条）。
+  - 设置中可以切换每个角色的 harness；MCP 契约测试与性能基线已补上。
+  - 没有验证：自动审批模式在受管环境中的表现（本机没有受管环境）；权限模式被拒时 Claude 的报错文字；`-p` 下额度被拒的实际形式；Linux 上的 Claude。
 
 ### M3 最小的全局 Angela
 
