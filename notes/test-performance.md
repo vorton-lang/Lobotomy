@@ -14,13 +14,13 @@ Playwright 原来用一个 worker 串行运行。现在用 `fullyParallel: true`
 
 ## 配对测量的条件
 
-基线是 main `b8f59a0275e8a6e23fc3c3b46263832986795b7c`。GUI 优化侧是在这个 SHA 上只改变 Playwright 调度；测试入口合并不改变生产后端，被撤回。后续 main 的 feature 和测试更新另行整合、验证，不混入这组提速数据。
+基线是 main `b8f59a0275e8a6e23fc3c3b46263832986795b7c`。GUI 优化测量提交为 `f6f1eb6258c15922a4d05ededc4be5e59956c687`，是在这个 SHA 上只改变 Playwright 调度；测试入口合并不改变生产后端，被撤回。后续 main 的 feature 和测试更新另行整合、验证，不混入这组提速数据。
 
 环境：Debian 13.6，x86_64，Xeon Platinum 8573C；CPU 配额为 4 核（`nproc` 显示 5），内存限制 16 GiB。Rust/Cargo 1.99.0，Node 24.19.0，Git 2.52.0，Playwright 1.63.0、Chromium 153.0.8010.12，Electron 44.5.1。编译使用 `CARGO_BUILD_JOBS=4`，仓库已有的 `line-tables-only` 调试信息设置不变。
 
-冷构建指空的 `backend/target`，Cargo registry 已缓存。增量构建指不改源码、不清 target。进程 wall time 用 Python `time.monotonic()` 包住完整命令，包含启动与退出。配对测试按顺序运行，不与编译重叠。两侧生产后端二进制的 SHA-256 完全相同：`dfc0b4752220b2e3ba69b2198163961c54597652e90428b8d81855b59ba4c2db`。Playwright 两次都启动 Vite，使用同一 Xvfb display、默认无头 Chromium，`ELECTRON_DISABLE_SANDBOX=1`，`trace: retain-on-failure`，无重试。
+冷构建指空的 `backend/target`，Cargo registry 已缓存。增量构建指不改源码、不清 target。进程 wall time 用 Python `time.monotonic()` 包住完整命令，包含启动与退出。配对测试按顺序运行，不与编译重叠。两侧生产后端二进制的 SHA-256 完全相同：`dfc0b4752220b2e3ba69b2198163961c54597652e90428b8d81855b59ba4c2db`。Playwright 配对运行均启动 Vite，使用同一 Xvfb display、默认无头 Chromium，`ELECTRON_DISABLE_SANDBOX=1`，`trace: retain-on-failure`，无重试。
 
-第一轮冷构建的前约半分钟还同时安装、验证前端；第二轮冷构建单独运行。因此冷构建数值只记录观察，不单独归因于本改动。GUI 的配对运行不含这段并发工作。Node、Chromium 和 Electron 的缓存保留，未在每次测试前重建。
+第一轮冷构建期间还并发准备前端依赖，运行类型检查、单测和前端构建；第二轮冷构建单独运行。因此冷构建数值只记录观察，不单独归因于本改动。GUI 的配对运行不含这段并发工作。Node、Chromium 和 Electron 的缓存保留，未在每次测试前重建。
 
 ## 结果
 
@@ -81,8 +81,14 @@ git --version
 
 ## 验证与限制
 
-最终验证结果待 main 整合后填写。
+测量基线 `b8f59a0`：后端全量 152 通过、4 个默认忽略；前端类型检查、19 个单元测试和生产构建通过。优化后的 GUI 全量为 16 通过、2 个默认跳过。
+
+整合 main `22e27df` 后：格式检查、Clippy `--workspace --all-targets --locked -- -D warnings`、后端构建、前端类型检查、20 个单元测试和生产构建通过。后端首轮全量中 `a_turn_left_registered_by_the_last_run_is_reconciled_as_interrupted` 重开临时项目时遇到锁占用；单独复验通过，再次全量得到 156 通过、4 个默认忽略（43.27 s）。该失败不在 GUI 测量阶段，本次没有改后端代码、测试或断言。
+
+已继续整合 main `ecb0b2a` 的 Claude 中断处理与新测试：后端全量 157 通过、6 个默认忽略；格式检查、Clippy 和后端构建通过。最新源码的全量 E2E 与两平台 CI 结果记录在 PR 描述及检查状态中，避免把较早 SHA 的通过结果写成最终提交的通过。未运行单独的 `npm run bench`：它测的是生产 GUI 的性能基线，配置仍为一个 worker，PR 的测试 CI 不运行该 job。
 
 真实 Codex/Claude 合约测试使用已登录的订阅，仓库默认忽略，本次没有运行。截图审阅场景仅在设置 `SCREENSHOT_DIR` 时运行，本次保持默认跳过。没有用这些局部或未运行项目代替全量默认测试。前端没有单独配置 lint 命令，类型检查、Vitest、生产构建和全量 Playwright 都需要单独运行。
+
+整合 feature 并运行 Clippy、增量构建后，target 为 2,941,513,002 B，node_modules 为 472,448,031 B，前端 dist 为 16,257,090 B。该 target 包含先前编译与 check 产物，不能与基线空 target 构建后的 2,212,622,315 B 直接比较并归因于测试调度。最终没有改依赖或 Rust 构建配置。
 
 这是一台共享云端 Linux 容器的一组配对数据，磁盘为 apparent size。它不代表 Windows、用户电脑或所有 CI runner 的性能。Windows 和 Ubuntu 的兼容性由现有 CI 的完整测试、Clippy、类型检查、构建及 E2E 验证；CI 的执行时间包含缓存和平台差异，不用它推导本机提速比例。
