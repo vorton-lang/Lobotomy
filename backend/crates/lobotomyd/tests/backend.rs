@@ -287,6 +287,9 @@ async fn a_failed_turn_holds_the_role_until_continue() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(last(&db).unwrap().id, failed.id, "held: no automatic turn after a failure");
 
+    // The GUI offers continuing once the role holds, after the capture of the failed turn. A busy
+    // machine may take longer than the wait above to capture it.
+    wait_for("the role to hold", || db.read(|c| hold(c, "Malkuth")).unwrap()).await;
     db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
     backend.project.wake.notify_one();
     let next =
@@ -564,6 +567,7 @@ async fn after_recovery_a_quota_failed_role_waits_for_the_user() {
     settle(&backend).await;
     assert_eq!(last(&db).unwrap().id, failed.id, "no automatic continue (data-model.md §8.5)");
 
+    wait_for("the role to hold", || db.read(|c| hold(c, "Malkuth")).unwrap()).await;
     db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
     backend.project.wake.notify_one();
     let next =

@@ -2,6 +2,15 @@
 resolver = "3"
 members = ["crates/core", "crates/harness", "crates/lobotomyd", "crates/store"]
 
+# Development and test builds. Line tables keep file and line in panics and backtraces. With full
+# debug info, each test binary carried a PDB of about 350 MB, and target/ grew past 35 GB.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies are not debugged here: no debug info.
+[profile.dev.package."*"]
+debug = false
+
 [workspace.package]
 edition = "2024"
 license = "MIT"
