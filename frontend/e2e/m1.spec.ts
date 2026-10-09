@@ -136,11 +136,13 @@ test('back to the latest after reading back', async ({ page, backend }) => {
   await expect(page.locator('.thread .message.other').last()).toContainText('finished');
   await expect(latest).toBeHidden();
 
-  // Just after new rows come, the list still goes to the end each time a row's height changes,
-  // such as when its Markdown is rendered (virtua's scrollToIndex, for about 150 ms). A scroll
-  // made then is undone, so scroll again until the list stays where it was scrolled to.
+  // Scroll up with the wheel, as the user does. Just after new rows come, the list still goes to
+  // the end each time a row's height changes, such as when its Markdown is rendered (virtua's
+  // scrollToIndex, for about 150 ms). A scroll made then is undone, so scroll again until the list
+  // stays where it was scrolled to.
+  await page.locator('.thread').hover();
   await expect(async () => {
-    await page.locator('.thread').evaluate((thread) => thread.scrollTo(0, 0));
+    await page.mouse.wheel(0, -100_000);
     await expect(latest).toHaveText('回到最新 ↓', { timeout: 1_000 });
   }).toPass();
   await createTask(page, '读历史时开始的任务', 'FAKE:done');
