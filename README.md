@@ -1,6 +1,6 @@
 # Lobotomy
 
-> 状态（2026-10-09）：M1 执行闭环已经可以运行。M2 及以后的内容（审查、Binah 与会议、Manager Angela）仍是规划草稿。
+> 状态（2026-10-09）：M1 执行闭环已经可以运行。下一步是 M2（接入 Claude Code）和 M3（最小的全局 Manager Angela），仍是规划草稿。
 
 一个长期在线、位于现有 coding harness 之上的 agent 组织运行时：用户主要与 Manager 协作，系统承载长期角色、原生 session、可恢复状态和组织级工作界面。
 
@@ -34,7 +34,7 @@ Claude Code 接入、审查和 Manager 还没有实现，见 [Roadmap](notes/roa
 - [Manager actions](notes/manager-actions.md)：向下转发、向上附件、记录、会议与对外操作
 - [Roles and tasks](notes/roles-and-tasks.md)：角色类型与具名角色、任务生命周期、Workboard
 - [Frontend](notes/frontend.md)：Electron 形态、布局、前后端协议与渲染选型
-- [Roadmap](notes/roadmap.md)：M1 执行闭环 → M2 审查 → M3 Binah 与会议 → M4 Angela
+- [Roadmap](notes/roadmap.md)：M1 执行闭环 → M2 第二个 harness（Claude）→ M3 最小的全局 Angela；其余按真实使用排序
 - [Ideas](notes/ideas.md)：暂不实现的小功能
 - 调研快照：[harness 接入与条款](notes/research/harness-interfaces.md)、[agent GUI 前端](notes/research/frontend-survey.md)；实测脚本见 `spikes/`
 - [HCI rationale](notes/hci-rationale.md)：人机协作研究节选

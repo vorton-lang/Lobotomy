@@ -66,7 +66,7 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
   | 输出 | 该 role 的全部产出，包括未呈现给用户的 |
   | 改动 | 按执行轮列出成果及其相对基线的 diff、采集记录。"撤销这一轮"推迟到 M1 之后（harness-adapter.md §4.1） |
   | 对话 | 一对一直接对话 |
-  | 操作 | 继续会话 / 存检查点后开新会话 / 切换模型 / 暂停 / 在官方应用中打开、交还（M4 之后） |
+  | 操作 | 继续会话 / 存检查点后开新会话 / 切换模型 / 暂停 / 在官方应用中打开、交还（待排，见 [roadmap.md](roadmap.md)） |
 
   Angela 的 Inspector 多一项"推测"。
 - **role play 只在展示层**：名字，以及每个角色一个标识色或头像。
@@ -75,7 +75,7 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
 - 主区是 Malkuth 的 Thread：用户的消息、它的回复与工具调用、汇报、运行时的消息（例如验证失败）。输入框直接发给 Malkuth。
 - 右侧栏照上面的设计：等你决定、Workboard。
 - 点开任务，看候选成果的 diff，在那里验收或退回。
-- M4 有了 Angela 以后，主区换成与她的对话，Malkuth 的 Thread 移进 Inspector。
+- M3 有了 Angela 以后，主区换成与她的对话，Malkuth 的 Thread 移进 Inspector。用户随时可以直接打开它：直接通路是常设的二等入口，不是临时方案（**语义更新**，[#23](https://github.com/vorton-lang/Lobotomy/issues/23)，用户确认，2026-10-09）。
 
 ## 3. 后端与前端的协议
 
@@ -135,7 +135,7 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
 
 ## 6. 未决
 
-- Thread 的单位、序号方案和 SQLite schema，在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论，结果写入 [data-model.md](data-model.md)。Thread 与会议的关系留到 M3。
+- Thread 的单位、序号方案和 SQLite schema，在 [#7](https://github.com/vorton-lang/Lobotomy/issues/7) 讨论，结果写入 [data-model.md](data-model.md)。Thread 与会议的关系留到会议阶段（roadmap.md 待排）。
 - 节流间隔、缓冲上限、分页大小、头尾预览行数等参数，待基线测量后确定。
 - 布局细节待原型验证。
 
@@ -217,7 +217,7 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
 - 不在对话末尾时，对话底部显示「回到最新」。末尾有新内容时，按钮写"有新内容"，并用强调色。点击后回到末尾，恢复跟随。从输入框发送消息后，对话也回到末尾。
 
 **权限模式**（2026-10-04，harness-adapter.md §1.9）：
-- ⚙ 设置的第一节是"权限"，每个 harness 一组：完全放开（默认）或自动审批。这一节属于本机，所有项目共用，选中即生效，不随项目设置的版本保存。M3 接入 Claude 后，Claude 单独一组。
+- ⚙ 设置的第一节是"权限"，每个 harness 一组：完全放开（默认）或自动审批。这一节属于本机，所有项目共用，选中即生效，不随项目设置的版本保存。M2 接入 Claude 后，Claude 单独一组。
 - turn 因权限模式不被允许而没能启动时，"等你决定"卡片说明原因，原始错误默认收起。当前是完全放开时，卡片提供「改用自动审批并继续」。
 - harness 没有开始的 turn，卡片注明"没有收到那次的内容，继续时会原样重新发送"。Thread 中这个 turn 标为"没能启动"。
 

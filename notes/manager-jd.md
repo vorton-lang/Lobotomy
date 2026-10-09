@@ -34,6 +34,13 @@
 
 原则上，Manager 是长期在线的角色；Tech Leader 和 Worker 按需调用。
 
+**语义更新**（[#23](https://github.com/vorton-lang/Lobotomy/issues/23)，用户确认，2026-10-09）：上图是默认路径，不是必经路径。
+
+- Manager 属于用户。全局只有一个 Manager，它跨项目工作，按需载入项目的上下文。
+- 用户可以直接打开 Tech Leader、Worker 的窗口。这条直接通路是常设的二等入口，不是临时方案。
+- 小事经过 Manager 只会多一层延迟，没有别的好处。所以用户自然选择 Manager，系统不强制。Manager 靠减轻用户的负担赢得委托，不靠垄断入口。
+- 用户直接操作之后，Manager 从平台的状态和事件中得知变化，不要求用户重述。
+
 ## 2. Manager 不是什么
 
 Manager 不是：
@@ -106,7 +113,7 @@ P(user wants immediate execution): medium
 
 ### 3.2 Upward information management
 
-Tech Lead / Worker 不应拥有无限直达用户的权限。
+Tech Lead / Worker 不应拥有无限直达用户的权限：它们的产出默认经 Manager 判断后才呈现给用户。用户自己打开它们的窗口不受这条限制（见 §1 的语义更新）。
 
 Manager 需要判断每条下层信息：
 

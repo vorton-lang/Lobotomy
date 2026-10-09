@@ -74,6 +74,8 @@ Manager 不需要逐条表态，只有"暂缓"需要显式调用。
 
 ## 3. 记录（ledger）
 
+记录由 Lobotomy 保存。Manager 的长期记忆不依赖 harness 自带的记忆，也不依赖原生会话的上下文：harness 和模型会换，它们的上下文窗口和注意力也不同（用户确认，2026-10-09；方向见 [#22](https://github.com/vorton-lang/Lobotomy/issues/22)）。
+
 ### 3.1 与运行时状态分开
 
 | 类型 | 内容 | 写入方 |
@@ -139,7 +141,7 @@ TL / Worker 各自通过 `org_checkpoint` 写语义检查点，因为它们最�
 ### 4.3 其他形式
 
 - **一对一**：在 Inspector 中直接与某个 role 对话，等同于只有用户与该 role 的会议。Manager 不参会，结束后运行时把完整记录作为事件交给 Manager。
-- **在官方应用中接管**（M4 之后，见 [roadmap.md](roadmap.md)）：Inspector 中点"在官方应用中打开"后，该 role 标记为"已被用户接管"，暂停投递；点"交还"后恢复。运行时只告诉 Manager 接管发生的时段。
+- **在官方应用中接管**（待排，见 [roadmap.md](roadmap.md)）：Inspector 中点"在官方应用中打开"后，该 role 标记为"已被用户接管"，暂停投递；点"交还"后恢复。运行时只告诉 Manager 接管发生的时段。
 - 如果实际使用中发现会上被否决的方案污染了主会话，再改为 fork 方案：会议在各 role 的 fork 中进行，结束后只把收尾消息带回主会话。
 
 ## 5. 对外操作

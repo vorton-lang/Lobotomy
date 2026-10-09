@@ -8,7 +8,8 @@
 ## 0. 原则
 
 - **机械操作归运行时，判断归 Manager。** Manager 是 agent，会犯错；能用确定性规则完成的事不经过它，它只收到事件用于知情。
-- **只按正常方式调用官方 CLI。** 不依赖 Claude Agent SDK、Codex SDK / app-server 或 ACP adapter。订阅绑定官方入口，正常调用 CLI 与用户手动使用一致。CLI 做不到的，由 Lobotomy 的 MCP 服务提供。
+- **只按正常方式调用官方 CLI。** 不依赖 Claude Agent SDK、Codex SDK / app-server 或 ACP adapter。订阅绑定官方入口，正常调用 CLI 与用户手动使用一致。CLI 做不到的，由 Lobotomy 的 MCP 服务提供。例外：官方 CLI 担任 Angela 表现不佳时，可以改用自建的 API harness（用户确认，2026-10-09）。
+- **角色不绑定 harness。** 每个 role 使用哪个 harness 由配置决定，Angela 也一样。外部测试者没有 Claude，所有 role 都要能在 Codex 上运行（用户确认，2026-10-09）。
 - **不依赖平台特有行为。** 能力取 Windows 与 Linux 的交集。先在 Windows 上开发运行，正式发版前集中修 Linux 问题。下文标为"Windows 实测"的细节属于平台适配层，不是设计依赖。
 - **不依赖 harness 的权限系统。** 默认关闭审批与沙箱。管理员不允许时，用户可以把这个 harness 改为自动审批。没有人工审批（1.9，**语义更新**）。安全靠结构：成果采集可恢复、后端与开发副本分离、对外能力裁剪。
 - **harness 自己的日志和会话文件不管理。**
@@ -65,7 +66,7 @@ Codex（消息经 stdin，位置参数为 -）
    - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"只核对 CLI 是否已经退出，见 [data-model.md](data-model.md) §3.3。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
    - harness 自己的格式只在适配层里解析。MCP 调用的结果由适配层整理成 `result_text`（工具返回的第一段文字）和 `error_text`（调用失败的原因）；运行时和 GUI 只读这两个字段（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
-   - 按 harness 不同的代码都对 `Harness` 枚举做匹配。M3 加入 Claude 时，编译器会指出每一处。适配器的接口等拿到 Claude 的真实输出后再定。
+   - 按 harness 不同的代码都对 `Harness` 枚举做匹配。M2 加入 Claude 时，编译器会指出每一处。适配器的接口等拿到 Claude 的真实输出后再定。
 8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。同一 attempt 内接续时，运行时只新建 turn，不新建 attempt（[data-model.md](data-model.md) §3.1、§4.1）。
    - 如果 native session 已有正常结束的 turn，却没有记下 session ID，运行时不再为它登记 turn，role 停下。否则下一个 turn 会不带 resume 启动，悄悄丢掉上下文。用户可以新建 native session（[#10](https://github.com/vorton-lang/Lobotomy/issues/10)，用户确认，2026-10-04）。
 
@@ -85,8 +86,8 @@ Codex（消息经 stdin，位置参数为 -）
 | 工具输出流式 | 不流式：命令结束后一次给出完整 `tool_result`；之前只有 `tool_use` 和不带输出的 `system/task_started` | 不流式：`item.started`（带命令，in_progress）之后，`item.completed` 一次给出完整 `aggregated_output` |
 | turn 结束事件到进程退出 | 约 0.5s | 约 4s |
 
-| 每个 turn 更换 MCP URL | 未测（M3） | 不影响缓存：第二个 turn 的缓存命中均为 98.7%，与不更换相同 |
-| 全局指令文件 | 未测（M3） | `--ignore-user-config` 或 `-c project_doc_max_bytes=0` 下，`~/.codex/AGENTS.md` 仍然生效 |
+| 每个 turn 更换 MCP URL | 未测（M2） | 不影响缓存：第二个 turn 的缓存命中均为 98.7%，与不更换相同 |
+| 全局指令文件 | 未测（M2） | `--ignore-user-config` 或 `-c project_doc_max_bytes=0` 下，`~/.codex/AGENTS.md` 仍然生效 |
 
 流式与退出间隔三行来自一次探针（[spikes/harness-cli/stream-probe.mjs](../spikes/harness-cli/stream-probe.mjs)，2026-10-04）：命令每秒打印一行，共 5 秒。MCP URL 与全局指令文件两行分别来自 [cache-probe.mjs](../spikes/harness-cli/cache-probe.mjs) 与 [agents-md-probe.mjs](../spikes/harness-cli/agents-md-probe.mjs)（2026-10-04）。两家的事件格式不在稳定承诺内，CLI 升级后需重测。
 
@@ -182,7 +183,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 **语义更新**（用户确认，2026-10-04）：原来所有 role 固定关闭审批与沙箱。#13 的测试环境中，管理员通过 Codex 的 requirements 不允许完全放开，Codex 一启动就退出。现在每个 harness 有一项权限设置。设置属于本机（data-model.md §10），所有项目共用。Codex 与 Claude 分开设置：同一个环境可能允许一个完全放开，而不允许另一个。
 
-| 模式 | 什么时候用 | Codex | Claude（M3，未实测） |
+| 模式 | 什么时候用 | Codex | Claude（M2，未实测） |
 |---|---|---|---|
 | 完全放开（默认） | 不审批，不用沙箱 | `--dangerously-bypass-approvals-and-sandbox` | `--dangerously-skip-permissions` |
 | 自动审批 | 管理员不允许完全放开 | `-c approval_policy="on-request" -c approvals_reviewer="auto_review" -c sandbox_mode="workspace-write"` | `--permission-mode auto --permission-prompts none` |
@@ -432,7 +433,7 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 ## 6. 待验证 / 未决
 
 - ~~jj-lib 的版本锁定与封装边界~~：已实现（2026-10-04）。jj-lib 锁定为 0.45.1，封装在 `backend/crates/store` 中，jj 的类型不出这个 crate。只用到 jj 的存储（git backend）、树合并和本地工作副本状态（`TreeState`），不使用 jj 的操作日志与视图：业务事实在 SQLite 中，成果靠 pin 保留。- 原生中断与中断后的 resume：Codex 在 Windows 上已实测（§1.4）。Claude、以及 Linux 上的两家仍待实测。结果也决定 ideas.md 中的"中断并发送"能否加入。
-- 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，M4 之后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。Claude 的 `~/.claude/CLAUDE.md` 在 M3 时确认。
+- 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。Claude 的 `~/.claude/CLAUDE.md` 在 M2 时确认。
 - Codex 0.159.2 的 `codex queue`（向已有会话排队一条消息）能否在 `exec` 的 turn 运行中投递消息，待查。若可以，它可能替代 ideas.md 中的"中断并发送"。`codex delete --force <id>` 可以按 ID 删除会话，清理探针或临时会话时使用。
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。
 - `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。下次自然发生时记录。Codex 被拒的形式暂不处理。
@@ -443,4 +444,4 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 - Claude `--append-system-prompt-file`：帮助文本中出现过，尚未实测。
 - Codex 的长指令方案：`-p` profile 文件，还是 `model_instructions_file`。暂不需要：Windows 命令行上限约 32K 字符，role 指令预计远小于此，先用 `-c developer_instructions`；指令实际接近上限时再研究。
 - Codex `--thread-source` 的取值。
-- 权限模式（1.9）：自动审批在真实受管环境中的长期表现，例如联网安装依赖、写工作目录以外的缓存时自动审核的结果与开销；"没有任何输出就退出"能否作为"harness 没有开始这个 turn"的依据，Claude 与 Linux 上待确认；Claude 的 `--permission-mode auto` 与 `--permission-prompts none` 在 M3 实测。
+- 权限模式（1.9）：自动审批在真实受管环境中的长期表现，例如联网安装依赖、写工作目录以外的缓存时自动审核的结果与开销；"没有任何输出就退出"能否作为"harness 没有开始这个 turn"的依据，Claude 与 Linux 上待确认；Claude 的 `--permission-mode auto` 与 `--permission-prompts none` 在 M2 实测。

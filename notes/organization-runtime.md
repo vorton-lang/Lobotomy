@@ -477,7 +477,7 @@ Carry into next session:
 
 当前至少有以下原则：
 
-1. **Manager 是默认入口，不让用户直接承担组织协调。**
+1. **Manager 是默认入口，不让用户直接承担组织协调。** 用户也可以直接打开各角色的窗口。这条直接通路是常设的二等入口，不是临时方案（**语义更新**，[#23](https://github.com/vorton-lang/Lobotomy/issues/23)，用户确认，2026-10-09）。
 2. **下层 activity 默认是低噪声 ambient information。**
 3. **组织状态优先于 agent chat。**
 4. **内部消息和完整 trace 默认属于 debug / inspector view。**

@@ -17,14 +17,17 @@
 
 | 名字 | 类型 | harness | 工作目录 |
 |---|---|---|---|
-| Angela | manager | Claude | 用户的主仓库（只读） |
+| Angela | manager | Claude | 项目外层，全局一个；具体位置在 M3 设计 |
 | Binah | tech_lead | Claude | 槽位 `tl` |
 | Malkuth | worker | Codex | 槽位 `worker` |
 | Yesod | reviewer | Codex | 在固定的候选成果上单独物化的审查现场 |
 
+- 表中的 harness 是默认值。每个 role 都能换 harness，Angela 也一样（harness-adapter.md §0，用户确认，2026-10-09）。
+- Angela 原来是每个项目一个，工作目录是用户的主仓库（只读）。现在全局只有一个，属于用户（**语义更新**，data-model.md §10）。
+
 ### 1.3 类型职责
 
-- **manager**：用户与组织之间的控制面，职责见 [manager-jd.md](manager-jd.md)，动作见 [manager-actions.md](manager-actions.md)。
+- **manager**：用户的全局协作者，也是默认入口。用户经它管理各个项目，也可以直接打开其他 role 的窗口。直接通路是常设的二等入口，不是临时方案；用户自然选择，不强制（**语义更新**，[#23](https://github.com/vorton-lang/Lobotomy/issues/23)，用户确认，2026-10-09）。原来写的是"用户与组织之间的控制面"。职责见 [manager-jd.md](manager-jd.md)，动作见 [manager-actions.md](manager-actions.md)。
 - **tech_lead**：找问题、提质疑、做架构层面的调研。由 Manager 派任务，也可被 Manager 临时咨询。代码审查不是它的职责。
 - **worker**：执行任务。`done` 只提交候选成果，不代表任务完成。
 - **reviewer**：对照完成条件和代码质量审查一份固定的候选成果，可以跑测试；只给出结论（通过 / 要求修改）和具体意见，不改代码。结论绑定所审查的成果与完成条件版本。
