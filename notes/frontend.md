@@ -255,6 +255,9 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
 开发时可以用 `npm run dev` 加浏览器，地址中带 `?backend=ws://127.0.0.1:<端口>/gui&token=<token>`。
 
 **测试**：
+
+完整测试的耗时测量、调度方式与复现命令见 [test-performance.md](test-performance.md)。
+
 - vitest 测试对话分行（含完成报告的收起）、任务记录的时间顺序、改动区按轮的选择、长输出的截取，以及 `format.ts` 给出的文字：role 的状态、输入框的提示、检查结果、命令摘要、报告是否生效；
 - Playwright 用本机 Edge，驱动真实后端与假 Codex。每个测试启动自己的后端，测试之间没有顺序依赖（#16）：
   - 走完建任务、执行、验证、看 diff、验收、用户仓库出现文件；
