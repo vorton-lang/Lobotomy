@@ -105,6 +105,14 @@ textarea {
 textarea {
   resize: vertical;
 }
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
 label {
   display: block;
   margin: 10px 0;
@@ -502,8 +510,12 @@ pre {
 
 .role-line {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
   padding: 4px 0 8px;
+}
+.role-line > .muted {
+  margin-left: auto;
 }
 .role-name {
   color: var(--agent);

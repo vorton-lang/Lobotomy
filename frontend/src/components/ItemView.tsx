@@ -2,7 +2,7 @@
 // holds the arguments; other items show their own content.
 
 import type { CommandRecord, Item, LiveItem, Text } from '../api/types';
-import { asReport, commandSummary, elapsed, REPORT_LABEL, textOf, voidReport } from '../format';
+import { asReport, commandSummary, elapsed, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
 import { Markdown, Output, useNow } from './common';
 
 /** `fold`: the item is a report whose body a later message repeats; the body starts folded (#18). */
@@ -83,6 +83,8 @@ export function ItemView({
         </details>
       );
     }
+    case 'tool_call':
+      return <ToolCallView tool={item.content.tool} input={item.content.input} output={item.content.output} status={item.content.status} />;
     case 'web_search':
       return <div className="item muted">搜索：{textOf(item.content.query)}</div>;
     case 'todo_list':
@@ -139,17 +141,65 @@ function CommandView({
   );
 }
 
-/** An item still in progress: shown while it runs, never stored (frontend.md §3). */
-export function LiveItemView({ item }: { item: LiveItem }) {
+/**
+ * A tool of the harness's own, such as reading or searching files. Folded, it says which tool and
+ * what it works on; opened, its input and what it returned.
+ */
+function ToolCallView({
+  tool,
+  input,
+  output,
+  status,
+  running,
+}: {
+  tool: string;
+  input: unknown;
+  output?: Text | null;
+  status?: string;
+  running?: React.ReactNode;
+}) {
+  const subject = toolSubject(input);
+  return (
+    <details className={`item command ${status === 'failed' ? 'failed' : ''}`}>
+      <summary>
+        <code>{tool}</code>
+        {subject && <span className="muted"> {subject}</span>}
+        {running}
+        {status === 'failed' && <span className="error"> · 失败</span>}
+      </summary>
+      <Output value={input} />
+      <Output value={output} />
+    </details>
+  );
+}
+
+/**
+ * An item still in progress: shown while it runs, never stored (frontend.md §3). A reply that
+ * streams, as Claude's do, shows its text so far.
+ */
+export function LiveItemView({ item, role }: { item: LiveItem; role: string }) {
   const now = useNow();
   const since = <span className="running"> · 运行中 {elapsed(item.started_at, now)}</span>;
-  if (item.kind === 'command') return <CommandView command={item.content.command} output={item.content.output} running={since} />;
-  return (
-    <div className="item muted">
-      {item.kind}
-      {since}
-    </div>
-  );
+  switch (item.kind) {
+    case 'command':
+      return <CommandView command={item.content.command} output={item.content.output} running={since} />;
+    case 'agent_message':
+      return (
+        <div className="message other live">
+          <div className="who">{role}</div>
+          <Markdown text={textOf(item.content.text)} />
+        </div>
+      );
+    case 'tool_call':
+      return <ToolCallView tool={item.content.tool} input={item.content.input} running={since} />;
+    default:
+      return (
+        <div className="item muted">
+          {item.kind}
+          {since}
+        </div>
+      );
+  }
 }
 
 export function RunningView({ role, since }: { role: string; since: number }) {

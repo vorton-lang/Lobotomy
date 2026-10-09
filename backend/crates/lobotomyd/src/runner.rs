@@ -16,10 +16,9 @@ use lobotomy_core::turn::{
 };
 use lobotomy_core::workspace::load_workspace;
 use lobotomy_core::{Caller, Command, Db, Error};
-use lobotomy_harness::codex::{self, TurnArgs};
 use lobotomy_harness::event::{Event, Item, ItemKind};
 use lobotomy_harness::process::{self, Spawned};
-use lobotomy_harness::{Harness, MCP_SERVER};
+use lobotomy_harness::{Harness, MCP_SERVER, Output, claude, codex};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -129,10 +128,13 @@ struct Observed {
     session_unrecorded: Option<String>,
 }
 
-/// The harness's name in what the user reads.
-fn label(harness: Harness) -> &'static str {
-    match harness {
-        Harness::Codex => "Codex",
+/// A file that belongs to one turn and goes with it, such as Claude's MCP configuration, which holds
+/// the turn's token.
+struct TurnFile(std::path::PathBuf);
+
+impl Drop for TurnFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -160,8 +162,9 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let turn = db(project, move |db| db.read(|c| load_turn(c, &id))).await?;
     let role_name = turn.role.clone();
     let role = db(project, move |db| db.read(|c| load_role(c, &role_name))).await?;
-    let Some(harness) = Harness::parse(&role.harness) else {
-        let message = format!("{} 使用 {}，M1 只支持 Codex", role.name, role.harness);
+    // The turn's session decides the harness: a role that changed its harness gets a new session.
+    let Some(harness) = Harness::parse(&turn.harness) else {
+        let message = format!("{} 使用 {}，这个版本的 Lobotomy 不支持", role.name, turn.harness);
         return end(project, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
     };
 
@@ -172,16 +175,39 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let turns_dir = project.data_dir.join("turns");
     std::fs::create_dir_all(&turns_dir).with_context(|| format!("creating {}", turns_dir.display()))?;
     let cli = project.host.harness.cli(harness);
-    let args = match harness {
-        Harness::Codex => TurnArgs {
-            resume: turn.native_id.clone(),
-            model: role.model.clone(),
-            reasoning_effort: cli.reasoning_effort.clone(),
-            permission: project.host.permission(harness)?,
-            developer_instructions: instructions(&role),
-            mcp_url: project.mcp_url(&turn.token),
+    let permission = project.host.permission(harness)?;
+    let mcp_url = project.mcp_url(&turn.token);
+    let (args, _mcp_config) = match harness {
+        Harness::Claude => {
+            // Named after the turn, which tells its CLI apart on Linux (data-model.md §3.3).
+            let path = turns_dir.join(format!("{turn_id}.mcp.json"));
+            std::fs::write(&path, claude::mcp_config(&mcp_url))
+                .with_context(|| format!("writing {}", path.display()))?;
+            let session = match &turn.native_id {
+                Some(id) => claude::Session::Resume(id.clone()),
+                None => claude::Session::New(claude::new_session_id()),
+            };
+            let args = claude::TurnArgs {
+                session,
+                model: role.model.clone(),
+                effort: cli.reasoning_effort.clone(),
+                permission,
+                instructions: instructions(&role),
+                mcp_config: path.clone(),
+            };
+            (args.to_args(), Some(TurnFile(path)))
         }
-        .to_args(),
+        Harness::Codex => {
+            let args = codex::TurnArgs {
+                resume: turn.native_id.clone(),
+                model: role.model.clone(),
+                reasoning_effort: cli.reasoning_effort.clone(),
+                permission,
+                developer_instructions: instructions(&role),
+                mcp_url,
+            };
+            (args.to_args(), None)
+        }
     };
     let (program, prefix) = cli.program()?;
     let args: Vec<String> = prefix.iter().cloned().chain(args).collect();
@@ -189,7 +215,7 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let mut spawned = match launch::spawn(what, &cwd, &project.empty_gh_config_dir()) {
         Ok(spawned) => spawned,
         Err(e) => {
-            let message = format!("无法启动 {}（{}）：{e:#}", label(harness), program.display());
+            let message = format!("无法启动 {}（{}）：{e:#}", harness.label(), program.display());
             return end(project, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
         }
     };
@@ -253,17 +279,16 @@ async fn drive(
     let mut raw = tokio::fs::File::create(project.raw_output_path(&turn.id, "jsonl")).await?;
     let mut lines = BufReader::new(io.stdout).lines();
     let mut seen = Observed::default();
+    let mut output = Output::new(harness);
     while let Some(line) = lines.next_line().await? {
         raw.write_all(line.as_bytes()).await?;
         raw.write_all(b"\n").await?;
         seen.output = true;
-        let event = match harness {
-            Harness::Codex => codex::parse_line(&line),
-        };
-        let Some(event) = event else { continue };
-        if let Err(e) = observe(project, turn, event, &mut seen).await {
-            tracing::warn!(turn_id = turn.id, error = format!("{e:#}"), "could not record an event");
-            seen.unrecorded = true;
+        for event in output.parse_line(&line) {
+            if let Err(e) = observe(project, turn, event, &mut seen).await {
+                tracing::warn!(turn_id = turn.id, error = format!("{e:#}"), "could not record an event");
+                seen.unrecorded = true;
+            }
         }
     }
     raw.flush().await?;
@@ -275,7 +300,7 @@ async fn drive(
         let path = project.raw_output_path(&turn.id, "jsonl");
         let message = format!(
             "Lobotomy 没能记下这一轮的 {} 会话 ID：{error}\n接着用原来的会话继续，或新建会话。原始输出保留在 {}",
-            label(harness),
+            harness.label(),
             path.display()
         );
         (Outcome::Failed, Some(Failure::new(FailureKind::Other, message)))
@@ -299,11 +324,12 @@ async fn drive(
             None => status.to_string(),
         };
         let path = project.raw_output_path(&turn.id, "stderr");
-        let mut message = format!("{} 自行退出（{status}），没有报告 turn 结束。", label(harness));
+        let mut message = format!("{} 自行退出（{status}），没有报告 turn 结束。", harness.label());
         let mut kind = FailureKind::Other;
         match stderr_excerpt(&path, &turn.token).await {
             Ok(excerpt) if !excerpt.is_empty() => {
                 let refused = match harness {
+                    Harness::Claude => claude::permission_refused(&excerpt),
                     Harness::Codex => codex::permission_refused(&excerpt),
                 };
                 if refused {

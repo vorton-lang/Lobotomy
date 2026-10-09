@@ -703,23 +703,72 @@ impl Command for NewNativeSession {
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
         caller.require_user()?;
         role_harness(cx.tx, &self.role)?;
-        if let Some(running) = unfinished_turn(cx.tx, &self.role)? {
-            return Err(Error::rejected(
-                "turn_unfinished",
-                format!("{} has unfinished turn {}", self.role, running.id),
-            ));
+        require_no_unfinished_turn(cx, &self.role)?;
+        end_current_session(cx, &self.role)?;
+        let task = occupant(cx.tx, &self.role)?;
+        start_session(cx, &self.role, task.as_deref())?;
+        queue_brief_again(cx, &self.role)
+    }
+}
+
+fn require_no_unfinished_turn(cx: &Cx<'_>, role: &str) -> Result<()> {
+    match unfinished_turn(cx.tx, role)? {
+        Some(running) => Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", running.id))),
+        None => Ok(()),
+    }
+}
+
+/// Ends the role's session for its current work. Whether it had one.
+fn end_current_session(cx: &mut Cx<'_>, role: &str) -> Result<bool> {
+    let task = occupant(cx.tx, role)?;
+    let Some(session) = current_session(cx.tx, role, task.as_deref())? else { return Ok(false) };
+    cx.tx.execute("UPDATE native_session SET ended_at = ?2 WHERE id = ?1", params![session.id, cx.now])?;
+    cx.emit("native_session.ended", &session.id, json!({ "role": role }))?;
+    Ok(true)
+}
+
+/// A new session has not seen the attempt's brief, so it is queued again (data-model.md §4.1).
+fn queue_brief_again(cx: &mut Cx<'_>, role: &str) -> Result<()> {
+    if let (Some(task), Some(attempt)) = current_work(cx.tx, role)? {
+        let body = format!("{}{}", prompts::NEW_SESSION, attempt_brief(cx.tx, &task, attempt.seq, &attempt.conflicts)?);
+        queue_message(cx, role, &Caller::Runtime, Some(&task.id), &body)?;
+    }
+    Ok(())
+}
+
+/// Puts the role on another harness: no role is bound to one (harness-adapter.md §0). A native
+/// session belongs to its harness, so the role's current session ends, and its next turn starts
+/// a new one with the brief, as after a new native session. Choosing the harness the role is on
+/// changes nothing.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetRoleHarness {
+    pub request_id: String,
+    pub role: String,
+    pub harness: String,
+}
+
+impl Command for SetRoleHarness {
+    const NAME: &'static str = "set_role_harness";
+    type Output = ();
+
+    fn idem_key(&self) -> Option<&str> {
+        Some(&self.request_id)
+    }
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
+        caller.require_user()?;
+        if !crate::role::HARNESSES.contains(&self.harness.as_str()) {
+            return Err(Error::rejected("unknown_harness", format!("unknown harness {}", self.harness)));
         }
-        let (task, attempt) = current_work(cx.tx, &self.role)?;
-        let task_id = task.as_ref().map(|t| t.id.as_str());
-        if let Some(session) = current_session(cx.tx, &self.role, task_id)? {
-            cx.tx.execute("UPDATE native_session SET ended_at = ?2 WHERE id = ?1", params![session.id, cx.now])?;
-            cx.emit("native_session.ended", &session.id, json!({ "role": self.role }))?;
+        if role_harness(cx.tx, &self.role)? == self.harness {
+            return Ok(());
         }
-        start_session(cx, &self.role, task_id)?;
-        if let (Some(task), Some(attempt)) = (&task, &attempt) {
-            let body =
-                format!("{}{}", prompts::NEW_SESSION, attempt_brief(cx.tx, task, attempt.seq, &attempt.conflicts)?);
-            queue_message(cx, &self.role, &Caller::Runtime, Some(&task.id), &body)?;
+        require_no_unfinished_turn(cx, &self.role)?;
+        cx.tx.execute("UPDATE role SET harness = ?2 WHERE name = ?1", params![self.role, self.harness])?;
+        cx.emit("role.harness_changed", &self.role, json!({ "harness": self.harness }))?;
+        // Without a session, the brief has not left the inbox yet.
+        if end_current_session(cx, &self.role)? {
+            queue_brief_again(cx, &self.role)?;
         }
         Ok(())
     }

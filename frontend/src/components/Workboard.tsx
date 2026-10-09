@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import type { RoleView, TaskView } from '../api/types';
-import { PHASE_LABEL, roleActivity } from '../format';
+import { harnessName, PHASE_LABEL, roleActivity } from '../format';
 import { run, selectTask, useMainRole, useStore } from '../store';
 import { useNow } from './common';
 import { NewTask } from './NewTask';
@@ -51,6 +51,9 @@ function RoleLine({ role, task }: { role: RoleView; task: TaskView | undefined }
   return (
     <div className="role-line">
       <span className="role-name">{role.name}</span>
+      <span className="badge" title="这个角色使用的 harness，可在 ⚙ 设置中切换">
+        {harnessName(role.harness)}
+      </span>
       <span className="muted">{roleActivity(role, task, now)}</span>
     </div>
   );

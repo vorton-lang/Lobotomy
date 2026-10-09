@@ -216,12 +216,19 @@ async fn the_gui_sets_each_harness_permission_mode() {
     let backend = start(dir.path()).await;
     let mut gui = Client::connect(&backend).await;
     let snapshot = gui.call("snapshot", json!({})).await.unwrap();
-    assert_eq!(snapshot["harnesses"], json!([{ "harness": "codex", "permission": "full" }]));
+    assert_eq!(
+        snapshot["harnesses"],
+        json!([{ "harness": "claude", "permission": "full" }, { "harness": "codex", "permission": "full" }])
+    );
 
+    // Each harness has its own setting: an environment may refuse one and not the other.
     let set = json!({ "harness": "codex", "permission": "auto_review" });
     assert_eq!(gui.command("set_permission", set.clone()).await.unwrap(), set);
     let snapshot = gui.call("snapshot", json!({})).await.unwrap();
-    assert_eq!(snapshot["harnesses"][0]["permission"], "auto_review");
+    assert_eq!(
+        snapshot["harnesses"],
+        json!([{ "harness": "claude", "permission": "full" }, { "harness": "codex", "permission": "auto_review" }])
+    );
     assert_eq!(
         backend.project.host.permission(lobotomy_harness::Harness::Codex).unwrap(),
         lobotomy_harness::Permission::AutoReview

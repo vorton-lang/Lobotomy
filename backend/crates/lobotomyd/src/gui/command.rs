@@ -10,7 +10,7 @@ use lobotomy_core::project::EditProjectConfig;
 use lobotomy_core::task::{
     Abandon, AdoptOutsideChanges, CreateTask, EditCriteria, MoveInQueue, Reopen, SendMessage, SetPaused,
 };
-use lobotomy_core::turn::{Continue, NewNativeSession, TurnState, load_turn};
+use lobotomy_core::turn::{Continue, NewNativeSession, SetRoleHarness, TurnState, load_turn};
 use lobotomy_core::verify::{Accept, RetryPreview, SendBack};
 use lobotomy_core::{Caller, Command, Db, Error};
 use serde::Deserialize;
@@ -76,6 +76,7 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args }: CommandPa
         SendBack,
         Continue,
         NewNativeSession,
+        SetRoleHarness,
         ApproveNewFiles,
         DiscardUncaptured,
         AdoptOutsideChanges,

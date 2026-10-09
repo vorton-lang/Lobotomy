@@ -168,11 +168,13 @@ test('back to the latest after reading back', async ({ page, backend }) => {
   await expect(page.locator('.thread .message.other').last()).toContainText('finished');
   await expect(latest).toBeHidden();
 
-  // Just after new rows come, the list still goes to the end each time a row's height changes,
-  // such as when its Markdown is rendered (virtua's scrollToIndex, for about 150 ms). A scroll
-  // made then is undone, so scroll again until the list stays where it was scrolled to.
+  // Scroll up with the wheel, as the user does. Just after new rows come, the list still goes to
+  // the end each time a row's height changes, such as when its Markdown is rendered (virtua's
+  // scrollToIndex, for about 150 ms). A scroll made then is undone, so scroll again until the list
+  // stays where it was scrolled to.
+  await page.locator('.thread').hover();
   await expect(async () => {
-    await page.locator('.thread').evaluate((thread) => thread.scrollTo(0, 0));
+    await page.mouse.wheel(0, -100_000);
     await expect(latest).toHaveText('回到最新 ↓', { timeout: 1_000 });
   }).toPass();
   await createTask(page, '读历史时开始的任务', 'FAKE:done');
@@ -218,6 +220,25 @@ test('a managed Codex goes on after switching to auto review', async ({ page, ba
   const panel = taskPanel(page, '受管环境的任务');
   await panel.getByRole('button', { name: '验收', exact: true }).click();
   await expect(panel.locator('.phase')).toHaveText('已完成');
+});
+
+// The user puts Malkuth on Claude in the settings; the task runs on the fake Claude: its file
+// change, the file it read and its report show in the thread, and the task goes to acceptance (M2).
+test('a role switched to Claude runs a task', async ({ page, backend }) => {
+  await open(page, backend);
+  const roleLine = page.locator('.role-line');
+  await expect(roleLine).toContainText('Codex');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await settings.getByLabel('Malkuth 使用的 harness').selectOption('claude');
+  await expect(roleLine).toContainText('Claude');
+  await settings.getByRole('button', { name: '关闭' }).click();
+
+  await createTask(page, '在 Claude 上的任务', 'FAKE:done');
+  await expect(page.locator('.attention .card').filter({ hasText: '等你验收' })).toBeVisible();
+  await expect(page.locator('.item.file-change')).toContainText('work.txt');
+  await expect(page.locator('.item.command', { hasText: 'Read' })).toContainText('work.txt');
+  await expect(page.locator('.report.done').last()).toContainText('完成');
 });
 
 // A message sent while the executor's turn finishes the task never reaches the executor. It

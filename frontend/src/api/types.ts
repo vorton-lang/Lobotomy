@@ -240,6 +240,8 @@ export type ItemBody =
     }
   | { kind: 'web_search'; content: { query: Text } }
   | { kind: 'todo_list'; content: { items: { text: string; completed: boolean }[] | null } }
+  /** A tool of the harness's own that is neither a command nor a file change, such as reading a file. */
+  | { kind: 'tool_call'; content: { tool: string; input: unknown; output: Text | null; status?: string } }
   | { kind: 'error'; content: { message: Text } }
   /** A kind the adapter does not know: the harness's raw item. */
   | { kind: 'other'; content: Record<string, unknown> };
@@ -385,7 +387,7 @@ export interface RemoteError {
 /** An entry of the global event log: `<object>.<what happened>`, such as `task.created`. */
 export interface LogEvent {
   seq: number;
-  kind: `${'attempt' | 'capture' | 'integration' | 'message' | 'native_session' | 'preview' | 'project' | 'report' | 'task' | 'turn' | 'verification' | 'workspace'}.${string}`;
+  kind: `${'attempt' | 'capture' | 'integration' | 'message' | 'native_session' | 'preview' | 'project' | 'report' | 'role' | 'task' | 'turn' | 'verification' | 'workspace'}.${string}`;
   entity: string;
   payload: { task_id?: string | null } & Record<string, unknown>;
 }
