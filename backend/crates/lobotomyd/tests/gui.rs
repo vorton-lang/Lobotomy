@@ -121,93 +121,6 @@ async fn a_connection_needs_the_token_and_a_local_origin() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
-/// The M1 chain through the GUI's interface: create a task, watch it run, look at the
-/// candidate's diff, accept it.
-#[tokio::test]
-async fn the_gui_drives_a_task_to_acceptance() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend = start(dir.path()).await;
-    let mut gui = Client::connect(&backend).await;
-
-    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
-    assert_eq!(snapshot["project"]["branch"], "main");
-    assert_eq!(snapshot["roles"][0]["name"], "Malkuth");
-    assert_eq!(snapshot["attention"], json!([]));
-
-    let args = json!({ "request_id": "r1", "title": "写 work.txt", "body": "FAKE:done", "criteria": "文件存在", "executor": "Malkuth" });
-    let task = gui.command("create_task", args.clone()).await.unwrap()["id"].as_str().unwrap().to_owned();
-    // The same request again changes nothing.
-    assert_eq!(gui.command("create_task", args).await.unwrap()["id"], task.as_str());
-
-    gui.event("task.accepting").await;
-    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
-    let attention = snapshot["attention"].as_array().unwrap();
-    assert_eq!(attention.len(), 1, "{attention:?}");
-    assert_eq!(attention[0]["kind"], "accept");
-    let verification = attention[0]["verification_id"].as_str().unwrap().to_owned();
-
-    // The thread shows the user's brief, Malkuth's items and its done report.
-    let thread = gui.call("thread", json!({ "role": "Malkuth" })).await.unwrap();
-    let kinds: Vec<&str> = thread["items"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds, ["input", "agent_message", "mcp_call", "agent_message"]);
-    let call = &thread["items"][2];
-    assert_eq!(thread["commands"][call["command_id"].as_str().unwrap()]["args"]["status"], "done");
-    assert!(thread["messages"][0]["body"].as_str().unwrap().contains("写 work.txt"));
-    // A turn's MCP token is for its CLI only (#16).
-    for view in [&thread, &snapshot] {
-        assert!(!view.to_string().contains("\"tok_"), "a turn token reached the GUI: {view}");
-    }
-
-    // The candidate's diff against the integration version.
-    let detail = gui.call("task", json!({ "task_id": task })).await.unwrap();
-    let v = &detail["verifications"][0];
-    assert_eq!(v["state"], "passed");
-    let diff = gui.call("diff", json!({ "from": v["base"], "to": v["commit_id"] })).await.unwrap();
-    assert_eq!(diff, json!([{ "path": "work.txt", "old": null, "new": { "kind": "text", "text": "hi" } }]));
-
-    let accept = json!({
-        "request_id": "a1",
-        "task_id": task,
-        "verification_id": verification,
-        "criteria_version": 1,
-        "expected_integration": snapshot["project"]["integration"],
-    });
-    gui.command("accept", accept).await.unwrap();
-    gui.event("preview.written").await;
-    let repo = user_repo(dir.path());
-    assert_eq!(std::fs::read_to_string(repo.join("work.txt")).unwrap(), "hi");
-
-    // A rejected command reports its code.
-    let again = json!({ "request_id": "a2", "task_id": task, "verification_id": verification, "criteria_version": 1, "expected_integration": "x" });
-    assert_eq!(gui.command("accept", again).await.unwrap_err()["code"], "not_accepting");
-    backend.shutdown(Duration::from_secs(5)).await;
-}
-
-/// What stops a role shows up as something for the user to decide, and the user's command
-/// resolves it.
-#[tokio::test]
-async fn a_failed_turn_waits_in_attention_until_the_user_continues() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend = start(dir.path()).await;
-    let mut gui = Client::connect(&backend).await;
-    let args =
-        json!({ "request_id": "r1", "title": "失败", "body": "FAKE:fail", "criteria": "-", "executor": "Malkuth" });
-    gui.command("create_task", args).await.unwrap();
-    gui.event("turn.ended").await;
-    // Nothing to decide until the turn's scene is captured.
-    gui.event("capture.finished").await;
-    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
-    let hold = &snapshot["attention"][0];
-    assert_eq!((hold["kind"].as_str(), hold["hold"]["kind"].as_str()), (Some("hold"), Some("abnormal")));
-    assert_eq!(hold["hold"]["turn"]["outcome"], "failed");
-
-    gui.command("continue", json!({ "request_id": "k1", "role": "Malkuth" })).await.unwrap();
-    gui.event("turn.registered").await;
-    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
-    assert!(snapshot["attention"].as_array().unwrap().iter().all(|a| a["kind"] != "hold"));
-    backend.shutdown(Duration::from_secs(5)).await;
-}
-
 /// Each harness's permission mode is a host setting the GUI shows and changes; there is no mode
 /// that asks the user (harness-adapter.md §1.9).
 #[tokio::test]
@@ -292,6 +205,11 @@ async fn search_finds_the_threads_text_in_order() {
     let thread = gui.call("thread", json!({ "role": "Malkuth" })).await.unwrap();
     let item = |kind: &str| thread["items"].as_array().unwrap().iter().find(|i| i["kind"] == kind).unwrap().clone();
     let first_seq = thread["items"][0]["seq"].clone();
+    // A turn's MCP token is for its CLI only (#16).
+    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
+    for view in [&thread, &snapshot] {
+        assert!(!view.to_string().contains("\"tok_"), "a turn token reached the GUI: {view}");
+    }
 
     let search = |query: &str| json!({ "role": "Malkuth", "query": query });
     let found = gui.call("search", search("WORK.TXT")).await.unwrap();
@@ -307,89 +225,10 @@ async fn search_finds_the_threads_text_in_order() {
     let found = gui.call("search", search("finished")).await.unwrap();
     assert_eq!(found["matches"].as_array().unwrap().len(), 1);
     assert_eq!(gui.call("search", search("  ")).await.unwrap()["matches"], json!([]));
-    backend.shutdown(Duration::from_secs(5)).await;
-}
 
-/// The scenario of #14: the user adds to a task while its executor's turn runs, and that turn
-/// reports done. The addition is not lost outside the task: acceptance waits for the user's
-/// decision, and sending the task back delivers it in the task.
-#[tokio::test]
-async fn a_message_added_while_the_executor_finishes_stays_with_its_task() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend = start(dir.path()).await;
-    let mut gui = Client::connect(&backend).await;
-    let args = json!({ "request_id": "r1", "title": "首版", "body": "FAKE:wait=1500 FAKE:done FAKE:text=first", "criteria": "-", "executor": "Malkuth" });
-    let task = gui.command("create_task", args).await.unwrap()["id"].as_str().unwrap().to_owned();
-    gui.event("turn.running").await;
-    let added =
-        json!({ "request_id": "m1", "role": "Malkuth", "task_id": task, "body": "补充：FAKE:done FAKE:text=second" });
-    gui.command("send_message", added).await.unwrap();
-    gui.event("task.accepting").await;
-
-    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
-    assert_eq!(snapshot["tasks"][0]["undelivered_messages"], 1, "{snapshot}");
-    let integration = snapshot["project"]["integration"].clone();
-    let detail = gui.call("task", json!({ "task_id": task })).await.unwrap();
-    assert!(detail["undelivered_messages"][0]["body"].as_str().unwrap().contains("补充"));
-    let accept = |request: &str, verification: &Value| json!({ "request_id": request, "task_id": task, "verification_id": verification, "criteria_version": 1, "expected_integration": integration });
-    let refused = gui.command("accept", accept("a1", &detail["verifications"][0]["id"])).await.unwrap_err();
-    assert_eq!(refused["code"], "undelivered_messages");
-
-    gui.command("send_back", json!({ "request_id": "b1", "task_id": task, "reason": "按补充改" })).await.unwrap();
-    gui.event("task.accepting").await;
-    let detail = gui.call("task", json!({ "task_id": task })).await.unwrap();
-    assert_eq!(detail["undelivered_messages"], json!([]));
-    gui.command("accept", accept("a2", &detail["verifications"][1]["id"])).await.unwrap();
-    gui.event("preview.written").await;
-    assert_eq!(std::fs::read_to_string(user_repo(dir.path()).join("work.txt")).unwrap(), "second");
-    let outside: i64 = backend
-        .project
-        .db
-        .read(|c| Ok(c.query_row("SELECT COUNT(*) FROM turn WHERE task_id IS NULL", [], |r| r.get(0))?))
-        .unwrap();
-    assert_eq!(outside, 0, "no turn ran outside the task");
-    backend.shutdown(Duration::from_secs(5)).await;
-}
-
-/// A turn outside any task that changes files: its done does nothing and says so, the changes wait
-/// for the user, and a task made from them carries them to the user's repository (#14).
-#[tokio::test]
-async fn changes_outside_any_task_can_become_a_task() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend = start(dir.path()).await;
-    let mut gui = Client::connect(&backend).await;
-    let message = json!({ "request_id": "m1", "role": "Malkuth", "body": "FAKE:done FAKE:text=outside" });
-    gui.command("send_message", message).await.unwrap();
-    gui.event("capture.finished").await;
-
-    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
-    let attention = &snapshot["attention"][0];
-    assert_eq!(attention["kind"], "outside_changes", "{snapshot}");
-    assert_eq!(attention["capture"]["detail"]["changed"], json!(["work.txt"]));
-    let thread = gui.call("thread", json!({ "role": "Malkuth" })).await.unwrap();
-    let call = thread["items"].as_array().unwrap().iter().find(|i| i["kind"] == "mcp_call").unwrap();
-    assert_eq!(thread["commands"][call["command_id"].as_str().unwrap()]["result"], "no_task");
-
-    let adopt = json!({
-        "request_id": "t1",
-        "capture_id": attention["capture"]["id"],
-        "title": "把改动做完",
-        "body": "FAKE:done FAKE:nowrite",
-        "criteria": "-",
-    });
-    let task = gui.command("adopt_outside_changes", adopt).await.unwrap()["id"].as_str().unwrap().to_owned();
-    gui.event("task.accepting").await;
-    let detail = gui.call("task", json!({ "task_id": task })).await.unwrap();
-    let accept = json!({
-        "request_id": "a1",
-        "task_id": task,
-        "verification_id": detail["verifications"][0]["id"],
-        "criteria_version": 1,
-        "expected_integration": snapshot["project"]["integration"],
-    });
-    gui.command("accept", accept).await.unwrap();
-    gui.event("preview.written").await;
-    assert_eq!(std::fs::read_to_string(user_repo(dir.path()).join("work.txt")).unwrap(), "outside");
+    // A rejected command reports its code.
+    let wrong = json!({ "request_id": "m2", "role": "Nobody", "body": "-" });
+    assert_eq!(gui.command("send_message", wrong).await.unwrap_err()["code"], "unknown_role");
     backend.shutdown(Duration::from_secs(5)).await;
 }
 

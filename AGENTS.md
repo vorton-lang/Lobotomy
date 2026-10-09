@@ -19,3 +19,27 @@
 - 步骤是否有序？
 - 要求、理由、证据和问题是否分清？
 - 是否无意改变了设计含义？
+
+## 测试：改什么跑什么
+
+全套测试很慢，主要时间花在等待进程和 I/O 上。所以本地只运行受改动影响的测试。推送到 main 后，CI 在 Windows 和 Ubuntu 上运行全套：格式、后端测试、Clippy、前端类型检查与单元测试、构建、e2e。推送后要看 CI 的结果；CI 失败时，先在本地运行失败的那个测试。
+
+| 改动 | 本地运行 |
+|---|---|
+| `backend/crates/core` | `cargo test -p lobotomy-core` |
+| `backend/crates/store` | `cargo test -p lobotomy-store`，再加 `cargo test -p lobotomyd --test results` |
+| `backend/crates/harness` | `cargo test -p lobotomy-harness` |
+| `backend/crates/lobotomyd` 的运行时（runner、MCP、采集、验证、额度、恢复） | `cargo test -p lobotomyd --test backend <名字片段>`，只运行名字含这个片段的测试，例如 `quota`、`claude`、`check` |
+| `backend/crates/lobotomyd/src/launch.rs`（子进程的环境） | `cargo test -p lobotomyd --test environment` |
+| `backend/crates/lobotomyd/src/gui` | `cargo test -p lobotomyd --test gui` |
+| `frontend/src` | `npm run typecheck` 和 `npm test`；改了界面行为时，加上相关的 e2e：`npx playwright test -g "<标题片段>"` |
+| 对话列表的滚动与分页 | 再加上 CPU 降速的滚动测试：`npx playwright test -g "slow machine"` |
+| `frontend/electron` | `npx playwright test e2e/electron.spec.ts` |
+| 只改 `notes/`、注释或文档 | 不运行测试 |
+
+- 改动跨多个 crate，或改了 core 中运行时依赖的命令时，加上 `lobotomyd` 中相关路径的测试。
+- 改了共用的测试工具时，运行用到它的整个测试二进制或整个 e2e。共用的测试工具包括：假 CLI（`tests/fixtures/fake-*.mjs`）、`tests/common`、`e2e/fixtures.ts`。
+- e2e 使用 debug 版后端。改了后端之后，先运行 `cargo build -p lobotomyd`，再运行 e2e。
+- 改了 Rust 代码后，提交前运行 `cargo fmt`，以及受影响 crate 的 `cargo clippy -p <crate> --all-targets -- -D warnings`。
+- 默认忽略的真实 CLI 测试会消耗订阅额度。只在改了 adapter 的参数、事件解析或 MCP 接口时运行，例如 `cargo test -p lobotomyd --test backend a_real_claude -- --ignored`。MCP 契约测试在 `--test mcp_contract` 中，也默认忽略。
+- 性能基线（`npm run bench`）每次推送到 main 时由 CI 运行。本地只在改了渲染或流式更新时运行。
