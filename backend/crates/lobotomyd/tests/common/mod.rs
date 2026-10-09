@@ -95,6 +95,8 @@ pub async fn start(dir: &Path) -> Backend {
 }
 
 pub async fn start_with(dir: &Path, harness: HarnessConfig) -> Backend {
+    // Keep runtime errors in the failing test's captured output.
+    let _ = tracing_subscriber::fmt().with_env_filter("lobotomyd=info").with_test_writer().with_ansi(false).try_init();
     Backend::start(open_project(dir, harness).await, 0).await.unwrap()
 }
 
@@ -126,17 +128,80 @@ pub fn last(db: &Db) -> Option<Turn> {
     db.read(|c| last_turn(c, "Malkuth")).unwrap()
 }
 
-/// Waits until `check` gives a value. The deadline is generous: a CI runner under load has taken
-/// over a minute for a chain of capture, verification and the next turn.
-pub async fn wait_for<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
+/// Waits until `check` gives a value, keeping the existing CI deadline and polling interval.
+pub async fn wait_for<T>(what: &str, check: impl FnMut() -> Option<T>) -> T {
+    wait_for_diagnostic(what, check, String::new).await
+}
+
+/// The same deadline and polling, with a snapshot only if the wait fails.
+async fn wait_for_diagnostic<T>(
+    what: &str,
+    mut check: impl FnMut() -> Option<T>,
+    diagnostic: impl FnOnce() -> String,
+) -> T {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         if let Some(value) = check() {
             return value;
         }
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {what}\n{}", diagnostic());
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// Capture persisted progress and in-memory owners before the temporary project is dropped.
+/// Check runs are recorded together at FinishVerification; no rows alone do not prove that
+/// no check started. Tokens and raw CLI arguments are deliberately excluded.
+pub fn backend_diagnostic(project: &Project) -> String {
+    let persisted = project.db.read(|c| {
+        let mut snapshot = serde_json::Map::new();
+        for (name, sql) in [
+            ("tasks", "SELECT id, phase FROM task"),
+            ("turns", "SELECT id, task_id, attempt_id, state, outcome, failure, pid, process_start, done_at, registered_at, started_at, ended_at FROM turn ORDER BY registered_at, id"),
+            ("captures", "SELECT id, turn_id, state, kind, detail, created_at, finished_at FROM capture"),
+            ("verifications", "SELECT id, task_id, state, created_at, finished_at FROM verification"),
+            ("check_runs", "SELECT verification_id, seq, exit_code, timed_out, duration_ms, output FROM check_run ORDER BY verification_id, seq"),
+            ("workspaces", "SELECT name, state, target, head FROM workspace"),
+            ("events", "SELECT seq, kind, entity, created_at FROM event ORDER BY seq DESC LIMIT 30"),
+        ] {
+            let mut stmt = c.prepare(sql)?;
+            let columns: Vec<String> = stmt.column_names().iter().map(|s| (*s).into()).collect();
+            let rows = stmt.query_map([], |r| {
+                let mut row = serde_json::Map::new();
+                for (i, column) in columns.iter().enumerate() {
+                    let value = match r.get_ref(i)? {
+                        rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                        rusqlite::types::ValueRef::Integer(n) => n.into(),
+                        rusqlite::types::ValueRef::Real(n) => serde_json::json!(n),
+                        rusqlite::types::ValueRef::Text(s) => String::from_utf8_lossy(s).into_owned().into(),
+                        rusqlite::types::ValueRef::Blob(_) => "<blob>".into(),
+                    };
+                    row.insert(column.clone(), value);
+                }
+                Ok(serde_json::Value::Object(row))
+            })?.collect::<rusqlite::Result<Vec<_>>>()?;
+            snapshot.insert(name.into(), rows.into());
+        }
+        Ok(serde_json::Value::Object(snapshot))
+    });
+    let mut jobs: Vec<_> = project.jobs.lock().unwrap().iter().cloned().collect();
+    jobs.sort();
+    let running = project.running.lock().unwrap().clone();
+    let failed = lobotomyd::results::failures(project);
+    format!(
+        "project={}\njobs={jobs:?}\nrunning={running:?}\nfailed={failed:?}\n{}",
+        project.data_dir.display(),
+        match persisted {
+            Ok(value) => serde_json::to_string_pretty(&value).unwrap(),
+            Err(error) => format!("snapshot failed: {error}"),
+        }
+    )
+}
+
+pub async fn wait_for_backend<T>(project: &Project, what: &str, check: impl FnMut() -> Option<T>) -> T {
+    wait_for_diagnostic(what, check, || backend_diagnostic(project)).await
 }
 
 pub async fn ended_turn(db: &Db) -> Turn {

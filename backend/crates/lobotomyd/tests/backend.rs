@@ -13,7 +13,7 @@ use lobotomy_core::id::now_ms;
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, current_config, load_project};
 use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, load_task, open_attempt};
 use lobotomy_core::turn::{
-    Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, SetRoleHarness, TurnState, hold,
+    Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, SetRoleHarness, TurnState, hold, load_turn,
 };
 use lobotomy_core::verify::{Accept, RetryPreview, VerificationState, latest_verification, preview_stopped};
 use lobotomy_core::{Caller, Db};
@@ -131,6 +131,17 @@ fn set_config(db: &Db, change: impl FnOnce(&mut ProjectConfig)) {
 /// the executor with the output (harness-adapter.md §4.2).
 #[tokio::test]
 async fn checks_run_on_the_candidate_and_a_failure_goes_back_to_the_executor() {
+    failed_check_round_trip(false).await;
+}
+
+/// Both turns may finish between two polls. Observe only after that has happened: the done
+/// turn must still be identified, rather than treating the latest turn as the first (#25).
+#[tokio::test]
+async fn a_failed_check_can_finish_before_the_first_turn_is_observed() {
+    failed_check_round_trip(true).await;
+}
+
+async fn failed_check_round_trip(observe_after_both: bool) {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
@@ -144,13 +155,48 @@ async fn checks_run_on_the_candidate_and_a_failure_goes_back_to_the_executor() {
         ];
     });
     let task = create_task(&db, "FAKE:done");
-    let first = ended_turn(&db).await;
+    if observe_after_both {
+        wait_for_backend(&backend.project, "both turns to end before observing the first", || {
+            let ended: i64 = db
+                .read(|c| {
+                    Ok(c.query_row("SELECT count(*) FROM turn WHERE task_id = ?1 AND state = 'ended'", [&task], |r| {
+                        r.get(0)
+                    })?)
+                })
+                .unwrap();
+            (ended == 2).then_some(())
+        })
+        .await;
+    }
+    // The attempt records the exact turn that reported done. This remains true when the
+    // resumed turn has already started or ended before the test's first poll.
+    let first = wait_for_backend(&backend.project, "the reported done turn to end", || {
+        db.read(|c| {
+            use rusqlite::OptionalExtension as _;
+            let id: Option<String> = c
+                .query_row("SELECT done_turn_id FROM attempt WHERE task_id = ?1 ORDER BY seq LIMIT 1", [&task], |r| {
+                    r.get(0)
+                })
+                .optional()?
+                .flatten();
+            id.map(|id| load_turn(c, &id)).transpose()
+        })
+        .unwrap()
+        .filter(|t| t.state == TurnState::Ended)
+    })
+    .await;
+    assert!(first.done_at.is_some(), "the first turn reported done");
+    assert_eq!(first.outcome, Some(Outcome::Completed));
+    if observe_after_both {
+        assert_ne!(first.id, last(&db).unwrap().id, "the latest turn is already the resumed turn");
+    }
 
     // The first check saw the candidate's file; the second failed, and its output went back.
-    let next = wait_for("the turn after the failed check", || {
+    let next = wait_for_backend(&backend.project, "the turn after the failed check", || {
         last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)
     })
     .await;
+    assert_eq!(next.outcome, Some(Outcome::Completed));
     assert!(next.input.contains("退出码为 3") && next.input.contains("two tests failed"), "{}", next.input);
     assert_eq!(next.task_id.as_deref(), Some(task.as_str()));
     assert_eq!(next.native_id, first.native_id, "the same session goes on");
