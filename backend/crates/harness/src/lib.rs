@@ -1,6 +1,6 @@
-//! Harness adapters and the platform layer (notes/harness-adapter.md). M1 has the Codex adapter;
-//! Claude arrives with M3.
+//! Harness adapters and the platform layer (notes/harness-adapter.md): Codex, and Claude from M2.
 
+pub mod claude;
 pub mod codex;
 pub mod event;
 pub mod process;

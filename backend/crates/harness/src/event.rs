@@ -20,6 +20,12 @@ pub enum Event {
     TurnFailed {
         message: String,
     },
+    /// The harness refused the turn for its quota. `resets_at` is in Unix milliseconds, when the
+    /// harness said (data-model.md §8.3).
+    QuotaRejected {
+        resets_at: Option<i64>,
+        message: String,
+    },
     /// An error outside an item, such as a lost connection the harness retries.
     Error {
         message: String,
@@ -60,6 +66,9 @@ pub enum ItemKind {
     WebSearch,
     /// `items`: `[{text, completed}]`
     TodoList,
+    /// A tool of the harness's own that none of the kinds above covers, such as reading or
+    /// searching files: `tool`, `input`, `output`, `status`.
+    ToolCall,
     /// `message`
     Error,
     Other,
@@ -75,6 +84,7 @@ impl ItemKind {
             ItemKind::McpCall => "mcp_call",
             ItemKind::WebSearch => "web_search",
             ItemKind::TodoList => "todo_list",
+            ItemKind::ToolCall => "tool_call",
             ItemKind::Error => "error",
             ItemKind::Other => "other",
         }

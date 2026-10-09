@@ -118,6 +118,8 @@ struct Observed {
     output: bool,
     completed: bool,
     failed: Option<String>,
+    /// The harness refused the turn for its quota (data-model.md §8.3).
+    quota: Option<Failure>,
     last_error: Option<String>,
     unparsed: bool,
     /// An event could not be recorded; the raw output is kept to replay it (#16).
@@ -277,6 +279,8 @@ async fn drive(
             path.display()
         );
         (Outcome::Failed, Some(Failure::new(FailureKind::Other, message)))
+    } else if let Some(failure) = seen.quota {
+        (Outcome::Failed, Some(failure))
     } else if seen.completed {
         (Outcome::Completed, None)
     } else if let Some(message) = seen.failed {
@@ -350,6 +354,9 @@ async fn observe(project: &Arc<Project>, turn: &Turn, event: Event, seen: &mut O
         }
         Event::TurnCompleted { .. } => seen.completed = true,
         Event::TurnFailed { message } => seen.failed = Some(message),
+        Event::QuotaRejected { resets_at, message } => {
+            seen.quota = Some(Failure { resets_at, ..Failure::new(FailureKind::Quota, message) });
+        }
         Event::Error { message } => {
             store(project, turn, None, "error", json!({ "message": message })).await?;
             seen.last_error = Some(message);

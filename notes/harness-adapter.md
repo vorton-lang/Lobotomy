@@ -54,6 +54,7 @@ Codex（消息经 stdin，位置参数为 -）
 
 1. **每轮都在 role 的执行现场启动进程。** 两家 resume 都不恢复 cwd，turn 在进程 cwd 中执行。
 2. **每轮都传角色指令与 MCP 配置。** MCP 配置与 1.6 的能力裁剪参数都是启动参数，不保存在 session 中；每个 turn 是新进程，所以每个 turn 都要传。Claude 在压缩后按当轮进程参数重新生成并固定 system prompt；压缩后首轮若未传 `--append-system-prompt`，角色指令会从 system prompt 中永久消失，之后再传也被忽略，直到下一次压缩。模型仍能从压缩摘要中说出角色名，所以问题不显眼。Codex 不需要重传，传了也无害。system prompt 固定后重复传参不影响缓存。
+   - Claude Code 2.1.283 的 `--system-prompt-snapshot` 默认开启，说明的行为与上面一致：对话的第一次请求时生成并记录 system prompt；之后的请求与 resume 原样发送记录，后来传入的文字不生效，直到对话被压缩（帮助文本，2026-10-09）。所以每个 turn 仍要传角色指令。修改角色指令后，已有的会话要到压缩后、或新建会话后才用上新指令。
 3. **消息走 stdin，长配置走文件。** 命令行长度有平台上限（Windows 约 32K 字符）。Codex 在 stdin 非 TTY 时会读取 stdin 并追加为 `<stdin>` 块，必须显式提供或关闭 stdin。Claude 的 `--mcp-config` 接收多个值，会把其后的位置参数（提示词）当作配置文件路径吞掉（实测踩到）。
 4. **压缩：** Claude 从 stdout 的 `system/compact_boundary` 读取（含 trigger、压缩前后 token 数）。Codex 的压缩设计上不影响工作，不做追踪；可尽力读 rollout 文件中的 `compacted` 记录，仅用于 GUI 显示。
 5. **用量：** Claude 每轮 `result.usage`，另有 `rate_limit_event`（5 小时 / 7 天额度利用率与重置时间），用于 GUI 显示和识别额度被拒；v1 不按利用率提前限流。Codex 的 `turn.completed.usage` 实测为线程累计值，需与上一轮做差；额度信息不在 `--json` 输出中，只在 rollout 文件的 `rate_limits` 中。额度域、被拒与恢复见 [data-model.md](data-model.md) §8。
@@ -105,6 +106,17 @@ Codex（消息经 stdin，位置参数为 -）
 - 所有方式下，`--json` 输出都停在 `item.started`，没有被中断 turn 的结束事件。运行时按 interrupted 记录（[data-model.md](data-model.md) §3.2）。
 - resume 后，模型能说出最后执行的命令，并知道它被中断、没有收到输出。
 
+**Claude 的事件**（Claude Code 2.1.283，haiku，Windows，2026-10-09；样本见 [backend/crates/harness/tests/fixtures/claude-turn.jsonl](../backend/crates/harness/tests/fixtures/claude-turn.jsonl)）。与 Codex 不同，解析要保留状态：
+
+- 新会话的 ID 由运行时生成，经 `--session-id` 传入；`system/init` 中的 `session_id` 与它相同。resume 后仍是同一个 ID。
+- 一个 `assistant` 事件只带一个内容块，不带块的序号。顺序是：块开始 → 部分消息 → 这个块的 `assistant` 事件 → 块结束。所以完整的块属于当时打开的块，item 的 ID 是"消息 ID:块序号"，与部分消息的 ID 相同。
+- 文本块的部分消息实时显示。工具的输入也会分段到达，但只在完整时显示。
+- 工具调用在 `assistant` 事件中开始，结果在之后的 `user` 事件的 `tool_result` 中到达。结果是字符串或内容块数组；失败时 `is_error` 为真，命令的结果以 "Exit code N" 开头。
+- 思考块只有签名、没有文字时，不记录。
+- 子 agent 内部的消息（`parent_tool_use_id` 不为空）不进入对话，只显示子 agent 这次工具调用本身。
+- `result` 事件结束 turn：`subtype` 为 `success` 且 `is_error` 为假时正常结束，其余为失败。
+- `rate_limit_event` 每轮都有，实测 `status` 为 `allowed_warning`。被拒时的形式还没有记录到；适配器按 `status` 为 `rejected` 识别（§6）。
+
 ### 1.5 二进制定位
 
 adapter 按平台自动探测两家 CLI，并允许手动配置；每次启动记录版本。Windows 实测：Claude 经 scoop shim 位于 PATH；Codex 不在 PATH 上，位于 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，hash 目录随 desktop app 更新变化，版本可能在运行期间升级。
@@ -116,14 +128,19 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
 | 能力 | Claude | Codex |
 |---|---|---|
 | 用户的连接器 | `--strict-mcp-config`（实测只剩 Lobotomy MCP） | `--ignore-user-config --disable apps --disable computer_use --disable browser_use`（实测只剩执行、改文件、网页搜索、生图、子 agent） |
-| 绕开 Lobotomy 的内置工具 | `--disallowed-tools CronCreate CronDelete CronList ScheduleWakeup RemoteTrigger PushNotification SendMessage ListAgents EnterWorktree ExitWorktree DesignSync` | — |
+| 绕开 Lobotomy 的内置工具 | `--disallowed-tools CronCreate CronDelete CronList ScheduleWakeup RemoteTrigger PushNotification SendMessage ListAgents EnterWorktree ExitWorktree DesignSync Workflow` | — |
+| 用户自己的设置（hooks、权限规则） | `--setting-sources ""`：不读用户、项目和本地的设置文件 | `--ignore-user-config` |
 | git push | 进程环境变量 `GIT_CONFIG_*` 注入 `url.lobotomy-push-disabled://.pushInsteadOf`（`https://`、`git@`、`ssh://`）；实测 push 在本地失败，fetch 不受影响 | 同左 |
 | gh | `GH_CONFIG_DIR` 指向空目录，并从进程环境中删除 `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN`、`GITHUB_ENTERPRISE_TOKEN`（这四个变量优先于配置目录中的凭据，[#10](https://github.com/vorton-lang/Lobotomy/issues/10)），等同未登录。额度检查调用同样处理 | 同左 |
 
 - 保留网页搜索与读取、子 agent。
 - 这些措施防的是失误和过度热心，不防对抗：bypass 模式下 agent 总能绕过（例如从凭据管理器取 token）。
 - 运行时每轮从 Claude 的 `system/init` 事件读取工具清单，与已知清单比对；CLI 升级后出现的新工具在 Inspector 中标出，由用户决定是否禁用。
-- Codex role 不读用户的 `config.toml`，模型、推理强度等由 Lobotomy 显式传入。
+- Codex role 不读用户的 `config.toml`，模型、推理强度等由 Lobotomy 显式传入。Claude role 同样不读设置文件：用户为自己使用配置的 hooks 和权限规则，假定有人在场。
+- **Claude Code 2.1.283 实测**（Windows，2026-10-09）：
+  - 用上面的参数启动后，`system/init` 中的工具清单为 Task、Edit、Glob、Grep、NotebookEdit、PowerShell、Read、ReportFindings、Skill、TaskCreate、TaskGet、TaskList、TaskStop、TaskUpdate、ToolSearch、WebFetch、WebSearch、Write；MCP 服务只有 lobotomy。
+  - `Workflow` 是新出现的工具，会在后台启动多个 agent，可能在 turn 结束后仍在运行，所以去掉。子 agent（`Task`）在 turn 内同步完成，保留。
+  - Windows 上执行命令的工具是 `PowerShell`，不是 `Bash`。待办列表改为 `TaskCreate`、`TaskUpdate` 等工具，不再是 `TodoWrite`。
 - 外部系统（GitHub 等）由 Lobotomy 统一接入，role 经 Lobotomy MCP 访问，见 [manager-actions.md](manager-actions.md)。
 
 ### 1.7 中断后的范围（#7）
@@ -186,7 +203,8 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 | 模式 | 什么时候用 | Codex | Claude（M2，未实测） |
 |---|---|---|---|
 | 完全放开（默认） | 不审批，不用沙箱 | `--dangerously-bypass-approvals-and-sandbox` | `--dangerously-skip-permissions` |
-| 自动审批 | 管理员不允许完全放开 | `-c approval_policy="on-request" -c approvals_reviewer="auto_review" -c sandbox_mode="workspace-write"` | `--permission-mode auto --permission-prompts none` |
+| 自动审批 | 管理员不允许完全放开 | `-c approval_policy="on-request" -c approvals_reviewer="auto_review" -c sandbox_mode="workspace-write"` | `--permission-mode auto --permission-prompts none`：需要提示的操作直接被拒 |
+| Lobotomy 的 MCP 工具 | 两种模式都免审批 | `-c mcp_servers.lobotomy.default_tools_approval_mode="approve"` | `--allowed-tools mcp__lobotomy` |
 
 - **没有人工审批。** Lobotomy 不把审批请求交给用户（hci-rationale.md）。`codex exec` 中没有人能回答审批请求，需要审批的操作当场被拒。turn 照常结束，但工作和报告都做不成（实测见下）。
 - **不继承用户自己的 Codex 配置。** `--ignore-user-config` 用于能力裁剪（1.6）。用户为交互使用设置的审批方式假定有人在场，不适用于 role。管理员的 requirements 不受 `--ignore-user-config` 影响，照常生效。
@@ -436,7 +454,8 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 - 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。Claude 的 `~/.claude/CLAUDE.md` 在 M2 时确认。
 - Codex 0.159.2 的 `codex queue`（向已有会话排队一条消息）能否在 `exec` 的 turn 运行中投递消息，待查。若可以，它可能替代 ideas.md 中的"中断并发送"。`codex delete --force <id>` 可以按 ID 删除会话，清理探针或临时会话时使用。
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。
-- `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。下次自然发生时记录。Codex 被拒的形式暂不处理。
+- `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。下次自然发生时记录。适配器目前按 `rate_limit_event` 的 `status` 为 `rejected` 识别，这个取值来自文档，没有实测。Codex 被拒的形式暂不处理。
+- Claude 在环境不允许所给权限模式时 stderr 怎么写，还不知道。在此之前，适配器不把它识别为"权限模式不被允许"，turn 按普通失败记录。
 - 每个 turn 更换 MCP URL 后，Claude 的跨进程 prompt cache 是否仍命中。Codex 已实测不受影响（§1.4）。
 - 平台启动适配（1.8）：Windows 已实测；Linux 的设置竞态与启动线程待实测。
 - Linux 上重跑实测：[spikes/harness-cli/spike.mjs](../spikes/harness-cli/spike.mjs) 为 Node 脚本，可直接移植。
