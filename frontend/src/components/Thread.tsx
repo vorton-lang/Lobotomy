@@ -152,7 +152,7 @@ function RowView({
     case 'item':
       return <ItemView item={row.item} role={role} commands={commands} fold={row.fold} />;
     case 'live':
-      return <LiveItemView item={row.item} />;
+      return <LiveItemView item={row.item} role={role} />;
     case 'running':
       return <RunningView role={row.role} since={row.since} />;
   }

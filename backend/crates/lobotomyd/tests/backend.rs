@@ -688,7 +688,10 @@ async fn a_task_runs_on_claude_to_acceptance() {
     assert!(config.file_name().unwrap().to_string_lossy().starts_with(&turn.id));
     wait_for("the MCP configuration to go", || (!config.exists()).then_some(())).await;
 
-    assert_eq!(item_kinds(&db, &turn.id), ["input", "agent_message", "file_change", "mcp_call", "agent_message"]);
+    assert_eq!(
+        item_kinds(&db, &turn.id),
+        ["input", "agent_message", "file_change", "tool_call", "mcp_call", "agent_message"]
+    );
     phase(&db, &task, Phase::Accepting).await;
     backend.shutdown(Duration::from_secs(5)).await;
 }

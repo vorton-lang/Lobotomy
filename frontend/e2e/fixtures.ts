@@ -14,6 +14,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(here, '..', '..', 'backend');
 const exe = path.join(backendDir, 'target', 'debug', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
 const fakeCodex = path.join(backendDir, 'crates', 'lobotomyd', 'tests', 'fixtures', 'fake-codex.mjs');
+const fakeClaude = path.join(backendDir, 'crates', 'lobotomyd', 'tests', 'fixtures', 'fake-claude.mjs');
 
 export interface Backend {
   port: number;
@@ -40,7 +41,7 @@ async function startBackend(): Promise<Backend & { stop: () => Promise<void> }> 
   const host = path.join(root, 'host');
   const log = fs.openSync(path.join(root, 'backend.log'), 'a');
   const child = spawn(exe, ['--data-dir', data, '--host-dir', host, '--repo', repo], {
-    env: { ...process.env, LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]) },
+    env: { ...process.env, LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]), LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]) },
     stdio: ['ignore', log, log],
   });
   const info = path.join(data, 'backend.json');

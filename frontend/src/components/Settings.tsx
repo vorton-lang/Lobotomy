@@ -1,10 +1,11 @@
 // Settings: each harness's permission mode, a host setting that applies at once
-// (harness-adapter.md §1.9); then the project configuration (data-model.md §9.1 project_config):
-// check commands, capture scope and the size guardrail. Each save of the project configuration is
-// a new version; checks and captures name the version they used.
+// (harness-adapter.md §1.9); the harness of each role, which also applies at once; then the project
+// configuration (data-model.md §9.1 project_config): check commands, capture scope and the size
+// guardrail. Each save of the project configuration is a new version; checks and captures name
+// the version they used.
 
 import { useEffect, useState } from 'react';
-import type { Check, HarnessView, Permission, ProjectConfig } from '../api/types';
+import type { Check, HarnessView, Permission, ProjectConfig, RoleView } from '../api/types';
 import { bytes, harnessName, PERMISSION_LABEL } from '../format';
 import { call, run, setPermission, useStore } from '../store';
 import { Modal } from './common';
@@ -42,6 +43,39 @@ function Permissions({ harnesses }: { harnesses: HarnessView[] }) {
   );
 }
 
+/**
+ * Which harness each role of the project runs on; no role is bound to one (harness-adapter.md §0).
+ * A switch applies at once: the role's current session ends, and its next turn starts a new one.
+ */
+function Roles({ roles, harnesses }: { roles: RoleView[]; harnesses: HarnessView[] }) {
+  return (
+    <>
+      <h3>角色 · 本项目</h3>
+      <p className="muted">
+        切换后，角色当前的会话结束，下一个 turn 在新 harness 的新会话中开始；正在做的任务会重新发给它。turn 运行时不能切换。
+      </p>
+      {roles.map((role) => (
+        <div key={role.name} className="check-row">
+          <span className="role-name">{role.name}</span>
+          <select
+            value={role.harness}
+            disabled={role.unfinished !== null}
+            aria-label={`${role.name} 使用的 harness`}
+            onChange={(e) => run('set_role_harness', { role: role.name, harness: e.target.value })}
+          >
+            {harnesses.map((h) => (
+              <option key={h.harness} value={h.harness}>
+                {harnessName(h.harness)}
+              </option>
+            ))}
+          </select>
+          {role.unfinished && <span className="muted">turn 运行中</span>}
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** What the raw output of turns takes on disk (data-model.md §7.4); read when the settings open. */
 function Storage() {
   const [usage, setUsage] = useState<{ files: number; bytes: number } | null>(null);
@@ -71,6 +105,7 @@ const lines = (text: string) =>
 export function Settings({ onClose }: { onClose: () => void }) {
   const current = useStore((s) => s.snapshot?.config);
   const harnesses = useStore((s) => s.snapshot?.harnesses ?? []);
+  const roles = useStore((s) => s.snapshot?.roles ?? []);
   // The version the form was filled from. A version saved meanwhile, in another window, makes the
   // backend refuse this save instead of being written over (#16).
   const [version] = useState(() => current?.version ?? 0);
@@ -97,6 +132,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="设置" onClose={onClose} wide>
       <Permissions harnesses={harnesses} />
+      <Roles roles={roles} harnesses={harnesses} />
       <Storage />
 
       <h2 className="settings-group">项目设置 · 第 {version} 版</h2>

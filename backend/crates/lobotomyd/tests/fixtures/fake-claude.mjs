@@ -3,8 +3,8 @@
 // MCP service through the URL in the file of its `--mcp-config` argument.
 //
 // The input decides what happens:
-//   FAKE:done     writes work.txt, reports done, completes the turn; FAKE:text=<word> puts that
-//                 word in the file instead of "hi"
+//   FAKE:done     writes work.txt and reads it back, reports done, completes the turn;
+//                 FAKE:text=<word> puts that word in the file instead of "hi"
 //   FAKE:blocked  asks the user "空值怎么处理？" through org_report, then completes the turn
 //   FAKE:wait=<ms>  waits that long before anything else
 //   FAKE:fail     ends the turn with an error
@@ -113,6 +113,7 @@ if (input.includes('FAKE:done')) {
   const created = !fs.existsSync(file);
   fs.writeFileSync(file, /FAKE:text=(\S+)/.exec(input)?.[1] ?? 'hi');
   tool('Write', { file_path: file, content: '…' }, `File created successfully at: ${file}`, { tool_use_result: { type: created ? 'create' : 'update', filePath: file } });
+  tool('Read', { file_path: file }, `1\t${fs.readFileSync(file, 'utf8')}`);
   await report({ title: '完成', body: '写了 work.txt', status: 'done' });
 }
 

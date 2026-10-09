@@ -113,6 +113,7 @@ Codex（消息经 stdin，位置参数为 -）
 - 文本块的部分消息实时显示。工具的输入也会分段到达，但只在完整时显示。
 - 工具调用在 `assistant` 事件中开始，结果在之后的 `user` 事件的 `tool_result` 中到达。结果是字符串或内容块数组；失败时 `is_error` 为真，命令的结果以 "Exit code N" 开头。
 - 思考块只有签名、没有文字时，不记录。
+- 工具按种类归入 item：`Bash`、`PowerShell` 是命令；`Write`、`Edit`、`MultiEdit`、`NotebookEdit` 是文件改动；`mcp__<服务>__<工具>` 是 MCP 调用；`WebSearch` 是搜索；其余（如 `Read`、`Grep`、`TaskCreate`）是通用的工具调用。工作目录中的路径记为相对路径。
 - 子 agent 内部的消息（`parent_tool_use_id` 不为空）不进入对话，只显示子 agent 这次工具调用本身。
 - `result` 事件结束 turn：`subtype` 为 `success` 且 `is_error` 为假时正常结束，其余为失败。
 - `rate_limit_event` 每轮都有，实测 `status` 为 `allowed_warning`。

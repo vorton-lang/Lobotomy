@@ -372,7 +372,18 @@ impl Parser {
                         .collect();
                     (ItemKind::TodoList, json!({ "items": items }))
                 }
-                _ => (ItemKind::ToolCall, json!({ "tool": name, "input": input, "output": output, "status": status })),
+                _ => {
+                    // Paths in the working directory are shown relative to it, as file changes are.
+                    let mut input = input.clone();
+                    if let Value::Object(fields) = &mut input {
+                        for key in ["file_path", "notebook_path", "path"] {
+                            if let Some(Value::String(path)) = fields.get_mut(key) {
+                                *path = self.relative(path);
+                            }
+                        }
+                    }
+                    (ItemKind::ToolCall, json!({ "tool": name, "input": input, "output": output, "status": status }))
+                }
             }
         };
         Item { native_id: call.to_owned(), kind, content }
@@ -525,6 +536,7 @@ mod tests {
             (read.kind, &read.content["tool"], &read.content["output"]),
             (ItemKind::ToolCall, &json!("Read"), &json!("1\thello"))
         );
+        assert_eq!(read.content["input"]["file_path"], "notes.txt", "relative to the working directory");
 
         assert!(matches!(events.last(), Some(Event::TurnCompleted { usage }) if usage["output_tokens"] == 2699));
     }

@@ -31,6 +31,7 @@ import {
   stoppedPaths,
   textOf,
   timeline,
+  toolSubject,
   turnOutcome,
   voidReport,
   workRange,
@@ -308,6 +309,20 @@ describe('roleActivity', () => {
     expect(roleActivity(role({}), { ...asked, undelivered_messages: 1 }, 0)).toBe('你的回复在排队，下一个 turn 交给它');
     const registered = { ...turn('t'), state: 'registered' as const, outcome: null };
     expect(roleActivity(role({ unfinished: registered }), asked, 0)).toBe('即将开始 turn');
+  });
+});
+
+describe('toolSubject', () => {
+  it('says what a tool of the harness works on, in one line', () => {
+    expect(toolSubject({ file_path: 'C:/work/src/lib.rs' })).toBe('C:/work/src/lib.rs');
+    expect(toolSubject({ pattern: 'fn main', path: 'src' })).toBe('fn main');
+    expect(toolSubject({ path: 'src' })).toBe('src');
+    expect(toolSubject({ subject: 'First item', description: 'longer' })).toBe('First item');
+    expect(toolSubject({ query: 'select:TaskCreate', max_results: 1 })).toBe('select:TaskCreate');
+    expect(toolSubject({ prompt: `first line\nsecond line` })).toBe('first line');
+    expect(toolSubject({ prompt: 'x'.repeat(200) })).toBe(`${'x'.repeat(120)}…`);
+    expect(toolSubject({ taskId: '1', status: 'completed' })).toBe('');
+    expect(toolSubject(null)).toBe('');
   });
 });
 

@@ -114,6 +114,22 @@ export function commandSummary(raw: Text | null | undefined): { line: string; si
   return { line, size };
 }
 
+/** The input fields that say what a tool works on, in the order they are looked for. */
+const TOOL_SUBJECT = ['file_path', 'notebook_path', 'pattern', 'path', 'query', 'url', 'command', 'subject', 'description', 'prompt'];
+
+/**
+ * What a tool call of the harness's own works on, in one line: the file it reads, the pattern it
+ * searches, the task it creates. Empty when its input names none of these.
+ */
+export function toolSubject(input: unknown): string {
+  if (typeof input !== 'object' || input === null) return '';
+  const fields = input as Record<string, unknown>;
+  const value = TOOL_SUBJECT.map((key) => fields[key]).find((v) => typeof v === 'string' && v.trim());
+  if (typeof value !== 'string') return '';
+  const line = value.split('\n')[0];
+  return line.length > COMMAND_LINE ? `${line.slice(0, COMMAND_LINE)}…` : line;
+}
+
 export function sourceLabel(source: string): string {
   if (source === 'user') return '你';
   if (source === 'runtime') return 'Lobotomy';

@@ -190,6 +190,25 @@ test('a managed Codex goes on after switching to auto review', async ({ page, ba
   await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
+// The user puts Malkuth on Claude in the settings; the task runs on the fake Claude: its file
+// change, the file it read and its report show in the thread, and the task goes to acceptance (M2).
+test('a role switched to Claude runs a task', async ({ page, backend }) => {
+  await open(page, backend);
+  const roleLine = page.locator('.role-line');
+  await expect(roleLine).toContainText('Codex');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await settings.getByLabel('Malkuth 使用的 harness').selectOption('claude');
+  await expect(roleLine).toContainText('Claude');
+  await settings.getByRole('button', { name: '关闭' }).click();
+
+  await createTask(page, '在 Claude 上的任务', 'FAKE:done');
+  await expect(page.locator('.attention .card').filter({ hasText: '等你验收' })).toBeVisible();
+  await expect(page.locator('.item.file-change')).toContainText('work.txt');
+  await expect(page.locator('.item.command', { hasText: 'Read' })).toContainText('work.txt');
+  await expect(page.locator('.report.done').last()).toContainText('完成');
+});
+
 // A message sent while the executor's turn finishes the task never reaches the executor. It
 // does not slip away at acceptance: the user lets it go explicitly (#14).
 test('a message the executor never got waits for the user at acceptance', async ({ page, backend }) => {
