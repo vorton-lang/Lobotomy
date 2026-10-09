@@ -11,7 +11,7 @@ use lobotomy_core::Error;
 use lobotomy_core::host::HostDb;
 use lobotomy_core::quota::{CheckOutcome, Domain};
 use lobotomy_harness::event::Event;
-use lobotomy_harness::{Harness, Permission, codex};
+use lobotomy_harness::{Harness, Output, Permission, claude, codex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 
 use crate::launch;
@@ -30,6 +30,7 @@ pub struct Host {
 /// How to start the harness CLIs. Binary detection is host state (data-model.md §10).
 #[derive(Clone, Debug)]
 pub struct HarnessConfig {
+    pub claude: Cli,
     pub codex: Cli,
     /// The program and arguments that send Ctrl+C to a pid (harness-adapter.md §1.8).
     pub interrupt_helper: Vec<String>,
@@ -56,16 +57,21 @@ impl Cli {
 
 impl HarnessConfig {
     /// The real CLIs, with this executable as the interrupt helper.
-    /// `LOBOTOMY_CODEX`, a JSON array of program and arguments, replaces the located Codex. The
-    /// GUI's end-to-end tests put the fake CLI there.
+    /// `LOBOTOMY_CODEX` and `LOBOTOMY_CLAUDE`, each a JSON array of program and arguments, replace
+    /// the located CLIs. The GUI's end-to-end tests put the fake CLIs there.
     pub fn detect() -> anyhow::Result<Self> {
         let exe = std::env::current_exe().context("locating the backend executable")?;
-        let codex = match std::env::var("LOBOTOMY_CODEX") {
-            Ok(json) => serde_json::from_str(&json).context("LOBOTOMY_CODEX is not a JSON array of strings")?,
-            Err(_) => vec![codex::locate().to_string_lossy().into_owned()],
+        let command = |var: &str, located: PathBuf| -> anyhow::Result<Vec<String>> {
+            match std::env::var(var) {
+                Ok(json) => {
+                    serde_json::from_str(&json).with_context(|| format!("{var} is not a JSON array of strings"))
+                }
+                Err(_) => Ok(vec![located.to_string_lossy().into_owned()]),
+            }
         };
         Ok(Self {
-            codex: Cli { command: codex, reasoning_effort: None },
+            claude: Cli { command: command("LOBOTOMY_CLAUDE", claude::locate())?, reasoning_effort: None },
+            codex: Cli { command: command("LOBOTOMY_CODEX", codex::locate())?, reasoning_effort: None },
             interrupt_helper: vec![exe.to_string_lossy().into_owned(), "ctrl-c".into()],
             probe_timeout: Duration::from_secs(120),
         })
@@ -73,6 +79,7 @@ impl HarnessConfig {
 
     pub fn cli(&self, harness: Harness) -> &Cli {
         match harness {
+            Harness::Claude => &self.claude,
             Harness::Codex => &self.codex,
         }
     }
@@ -168,8 +175,10 @@ impl Host {
 
     async fn probe(&self, name: &str) -> anyhow::Result<CheckOutcome> {
         let harness = Harness::parse(name).with_context(|| format!("no quota check for {name}"))?;
-        let (args, input, parse): (_, _, fn(&str) -> Option<Event>) = match harness {
-            Harness::Codex => (codex::probe_args(self.permission(harness)?), codex::PROBE_INPUT, codex::parse_line),
+        let permission = self.permission(harness)?;
+        let (args, input) = match harness {
+            Harness::Claude => (claude::probe_args(permission), claude::PROBE_INPUT),
+            Harness::Codex => (codex::probe_args(permission), codex::PROBE_INPUT),
         };
         let (program, prefix) = self.harness.cli(harness).program()?;
         let args: Vec<String> = prefix.iter().cloned().chain(args).collect();
@@ -181,17 +190,24 @@ impl Host {
         let stderr_tail = io.stderr;
         let read = async {
             let mut lines = BufReader::new(io.stdout).lines();
-            let mut completed = false;
+            let mut output = Output::new(harness);
+            let (mut completed, mut resets_at) = (false, None);
             while let Some(line) = lines.next_line().await? {
-                completed |= matches!(parse(&line), Some(Event::TurnCompleted { .. }));
+                for event in output.parse_line(&line) {
+                    match event {
+                        Event::TurnCompleted { .. } => completed = true,
+                        Event::QuotaRejected { resets_at: Some(at), .. } => resets_at = Some(at),
+                        _ => {}
+                    }
+                }
             }
-            Ok::<_, std::io::Error>(completed)
+            Ok::<_, std::io::Error>((completed, resets_at))
         };
-        let completed = match tokio::time::timeout(self.harness.probe_timeout, read).await {
-            Ok(completed) => completed?,
+        let (completed, resets_at) = match tokio::time::timeout(self.harness.probe_timeout, read).await {
+            Ok(read) => read?,
             Err(_) => {
                 tracing::warn!(harness = name, timeout = ?self.harness.probe_timeout, "quota check timed out");
-                false
+                (false, None)
             }
         };
         let _ = spawned.child.start_kill();
@@ -200,9 +216,9 @@ impl Host {
         if !completed && let Ok(Ok(tail)) = tokio::time::timeout(Duration::from_secs(5), stderr_tail).await {
             tracing::warn!(harness = name, stderr = tail, "quota check did not complete");
         }
-        // Codex's rejection format is not known yet, so a failed check carries no reset time
-        // (data-model.md §8.3).
-        Ok(if completed { CheckOutcome::Passed } else { CheckOutcome::Rejected { resets_at: None } })
+        // Claude says when the quota resets; Codex's rejection format is not known yet, so its
+        // failed check carries no reset time (data-model.md §8.3).
+        Ok(if completed { CheckOutcome::Passed } else { CheckOutcome::Rejected { resets_at } })
     }
 }
 

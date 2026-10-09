@@ -5,8 +5,8 @@ use lobotomy_core::task::{
 };
 use lobotomy_core::turn::{
     Continue, EndTurn, Failure, FailureKind, InputDelivered, MarkUnfinishedUnknown, NewNativeSession, Outcome,
-    RegisterTurn, SessionIdentified, TurnLaunched, TurnRegistered, TurnState, current_session, load_turn,
-    turn_by_token,
+    RegisterTurn, SessionIdentified, SetRoleHarness, TurnLaunched, TurnRegistered, TurnState, current_session,
+    load_turn, turn_by_token,
 };
 use lobotomy_core::verify::{CheckOutcome, FinishVerification, StartVerification};
 use lobotomy_core::view::{Attention, attention, overview};
@@ -409,6 +409,36 @@ fn a_reply_bound_to_the_next_turn_clears_the_question() {
     let again = report(&db, &t3.turn_id, ReportStatus::Blocked, Some("空值怎么处理？")).unwrap();
     assert_eq!(again, ReportEffect::Recorded);
     assert!(asks_user());
+}
+
+/// No role is bound to a harness (harness-adapter.md §0). A session belongs to its harness, so
+/// switching starts the next turn in a new session, which gets the brief again.
+#[test]
+fn a_role_switches_harness_into_a_new_session() {
+    let db = db();
+    let task = started_task(&db);
+    let set = |request: &str, harness: &str| {
+        let switch = SetRoleHarness { request_id: request.into(), role: ROLE.into(), harness: harness.into() };
+        db.execute(&Caller::User, &switch)
+    };
+    assert_eq!(rejection(set("h0", "gemini")), "unknown_harness");
+    let first = common::register(&db);
+    assert_eq!(rejection(set("h1", "claude")), "turn_unfinished");
+    end(&db, &first.turn_id, Outcome::Completed);
+
+    set("h2", "claude").unwrap();
+    let queued = db.read(|c| queued_messages(c, ROLE)).unwrap();
+    assert!(queued.iter().any(|m| m.task_id.as_deref() == Some(task.as_str()) && m.body.contains("实现 adapter")));
+    let registered = register(&db).unwrap();
+    let next = db.read(|c| load_turn(c, &registered.turn_id)).unwrap();
+    assert_eq!((next.harness.as_str(), next.native_id), ("claude", None), "a new session on Claude");
+    assert!(next.input.contains("实现 adapter"), "{}", next.input);
+
+    let session = next.native_session_id.clone();
+    end(&db, &next.id, Outcome::Completed);
+    set("h3", "claude").unwrap();
+    let current = db.read(|c| current_session(c, ROLE, Some(&task))).unwrap().unwrap();
+    assert_eq!(current.id, session, "choosing the same harness changes nothing");
 }
 
 /// What the GUI shows as a hold and what registering a turn refuses come from one rule (#16):

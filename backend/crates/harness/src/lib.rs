@@ -9,27 +9,59 @@ pub mod process;
 /// recognized by it (data-model.md §7.2).
 pub const MCP_SERVER: &str = "lobotomy";
 
-/// A harness Lobotomy can run roles on. Code that differs by harness matches on this, so adding
-/// Claude (M3) makes the compiler point at every such place (#16). The adapter interface itself
-/// waits until Claude's real output is known.
+/// A harness Lobotomy can run roles on. Code that differs by harness matches on this, so adding a
+/// harness makes the compiler point at every such place (#16).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Harness {
+    Claude,
     Codex,
 }
 
 impl Harness {
-    pub const ALL: &[Harness] = &[Harness::Codex];
+    pub const ALL: &[Harness] = &[Harness::Claude, Harness::Codex];
 
     /// The name roles and settings store.
     pub fn as_str(self) -> &'static str {
         match self {
+            Harness::Claude => "claude",
             Harness::Codex => "codex",
         }
     }
 
-    /// `None` for a harness this build cannot run, such as `claude` before M3.
+    /// `None` for a harness this build cannot run.
     pub fn parse(s: &str) -> Option<Self> {
         Harness::ALL.iter().copied().find(|h| h.as_str() == s)
+    }
+
+    /// The product's name, in what the user reads.
+    pub fn label(self) -> &'static str {
+        match self {
+            Harness::Claude => "Claude",
+            Harness::Codex => "Codex",
+        }
+    }
+}
+
+/// Reads a harness's output one line at a time. Claude's parser keeps state between lines;
+/// Codex's does not (harness-adapter.md §1.4).
+pub enum Output {
+    Claude(claude::Parser),
+    Codex,
+}
+
+impl Output {
+    pub fn new(harness: Harness) -> Self {
+        match harness {
+            Harness::Claude => Output::Claude(claude::Parser::default()),
+            Harness::Codex => Output::Codex,
+        }
+    }
+
+    pub fn parse_line(&mut self, line: &str) -> Vec<event::Event> {
+        match self {
+            Output::Claude(parser) => parser.parse_line(line),
+            Output::Codex => codex::parse_line(line).into_iter().collect(),
+        }
     }
 }
 

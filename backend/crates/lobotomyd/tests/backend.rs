@@ -1,5 +1,6 @@
-//! The backend end to end with a fake Codex (tests/fixtures/fake-codex.mjs, run by Node): the
-//! scheduler, the turn runner, the MCP service and the database together. Needs `node` on PATH.
+//! The backend end to end with a fake Codex and a fake Claude (tests/fixtures/fake-*.mjs, run by
+//! Node): the scheduler, the turn runner, the MCP service and the database together. Needs `node`
+//! on PATH.
 
 mod common;
 
@@ -11,7 +12,9 @@ use lobotomy_core::capture::stopped_capture;
 use lobotomy_core::id::now_ms;
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, current_config, load_project};
 use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, load_task, open_attempt};
-use lobotomy_core::turn::{Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, TurnState, hold};
+use lobotomy_core::turn::{
+    Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, SetRoleHarness, TurnState, hold,
+};
 use lobotomy_core::verify::{Accept, RetryPreview, VerificationState, latest_verification, preview_stopped};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::host::Host;
@@ -637,4 +640,102 @@ async fn a_hanging_quota_check_times_out() {
 
 fn next_task(db: &Db) -> String {
     db.read(|c| lobotomy_core::task::next_queued_task(c, "Malkuth")).unwrap().unwrap().id
+}
+
+// ---- Malkuth on Claude (M2), with the fake Claude (tests/fixtures/fake-claude.mjs) ----
+
+/// Puts Malkuth on Claude before any work, as the user does in the settings.
+fn on_claude(db: &Db) {
+    let switch = SetRoleHarness { request_id: "h1".into(), role: "Malkuth".into(), harness: "claude".into() };
+    db.execute(&Caller::User, &switch).unwrap();
+}
+
+/// The arguments of the fake CLI's last run in `dir`.
+fn last_args(dir: &std::path::Path) -> Vec<String> {
+    serde_json::from_str(&std::fs::read_to_string(diag(dir).join("last-args.json")).unwrap()).unwrap()
+}
+
+fn after<'a>(args: &'a [String], flag: &str) -> &'a str {
+    &args[args.iter().position(|a| a == flag).unwrap_or_else(|| panic!("no {flag} in {args:?}")) + 1]
+}
+
+fn item_kinds(db: &Db, turn: &str) -> Vec<String> {
+    db.read(|c| {
+        let mut stmt = c.prepare("SELECT kind FROM item WHERE turn_id = ?1 ORDER BY seq")?;
+        Ok(stmt.query_map([turn], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    })
+    .unwrap()
+}
+
+/// The M1 chain on Claude: the runtime names the session, Claude reports done through the MCP
+/// configuration file of the turn, and the candidate goes to acceptance.
+#[tokio::test]
+async fn a_task_runs_on_claude_to_acceptance() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    on_claude(&db);
+    let task = create_task(&db, "FAKE:done");
+
+    let turn = ended_turn(&db).await;
+    assert_eq!((turn.harness.as_str(), turn.outcome), ("claude", Some(Outcome::Completed)));
+    assert!(turn.done_at.is_some(), "org_report(done) reached the turn");
+    let args = last_args(&slot(dir.path()));
+    assert_eq!(turn.native_id.as_deref(), Some(after(&args, "--session-id")), "Claude kept the session it was given");
+    assert!(after(&args, "--append-system-prompt").contains("你是 Malkuth"));
+    // The configuration held the turn's token; it goes with the turn.
+    let config = std::path::PathBuf::from(after(&args, "--mcp-config"));
+    assert!(config.file_name().unwrap().to_string_lossy().starts_with(&turn.id));
+    wait_for("the MCP configuration to go", || (!config.exists()).then_some(())).await;
+
+    assert_eq!(item_kinds(&db, &turn.id), ["input", "agent_message", "file_change", "mcp_call", "agent_message"]);
+    phase(&db, &task, Phase::Accepting).await;
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// The next turn resumes the session the runtime named for the first.
+#[tokio::test]
+async fn a_claude_turn_resumes_its_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    on_claude(&db);
+    let task = create_task(&db, "FAKE:blocked");
+    let first = ended_turn(&db).await;
+    let reply =
+        SendMessage { request_id: "m1".into(), role: "Malkuth".into(), task_id: Some(task), body: "FAKE:done".into() };
+    db.execute(&Caller::User, &reply).unwrap();
+    backend.project.wake.notify_one();
+
+    let next =
+        wait_for("the next turn", || last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)).await;
+    assert_eq!(next.native_id, first.native_id);
+    assert_eq!(Some(after(&last_args(&slot(dir.path())), "--resume")), first.native_id.as_deref());
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// Claude's session limit (data-model.md §8.3) fails the turn for its quota with the reset time,
+/// and blocks Claude's domain only. The user's retry runs Claude's quota check.
+#[tokio::test]
+async fn a_session_limit_on_claude_blocks_its_domain_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let db = backend.project.db.clone();
+    on_claude(&db);
+    create_task(&db, "FAKE:quota");
+
+    let turn = ended_turn(&db).await;
+    let failure = turn.failure.clone().unwrap();
+    assert_eq!(
+        (turn.outcome, failure.kind, failure.resets_at),
+        (Some(Outcome::Failed), FailureKind::Quota, Some(1_790_868_000_000))
+    );
+    assert!(failure.message.contains("session limit"), "{failure:?}");
+    let host = backend.project.host.clone();
+    assert!(host.is_blocked("claude").unwrap());
+    assert!(!host.is_blocked("codex").unwrap());
+
+    assert!(!host.retry("claude").await.unwrap().is_blocked());
+    assert!(last_args(&host_dir(dir.path()).join("probe")).contains(&"--no-session-persistence".to_owned()));
+    backend.shutdown(Duration::from_secs(5)).await;
 }

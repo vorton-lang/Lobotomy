@@ -118,9 +118,17 @@ Codex（消息经 stdin，位置参数为 -）
 - `rate_limit_event` 每轮都有，实测 `status` 为 `allowed_warning`。
 - 额度被拒：交互式 CLI 中实测过一次（[data-model.md](data-model.md) §8.3）。`-p` 下的形式还没有见到。适配器认三种信号，任一出现即为额度被拒：`status` 为 `rejected` 的 `rate_limit_event`（重置时间取自这里）；顶层 `error` 为 `rate_limit` 的 assistant 消息；`api_error_status` 为 429 的 `result`。被拒时那条合成消息记为错误，不当作 agent 的回复。
 
+**Claude adapter 的实现**（M2，2026-10-10）：参数与解析在 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs)。
+
+- 运行时按 turn 所在会话的 harness 启动 CLI。role 切换 harness 后，旧会话结束，下一个 turn 在新会话中运行（data-model.md §9.2）。
+- 每个 turn 的 MCP 配置写到数据目录的 `turns/<turn_id>.mcp.json`，turn 结束时删除：文件中有这个 turn 的 token。
+- 新会话的第一个 turn 用运行时生成的 ID（`--session-id`），之后用 `--resume`。会话 ID 仍以 `system/init` 读回的为准，规则与 Codex 相同（§1.3 第 8 条）。
+- 额度检查用 `--no-session-persistence` 和 haiku，被拒时取 `rate_limit_event` 中的重置时间。
+- 后端测试用假 Claude CLI（[lobotomyd/tests/fixtures/fake-claude.mjs](../backend/crates/lobotomyd/tests/fixtures/fake-claude.mjs)）覆盖完成到验收、续用会话、额度被拒。
+
 ### 1.5 二进制定位
 
-adapter 按平台自动探测两家 CLI，并允许手动配置；每次启动记录版本。Windows 实测：Claude 经 scoop shim 位于 PATH；Codex 不在 PATH 上，位于 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，hash 目录随 desktop app 更新变化，版本可能在运行期间升级。
+adapter 按平台自动探测两家 CLI，并允许手动配置；每次启动记录版本。`CLAUDE_BIN`、`CODEX_BIN` 指定二进制；`LOBOTOMY_CLAUDE`、`LOBOTOMY_CODEX`（程序与参数的 JSON 数组）整个替换启动命令，GUI 的端到端测试用它们换上假 CLI。Windows 实测：Claude 经 scoop shim 位于 PATH；Codex 不在 PATH 上，位于 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，hash 目录随 desktop app 更新变化，版本可能在运行期间升级。
 
 ### 1.6 能力裁剪
 

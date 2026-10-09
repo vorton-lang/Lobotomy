@@ -406,6 +406,7 @@ Codex 被拒时的形式未知，暂不处理。
 | 调整队列 | 任务在排队 | 队列顺序 | — |
 | 继续 | 当前 attempt 的最后一个 turn 为 interrupted 或 failed（§4.1），或 role 最近一次采集被挡下（harness-adapter.md §4.1） | 登记 turn：继续说明加排队的消息。采集被挡下时，说明中附上清单；被挡下的 `done` 作废。上一个 turn 没有被 harness 开始时，不加说明，原样重发它的输入并改绑它的消息（§3.4） | 启动 CLI |
 | 新建 native session | role 没有未结束的 turn | native session 记录 | — |
+| 切换 role 的 harness | harness 是已知的；role 没有未结束的 turn；与当前 harness 相同时什么都不做 | role 的 harness；结束 role 当前工作的 native session。结束了会话、且任务有进行中的 attempt 时，重新排队开工说明（§4.1） | 下一个 turn 在新 harness 的新会话中运行（harness-adapter.md §0，2026-10-10） |
 | 终止残留进程 | turn 为 unknown 且进程仍在运行 | 终止意图 | 终止进程，之后按 §3.3 对账 |
 | 丢弃未能采集的内容 | 采集被挡下（超过体积护栏或有未覆盖的内容）；是 role 最近一次采集；role 没有未结束的 turn | 决定；采集回到意图 | 重新采集：超过体积护栏时不要新增的文件，有未覆盖的内容时跳过它们，其余照常采集。之后槽位可以复用 |
 | 放行新增文件 | 采集被体积护栏挡下；是 role 最近一次采集；role 没有未结束的 turn | 决定；采集回到意图 | 重新采集，不受体积护栏限制 |

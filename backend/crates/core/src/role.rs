@@ -5,6 +5,9 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 
+/// The harnesses a role can be on, as the role table allows them.
+pub const HARNESSES: [&str; 2] = ["claude", "codex"];
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Role {
     pub name: String,

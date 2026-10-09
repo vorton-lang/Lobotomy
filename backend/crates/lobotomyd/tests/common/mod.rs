@@ -14,13 +14,19 @@ use lobotomyd::Backend;
 use lobotomyd::host::{Cli, HarnessConfig, Host};
 use lobotomyd::project::Project;
 
-/// The fake Codex. `flags` go before Codex's own arguments, such as `--fake-hang`.
-pub fn fake_codex_with(flags: &[&str]) -> HarnessConfig {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("fake-codex.mjs");
+/// A fake CLI from `tests/fixtures`, run by Node. `flags` go before the CLI's own arguments.
+fn fake(script: &str, flags: &[&str]) -> Cli {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join(script);
     let mut command = vec!["node".to_owned(), script.to_string_lossy().into_owned()];
     command.extend(flags.iter().map(|f| (*f).to_owned()));
+    Cli { command, reasoning_effort: None }
+}
+
+/// The fake CLIs. `flags` go before Codex's own arguments, such as `--fake-hang`.
+pub fn fake_codex_with(flags: &[&str]) -> HarnessConfig {
     HarnessConfig {
-        codex: Cli { command, reasoning_effort: None },
+        claude: fake("fake-claude.mjs", &[]),
+        codex: fake("fake-codex.mjs", flags),
         interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
         probe_timeout: Duration::from_secs(60),
     }
@@ -30,9 +36,13 @@ pub fn fake_codex() -> HarnessConfig {
     fake_codex_with(&[])
 }
 
-/// The real Codex, for the ignored tests.
+/// The real CLIs, for the ignored tests.
 pub fn real_codex() -> HarnessConfig {
     HarnessConfig {
+        claude: Cli {
+            command: vec![lobotomy_harness::claude::locate().to_string_lossy().into_owned()],
+            reasoning_effort: Some("low".into()),
+        },
         codex: Cli {
             command: vec![lobotomy_harness::codex::locate().to_string_lossy().into_owned()],
             reasoning_effort: Some("low".into()),
