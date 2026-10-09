@@ -37,7 +37,7 @@ pub fn fake_codex() -> HarnessConfig {
 }
 
 /// The real CLIs, for the ignored tests.
-pub fn real_codex() -> HarnessConfig {
+pub fn real_clis() -> HarnessConfig {
     HarnessConfig {
         claude: Cli {
             command: vec![lobotomy_harness::claude::locate().to_string_lossy().into_owned()],
@@ -126,8 +126,10 @@ pub fn last(db: &Db) -> Option<Turn> {
     db.read(|c| last_turn(c, "Malkuth")).unwrap()
 }
 
+/// Waits until `check` gives a value. The deadline is generous: a CI runner under load has taken
+/// over a minute for a chain of capture, verification and the next turn.
 pub async fn wait_for<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         if let Some(value) = check() {
             return value;

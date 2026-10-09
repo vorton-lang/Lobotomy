@@ -276,26 +276,22 @@ async fn codex() {
 #[ignore = "runs a real Claude Code turn"]
 async fn claude() {
     let service = serve().await;
-    let claude = std::env::var_os("CLAUDE_BIN").map_or_else(|| PathBuf::from("claude"), PathBuf::from);
+    let claude = lobotomy_harness::claude::locate();
     let cwd = scratch_dir("claude");
-    let config = cwd.join("mcp.json");
-    let servers = serde_json::json!({ "mcpServers": { "lobotomy": { "type": "http", "url": service.url } } });
-    std::fs::write(&config, servers.to_string()).unwrap();
-    let args: Vec<String> = [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-        "--model",
-        "haiku",
-        "--strict-mcp-config",
-        "--mcp-config",
-        &config.to_string_lossy(),
-        "--no-session-persistence",
-    ]
-    .map(str::to_owned)
-    .to_vec();
+    let config = cwd.join("turn.mcp.json");
+    std::fs::write(&config, lobotomy_harness::claude::mcp_config(&service.url)).unwrap();
+    // The arguments the runtime builds (harness-adapter.md §1.2), on the smallest model, plus a
+    // flag that keeps the probe out of the user's history.
+    let mut args = lobotomy_harness::claude::TurnArgs {
+        session: lobotomy_harness::claude::Session::New(lobotomy_harness::claude::new_session_id()),
+        model: Some("haiku".into()),
+        effort: None,
+        permission: lobotomy_harness::Permission::Full,
+        instructions: String::new(),
+        mcp_config: config,
+    }
+    .to_args();
+    args.insert(1, "--no-session-persistence".into());
 
     let result = run(&claude, &args, &cwd).await;
     let events = events(&result.stdout);

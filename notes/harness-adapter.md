@@ -62,12 +62,14 @@ Codex（消息经 stdin，位置参数为 -）
    - 收到正常停止请求后，运行时等待当前 turn 结束和 CLI 退出。运行时不启动下一个 turn。
    - 收到立即中断请求后，运行时调用 harness 的原生中断路径，并等待 CLI 退出。
    - 子进程由 harness 自行清理；Lobotomy 不自建进程树管理。Codex 在 Windows 上已实测成立，包括被直接终止的情况（§1.4）。Claude 与 Linux 上仍是设计假设。
+   - Claude 在 Windows 上实测（Claude Code 2.1.283，haiku，2026-10-10）：命令运行中发 Ctrl+C，CLI 在 1 秒内退出，并输出一个出错的 `result`。用户要求了中断，运行时把这个 turn 记为 interrupted，不当作失败。继续时 resume 同一个会话，任务照常完成。
    - Windows 上的原生中断是 Ctrl+C，发给目标进程独占的控制台（§1.4、§1.8）。
    - CLI 未退出或执行状态不明时，该 turn 保持"待对账"。运行时保留占用，不重放，也不为同一 native session 或执行现场启动替代执行（[#2](https://github.com/vorton-lang/Lobotomy/issues/2)）。
    - 运行时不恢复被中断的执行现场。保留哪些内容、提供哪些入口，见 1.7。"待对账"只核对 CLI 是否已经退出，见 [data-model.md](data-model.md) §3.3。
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
    - harness 自己的格式只在适配层里解析。MCP 调用的结果由适配层整理成 `result_text`（工具返回的第一段文字）和 `error_text`（调用失败的原因）；运行时和 GUI 只读这两个字段（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
-   - 按 harness 不同的代码都对 `Harness` 枚举做匹配。M2 加入 Claude 时，编译器会指出每一处。适配器的接口等拿到 Claude 的真实输出后再定。
+   - 按 harness 不同的代码都对 `Harness` 枚举做匹配。M2 加入 Claude 时，编译器会指出每一处。
+   - **适配器接口**（M2，2026-10-10）：接入两个真实 harness 后，仍按枚举匹配，没有抽象成 trait。按 harness 不同的只有四处：拼参数、解析输出（`Output`）、识别权限被拒、额度检查。两个都是 CLI，抽出的接口也只会是 CLI 的形状。自建的 API harness（roadmap.md 原则）可以做成同样形状的可执行程序：从 stdin 读输入，按参数接续会话，输出与某一家相同的 JSON 事件，会话记录由它自己保存在 Lobotomy 的数据目录中。这样运行时不需要改动。真有第三种 harness 时，再按它的需要调整。
 8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session、执行现场 generation 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。同一 attempt 内接续时，运行时只新建 turn，不新建 attempt（[data-model.md](data-model.md) §3.1、§4.1）。
    - 如果 native session 已有正常结束的 turn，却没有记下 session ID，运行时不再为它登记 turn，role 停下。否则下一个 turn 会不带 resume 启动，悄悄丢掉上下文。用户可以新建 native session（[#10](https://github.com/vorton-lang/Lobotomy/issues/10)，用户确认，2026-10-04）。
 
@@ -259,7 +261,9 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-threads 1
 ```
 
-2026-10-04 的结果：Claude Code 2.1.283 与 Codex CLI 0.159.2 都通过。
+2026-10-04 的结果：Claude Code 2.1.283 与 Codex CLI 0.159.2 都通过。2026-10-10 起 Claude 的契约测试改用适配器拼出的参数（MCP 配置文件、权限、能力裁剪），仍然通过，协商的协议版本为 2026-07-28。
+
+真实 CLI 的后端测试（默认不运行，消耗订阅额度）：`a_real_codex_turn_reports_done`、`a_real_claude_turn_reports_done`、`a_real_claude_turn_is_interrupted_and_continued`。Claude 的两项用 haiku，结束后删除测试会话的记录。2026-10-10 都通过：真实 Claude 走完建任务、done、采集、验证到等待验收；输出中没有解析器不认识的事件。
 
 **语义更新：** v0.2 写的是"每个 role 分配一个 URL"，只能识别到 role。现改为按 turn 发放 token：`done` 等 MCP 调用绑定到发出它的 turn，不按"角色当前任务"反查归属（[data-model.md](data-model.md) §3）。
 
@@ -460,7 +464,8 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 
 ## 6. 待验证 / 未决
 
-- ~~jj-lib 的版本锁定与封装边界~~：已实现（2026-10-04）。jj-lib 锁定为 0.45.1，封装在 `backend/crates/store` 中，jj 的类型不出这个 crate。只用到 jj 的存储（git backend）、树合并和本地工作副本状态（`TreeState`），不使用 jj 的操作日志与视图：业务事实在 SQLite 中，成果靠 pin 保留。- 原生中断与中断后的 resume：Codex 在 Windows 上已实测（§1.4）。Claude、以及 Linux 上的两家仍待实测。结果也决定 ideas.md 中的"中断并发送"能否加入。
+- ~~jj-lib 的版本锁定与封装边界~~：已实现（2026-10-04）。jj-lib 锁定为 0.45.1，封装在 `backend/crates/store` 中，jj 的类型不出这个 crate。只用到 jj 的存储（git backend）、树合并和本地工作副本状态（`TreeState`），不使用 jj 的操作日志与视图：业务事实在 SQLite 中，成果靠 pin 保留。
+- 原生中断与中断后的 resume：Codex 与 Claude 在 Windows 上已实测（§1.3 第 6 条、§1.4）。Linux 上的两家仍待实测。结果也决定 ideas.md 中的"中断并发送"能否加入。
 - 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。Claude 的 `~/.claude/CLAUDE.md` 在 M2 时确认。
 - Codex 0.159.2 的 `codex queue`（向已有会话排队一条消息）能否在 `exec` 的 turn 运行中投递消息，待查。若可以，它可能替代 ideas.md 中的"中断并发送"。`codex delete --force <id>` 可以按 ID 删除会话，清理探针或临时会话时使用。
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。

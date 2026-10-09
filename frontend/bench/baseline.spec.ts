@@ -196,6 +196,61 @@ test('the backend restarts and the GUI catches up', async ({ page }) => {
   };
 });
 
+/** Puts Malkuth on a harness through the settings, as the user does. */
+async function setHarness(page: Page, harness: 'claude' | 'codex') {
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await settings.getByLabel('Malkuth 使用的 harness').selectOption(harness);
+  await expect(page.locator('.role-line .badge')).toHaveText(harness === 'claude' ? 'Claude' : 'Codex');
+  await settings.getByRole('button', { name: '关闭' }).click();
+}
+
+// Claude's replies stream in a piece at a time; Codex's arrive whole (perf-baseline.md §2).
+test('a reply streaming in on Claude', async ({ page }) => {
+  const p = await open(page);
+  await whenText(p, '.thread .row', NEWEST);
+  await setHarness(page, 'claude');
+  const composer = page.getByLabel('消息');
+  await composer.fill('FAKE:textstream=8 FAKE:marker=text-done');
+  await composer.press('Enter');
+  await whenText(p, '.thread .row', 'tick 0 at', 30_000);
+  const before = await now(p);
+  await startFrames(p);
+  // How far behind the reply the screen is: each line carries the time it was written.
+  const lag = page.evaluate(
+    () =>
+      new Promise<number[]>((resolve) => {
+        const samples: number[] = [];
+        let last = -1;
+        const sample = () => {
+          const live = document.querySelector('.message.other.live');
+          const ticks = [...(live?.textContent ?? '').matchAll(/tick (\d+) at (\d+)/g)];
+          const newest = ticks.at(-1);
+          if (newest && Number(newest[1]) !== last) {
+            last = Number(newest[1]);
+            samples.push(Date.now() - Number(newest[2]));
+          }
+          if (document.querySelector('.thread')?.textContent?.includes('bench text-done')) resolve(samples);
+          else requestAnimationFrame(sample);
+        };
+        sample();
+      }),
+  );
+  await composer.click();
+  await takeKeys(p);
+  await page.keyboard.type('typing while the reply streams in, 输入延迟', { delay: 30 });
+  const typing = await takeKeys(p);
+  const samples = await lag;
+  results.text_streaming = {
+    screen_lag_ms: stats(samples),
+    frames: await stopFrames(p),
+    long_tasks: await longTasks(p, before),
+    typing,
+  };
+  await composer.fill('');
+  await setHarness(page, 'codex');
+});
+
 test.afterAll(() => {
   const commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
   const run = {

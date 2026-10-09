@@ -13,6 +13,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(here, '..', '..', 'backend');
 const exe = process.env.LOBOTOMYD ?? path.join(backendDir, 'target', 'release', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
 const fakeCodex = path.join(backendDir, 'crates', 'lobotomyd', 'tests', 'fixtures', 'fake-codex.mjs');
+const fakeClaude = path.join(backendDir, 'crates', 'lobotomyd', 'tests', 'fixtures', 'fake-claude.mjs');
 export const infoFile = path.join(os.tmpdir(), 'lobotomy-bench.json');
 
 /** Turns that make the thread: four of 600 items, then a huge output and unclosed Markdown. */
@@ -112,7 +113,7 @@ export default async function setup() {
   const backend = {
     exe,
     args: ['--data-dir', data, '--host-dir', host, '--repo', repo, '--port', String(port)],
-    env: { LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]) },
+    env: { LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]), LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]) },
   };
   startBackend({ backend, root });
   await waitForFile(path.join(data, 'backend.json'));
