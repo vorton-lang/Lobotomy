@@ -161,6 +161,8 @@ pub struct Parser {
     text: String,
     /// Tool calls waiting for their results: their name and input, by tool use id.
     calls: HashMap<String, (String, Value)>,
+    /// When a refused quota resets, once a `rate_limit_event` said so (Unix milliseconds).
+    resets_at: Option<i64>,
 }
 
 /// The id of a message's block: Claude sends one block per `assistant` event, without its index.
@@ -182,8 +184,8 @@ impl Parser {
             Some("stream_event") => self.partial(&value["event"]),
             Some("assistant") => self.assistant(&value),
             Some("user") => self.user(&value),
-            Some("rate_limit_event") => rate_limit(&value),
-            Some("result") => vec![result(&value)],
+            Some("rate_limit_event") => self.rate_limit(&value),
+            Some("result") => self.result(&value),
             _ => vec![Event::Unknown(value)],
         }
     }
@@ -239,6 +241,18 @@ impl Parser {
         let message = &value["message"];
         let id = message["id"].as_str().unwrap_or_default();
         let blocks = message["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+        // An API error comes as a message Claude Code makes up itself, such as "You've hit your
+        // session limit · resets 12:20am (Asia/Tokyo)" (data-model.md §8.3). It is no reply.
+        if value["error"].is_string() || value["isApiErrorMessage"] == true {
+            let text = blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n");
+            let mut events = Vec::new();
+            if value["error"] == "rate_limit" {
+                events.push(Event::QuotaRejected { resets_at: self.resets_at, message: text.clone() });
+            }
+            let item = Item { native_id: id.to_owned(), kind: ItemKind::Error, content: json!({ "message": text }) };
+            events.push(Event::ItemCompleted(item));
+            return events;
+        }
         let mut events = Vec::new();
         for (i, block) in blocks.iter().enumerate() {
             // The block arrives while it is the open block of the stream.
@@ -364,6 +378,42 @@ impl Parser {
         Item { native_id: call.to_owned(), kind, content }
     }
 
+    /// A quota refusal. The other states, allowed and allowed with a warning, change nothing here.
+    fn rate_limit(&mut self, value: &Value) -> Vec<Event> {
+        let info = &value["rate_limit_info"];
+        if info["status"] != "rejected" {
+            return vec![];
+        }
+        self.resets_at = info["resetsAt"].as_i64().map(|seconds| seconds * 1000);
+        let window = info["rateLimitType"].as_str().unwrap_or("unknown");
+        vec![Event::QuotaRejected {
+            resets_at: self.resets_at, message: format!("Claude 的额度已用完（{window}）")
+        }]
+    }
+
+    /// The end of the turn. A 429 is a refused quota, whatever else the turn said.
+    fn result(&self, value: &Value) -> Vec<Event> {
+        if value["subtype"] == "success" && value["is_error"] != true {
+            return vec![Event::TurnCompleted { usage: value["usage"].clone() }];
+        }
+        let message = match value["result"].as_str().filter(|text| !text.is_empty()) {
+            Some(text) => text.to_owned(),
+            None => {
+                let subtype = value["subtype"].as_str().unwrap_or("error");
+                match value["api_error_status"].as_i64() {
+                    Some(status) => format!("{subtype}（API 状态 {status}）"),
+                    None => subtype.to_owned(),
+                }
+            }
+        };
+        let mut events = Vec::new();
+        if value["api_error_status"] == 429 {
+            events.push(Event::QuotaRejected { resets_at: self.resets_at, message: message.clone() });
+        }
+        events.push(Event::TurnFailed { message });
+        events
+    }
+
     /// A path under the session's working directory, relative to it; any other path as it is.
     fn relative(&self, path: &str) -> String {
         let Some(cwd) = &self.cwd else { return path.to_owned() };
@@ -405,36 +455,6 @@ fn exit_code(result: &ToolResult) -> Option<i64> {
     }
     let rest = result.text.strip_prefix("Exit code ")?;
     rest.split(|c: char| !c.is_ascii_digit() && c != '-').next()?.parse().ok()
-}
-
-/// A quota refusal. The other states, allowed and allowed with a warning, change nothing here.
-/// The refused form is not recorded yet (harness-adapter.md §6); this follows the documented
-/// `status` values.
-fn rate_limit(value: &Value) -> Vec<Event> {
-    let info = &value["rate_limit_info"];
-    if info["status"] != "rejected" {
-        return vec![];
-    }
-    let resets_at = info["resetsAt"].as_i64().map(|seconds| seconds * 1000);
-    let window = info["rateLimitType"].as_str().unwrap_or("unknown");
-    vec![Event::QuotaRejected { resets_at, message: format!("Claude 的额度已用完（{window}）") }]
-}
-
-fn result(value: &Value) -> Event {
-    if value["subtype"] == "success" && value["is_error"] != true {
-        return Event::TurnCompleted { usage: value["usage"].clone() };
-    }
-    let message = match value["result"].as_str().filter(|text| !text.is_empty()) {
-        Some(text) => text.to_owned(),
-        None => {
-            let subtype = value["subtype"].as_str().unwrap_or("error");
-            match value["api_error_status"].as_i64() {
-                Some(status) => format!("{subtype}（API 状态 {status}）"),
-                None => subtype.to_owned(),
-            }
-        }
-    };
-    Event::TurnFailed { message }
 }
 
 #[cfg(test)]
@@ -548,6 +568,31 @@ mod tests {
     fn a_subagents_own_messages_stay_inside_its_call() {
         let inner = r#"{"type":"assistant","message":{"id":"msg_2","content":[{"type":"text","text":"inside"}]},"parent_tool_use_id":"toolu_9"}"#;
         assert!(parse(inner).is_empty());
+    }
+
+    /// What Claude Code 2.1.283 wrote when the session limit was hit, in the interactive CLI
+    /// (2026-10-01, data-model.md §8.3): a message it makes up, with the error and status at the
+    /// top level. In `-p` the same signals are expected on the stream's `assistant` and `result`
+    /// events; the parser takes any of them, with the reset time from a `rate_limit_event`.
+    #[test]
+    fn a_session_limit_is_a_refused_quota() {
+        let limit = r#"{"type":"assistant","message":{"id":"7fd4a852-9929-46f1-9fed-154e90aa0d6e","model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your session limit · resets 12:20am (Asia/Tokyo)"}]},"parent_tool_use_id":null,"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429}"#;
+        let refused = r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1790868000,"rateLimitType":"five_hour"}}"#;
+        let end = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your session limit · resets 12:20am (Asia/Tokyo)"}"#;
+        let said = "You've hit your session limit · resets 12:20am (Asia/Tokyo)";
+
+        let events = parse(&format!("{refused}\n{limit}\n{end}"));
+        let quota: Vec<_> = events.iter().filter(|e| matches!(e, Event::QuotaRejected { .. })).collect();
+        assert_eq!(quota.len(), 3, "{events:?}");
+        assert!(quota.iter().all(|e| matches!(e, Event::QuotaRejected { resets_at: Some(1_790_868_000_000), .. })));
+        let error = completed(&events, "7fd4a852-9929-46f1-9fed-154e90aa0d6e");
+        assert_eq!((error.kind, &error.content["message"]), (ItemKind::Error, &json!(said)));
+        assert!(!events.iter().any(|e| matches!(e, Event::ItemCompleted(i) if i.kind == ItemKind::AgentMessage)));
+        assert_eq!(events.last(), Some(&Event::TurnFailed { message: said.into() }));
+
+        // Without a rate_limit_event, the refusal is still known; only the reset time is not.
+        let events = parse(&format!("{limit}\n{end}"));
+        assert_eq!(events[0], Event::QuotaRejected { resets_at: None, message: said.into() });
     }
 
     #[test]

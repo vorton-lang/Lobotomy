@@ -354,7 +354,9 @@ async fn observe(project: &Arc<Project>, turn: &Turn, event: Event, seen: &mut O
         }
         Event::TurnCompleted { .. } => seen.completed = true,
         Event::TurnFailed { message } => seen.failed = Some(message),
+        // A harness may say it more than once, the reset time only in some of them.
         Event::QuotaRejected { resets_at, message } => {
+            let resets_at = resets_at.or(seen.quota.as_ref().and_then(|q| q.resets_at));
             seen.quota = Some(Failure { resets_at, ..Failure::new(FailureKind::Quota, message) });
         }
         Event::Error { message } => {

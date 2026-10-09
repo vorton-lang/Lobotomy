@@ -115,7 +115,8 @@ Codex（消息经 stdin，位置参数为 -）
 - 思考块只有签名、没有文字时，不记录。
 - 子 agent 内部的消息（`parent_tool_use_id` 不为空）不进入对话，只显示子 agent 这次工具调用本身。
 - `result` 事件结束 turn：`subtype` 为 `success` 且 `is_error` 为假时正常结束，其余为失败。
-- `rate_limit_event` 每轮都有，实测 `status` 为 `allowed_warning`。被拒时的形式还没有记录到；适配器按 `status` 为 `rejected` 识别（§6）。
+- `rate_limit_event` 每轮都有，实测 `status` 为 `allowed_warning`。
+- 额度被拒：交互式 CLI 中实测过一次（[data-model.md](data-model.md) §8.3）。`-p` 下的形式还没有见到。适配器认三种信号，任一出现即为额度被拒：`status` 为 `rejected` 的 `rate_limit_event`（重置时间取自这里）；顶层 `error` 为 `rate_limit` 的 assistant 消息；`api_error_status` 为 429 的 `result`。被拒时那条合成消息记为错误，不当作 agent 的回复。
 
 ### 1.5 二进制定位
 
@@ -454,7 +455,7 @@ Workboard 按槽位显示当前执行轮、最近一次采集，以及候选成�
 - 全局指令文件：已决定 role 继承用户个人的 `~/.codex/AGENTS.md`，不另开 `CODEX_HOME`（用户确认，2026-10-04）。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 不能排除全局 AGENTS.md。Claude 的 `~/.claude/CLAUDE.md` 在 M2 时确认。
 - Codex 0.159.2 的 `codex queue`（向已有会话排队一条消息）能否在 `exec` 的 turn 运行中投递消息，待查。若可以，它可能替代 ideas.md 中的"中断并发送"。`codex delete --force <id>` 可以按 ID 删除会话，清理探针或临时会话时使用。
 - 输入消息是否进入 harness 的会话记录：turn 在不同时刻中断时，两家 CLI 的会话文件里是否已有本轮输入（data-model.md §3.4）。Claude 额度被拒的情况已有一次记录：输入在报错前写入。
-- `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。下次自然发生时记录。适配器目前按 `rate_limit_event` 的 `status` 为 `rejected` 识别，这个取值来自文档，没有实测。Codex 被拒的形式暂不处理。
+- `-p` stream-json 模式下 Claude 额度被拒的事件形式（data-model.md §8.3）。交互式 CLI 中的形式已有记录；`-p` 下下次自然发生时记录，并核对适配器认的三种信号（§1.4）。Codex 被拒的形式暂不处理。
 - Claude 在环境不允许所给权限模式时 stderr 怎么写，还不知道。在此之前，适配器不把它识别为"权限模式不被允许"，turn 按普通失败记录。
 - 每个 turn 更换 MCP URL 后，Claude 的跨进程 prompt cache 是否仍命中。Codex 已实测不受影响（§1.4）。
 - 平台启动适配（1.8）：Windows 已实测；Linux 的设置竞态与启动线程待实测。

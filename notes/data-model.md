@@ -318,7 +318,12 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 - 显示文本为 "You've hit your session limit · resets 12:20am (Asia/Tokyo)"；
 - 用户的输入在报错之前已写入会话文件。
 
-`-p` 的 stream-json 模式下被拒的形式尚未确认，预期是 `status` 为 `rejected` 的 `rate_limit_event`，字段与上面的 `quotaLimits` 相同。Codex 被拒时的形式未知，暂不处理。
+`-p` 的 stream-json 模式下被拒的形式尚未确认。Claude adapter 认三种信号，按上面的记录推定（harness-adapter.md §1.4，2026-10-09）：
+- `status` 为 `rejected` 的 `rate_limit_event`，字段预期与上面的 `quotaLimits` 相同，重置时间取自这里；
+- 顶层 `error` 为 `rate_limit` 的 assistant 消息；
+- `api_error_status` 为 429 的 `result`。
+
+Codex 被拒时的形式未知，暂不处理。
 
 ### 8.4 恢复检查
 
