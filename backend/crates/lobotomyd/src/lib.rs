@@ -28,6 +28,7 @@ pub struct Backend {
     scheduling: CancellationToken,
     serving: CancellationToken,
     server: JoinHandle<()>,
+    watcher: JoinHandle<()>,
     scheduler: JoinHandle<()>,
 }
 
@@ -42,7 +43,7 @@ impl Backend {
 
         let serving = CancellationToken::new();
         let app = mcp::org_router(project.clone(), serving.clone()).merge(gui::gui_router(project.clone()));
-        tokio::spawn(gui::watch(project.clone(), serving.clone()));
+        let watcher = tokio::spawn(gui::watch(project.clone(), serving.clone()));
         let stop = serving.clone();
         let server = tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(stop.cancelled_owned()).await {
@@ -51,7 +52,7 @@ impl Backend {
         });
         let scheduling = CancellationToken::new();
         let scheduler = tokio::spawn(scheduler::run(project.clone(), scheduling.clone()));
-        Ok(Self { project, addr, scheduling, serving, server, scheduler })
+        Ok(Self { project, addr, scheduling, serving, server, watcher, scheduler })
     }
 
     /// Normal shutdown (harness-adapter.md §1.8): stop scheduling, interrupt the running CLIs and
@@ -72,5 +73,7 @@ impl Backend {
         }
         self.serving.cancel();
         let _ = self.server.await;
+        // Cancellation only asks the watcher to stop; join it before releasing its project.
+        let _ = self.watcher.await;
     }
 }

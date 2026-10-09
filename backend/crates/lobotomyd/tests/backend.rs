@@ -382,6 +382,22 @@ async fn a_second_backend_cannot_open_the_same_data_directory() {
     Project::open(&data, host).unwrap();
 }
 
+/// Shutdown joins every service that owns the project, so an idle backend can be restarted
+/// immediately in the same runtime without retrying the data-directory lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_idle_backend_releases_its_project_lock_on_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
+    let data = dir.path().join("project");
+    for _ in 0..20 {
+        let project = Arc::new(Project::open(&data, host.clone()).unwrap());
+        let backend = lobotomyd::Backend::start(project, 0).await.unwrap();
+        backend.shutdown(Duration::from_secs(5)).await;
+        // No sleep or lock retry: shutdown returning is the synchronization point.
+        drop(Project::open(&data, host.clone()).unwrap());
+    }
+}
+
 /// A turn whose session id cannot be recorded fails, and its raw output stays: otherwise the next
 /// turn would quietly start a fresh session and lose the role's context (#16).
 #[tokio::test]
