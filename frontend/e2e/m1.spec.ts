@@ -93,7 +93,7 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   await sendBack.getByLabel(/理由/).fill('FAKE:done FAKE:text=second');
   await sendBack.getByRole('button', { name: '退回', exact: true }).click();
   // While the new candidate is verified, its own changes show, not the last round's. The check
-  // stays blocked until the assertions below finish, regardless of machine speed.
+  // stays blocked until these assertions finish or its 30-second deadline expires.
   await expect(panel.locator('.now')).toHaveText('第 2 轮的候选成果正在验证。');
   await expect(panel.locator('.diff')).toContainText('second', { timeout: 2_000 });
   await expect(panel.locator('.diff')).not.toContainText('first');
