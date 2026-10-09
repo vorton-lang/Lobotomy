@@ -9,6 +9,7 @@
 //   FAKE:managed  acts as a Codex whose administrator does not allow full access: given
 //               --dangerously-bypass-approvals-and-sandbox, it exits at start with Codex's error
 //               on stderr and nothing on stdout; otherwise the other modes go on
+//   FAKE:blocked  asks the user "空值怎么处理？" through org_report, then completes the turn (#17)
 //   FAKE:longcmd  emits a command that writes a file with a heredoc of 405 lines (#14)
 //   FAKE:fail   reports a failed turn
 //   FAKE:sleep  starts a turn and waits; Ctrl+C ends it without a turn end event
@@ -97,9 +98,8 @@ if (input.includes('FAKE:longcmd')) {
   emit({ type: 'item.completed', item: { id: 'item_long', type: 'command_execution', command, aggregated_output: '', exit_code: 0, status: 'completed' } });
 }
 
-if (input.includes('FAKE:done')) {
-  if (!input.includes('FAKE:nowrite')) fs.writeFileSync('work.txt', /FAKE:text=(\S+)/.exec(input)?.[1] ?? 'hi');
-  const arguments_ = { title: '完成', body: '写了 work.txt', status: 'done' };
+/** Calls org_report on the runtime's MCP service and emits the call as Codex does. */
+async function report(arguments_) {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' },
@@ -110,6 +110,15 @@ if (input.includes('FAKE:done')) {
     type: 'item.completed',
     item: { id: 'item_2', type: 'mcp_tool_call', server: 'lobotomy', tool: 'org_report', arguments: arguments_, result: reply.result, error: null, status: 'completed' },
   });
+}
+
+if (input.includes('FAKE:blocked')) {
+  await report({ title: '需要你决定', body: '有两种做法。', status: 'blocked', blocked_on: '空值怎么处理？' });
+}
+
+if (input.includes('FAKE:done')) {
+  if (!input.includes('FAKE:nowrite')) fs.writeFileSync('work.txt', /FAKE:text=(\S+)/.exec(input)?.[1] ?? 'hi');
+  await report({ title: '完成', body: '写了 work.txt', status: 'done' });
 }
 
 emit({ type: 'item.completed', item: { id: 'item_9', type: 'agent_message', text: 'finished' } });

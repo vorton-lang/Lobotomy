@@ -396,7 +396,7 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
             return Err(Error::rejected("no_attempt", format!("task {} has no open attempt", task.id)));
         }
     }
-    let task_id = task.map(|t| t.id);
+    let task_id = task.as_ref().map(|t| t.id.clone());
     let attempt_id = attempt.map(|a| a.id);
 
     let session = match current_session(cx.tx, role, task_id.as_deref())? {
@@ -443,6 +443,14 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     }
     for m in &messages {
         cx.tx.execute("UPDATE message SET state = 'bound', turn_id = ?2 WHERE id = ?1", params![m.id, turn_id])?;
+    }
+    // The executor's question stands until a message from the user goes to it. Once the message is
+    // bound, the executor gets it; if it still needs an answer, it asks again (#17).
+    if let Some(task) = &task
+        && task.blocked_reason.is_some()
+        && messages.iter().any(|m| m.source == Caller::User.scope())
+    {
+        crate::report::set_blocked(cx, task, None)?;
     }
     ids.extend(messages.iter().map(|m| m.id.clone()));
     let resent = resend.map(|t| t.id.as_str());

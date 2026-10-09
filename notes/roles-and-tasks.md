@@ -71,7 +71,7 @@ v1 优先稳定而不是吞吐：任务真正完成前，所有参与者都不�
 |---|---|
 | 新建 | Manager `assign`，或用户在 GUI 中直接建（任务说明只有用户原话，没有 Manager 解读） |
 | 排队 → 执行 | 运行时：执行者空闲时，把队首任务的说明发给它 |
-| 执行 ⇄ 阻塞 | 执行者 `org_report(status: blocked, blocked_on)`；卡在等用户时自动挂到"等你决定" |
+| 执行 ⇄ 阻塞 | 执行者 `org_report(status: blocked, blocked_on)`；卡在等用户时自动挂到"等你决定"。用户的回复绑定到执行者的下一个 turn 时解除（data-model.md §9.2） |
 | 执行 → 验证 | 执行者 `org_report(status: done)`。`done` 可能早于 CLI 退出：运行时先保存采集意图并保持占用，CLI 退出后再采集并固定成果，作为候选成果（harness-adapter.md §4.1） |
 | 验证 | 运行时：采集范围完整、集成无未处理冲突、检查命令通过。检查在固定的验证现场运行（data-model.md §5）。未通过则把原因直接发回执行者，不经 Manager |
 | 验证 → 审查 | 运行时：把候选成果交给 Reviewer |

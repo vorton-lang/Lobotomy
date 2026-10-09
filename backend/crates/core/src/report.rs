@@ -129,7 +129,7 @@ fn current_task(cx: &Cx<'_>, turn: &Turn) -> Result<Option<Task>> {
     Ok(open.filter(|a| &a.id == attempt_id).map(|_| task))
 }
 
-fn set_blocked(cx: &mut Cx<'_>, task: &Task, reason: Option<&str>) -> Result<()> {
+pub(crate) fn set_blocked(cx: &mut Cx<'_>, task: &Task, reason: Option<&str>) -> Result<()> {
     if task.blocked_reason.as_deref() == reason {
         return Ok(());
     }

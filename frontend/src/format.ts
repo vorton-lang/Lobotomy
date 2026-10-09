@@ -150,6 +150,10 @@ export function roleActivity(role: RoleView, task: TaskView | undefined, now: nu
   if (role.outside) return '任务之外有改动，等你决定';
   if (role.stalled) return 'turn 已结束，任务还没完成，等你发消息';
   if (role.workspace?.state === 'materializing') return '正在准备工作目录';
+  // The question stands until the user's reply is bound to the next turn (#17).
+  if (task?.phase === 'executing' && task.blocked_reason) {
+    return task.undelivered_messages > 0 ? '你的回复在排队，下一个 turn 交给它' : '提出了问题，等你回答';
+  }
   if (task) return PHASE_LABEL[task.phase];
   return '空闲';
 }
@@ -265,7 +269,8 @@ export type Row =
   | { key: string; kind: 'turn'; turn: Turn }
   | { key: string; kind: 'message'; message: Message }
   | { key: string; kind: 'input'; turn: Turn; note: string }
-  | { key: string; kind: 'item'; item: Item }
+  /** `fold`: a done report that the turn's last message sums up again; its body starts folded (#18). */
+  | { key: string; kind: 'item'; item: Item; fold: boolean }
   | { key: string; kind: 'live'; turnId: string; itemId: string; item: LiveItem }
   | { key: string; kind: 'running'; turnId: string; role: string; since: number }
   | { key: string; kind: 'queued'; message: Message };
@@ -276,6 +281,7 @@ export type Row =
  */
 export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): Row[] {
   const rows: Row[] = [];
+  const folded = repeatedReports(thread);
   const byTurn = new Map<string, Message[]>();
   for (const m of thread.messages) {
     if (!m.turn_id) continue;
@@ -295,7 +301,7 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
       }
     }
     if (item.kind === 'input') continue;
-    rows.push({ key: `item-${item.id}`, kind: 'item', item });
+    rows.push({ key: `item-${item.id}`, kind: 'item', item, fold: folded.has(item.id) });
   }
   for (const [turnId, turn] of Object.entries(live)) {
     if (turn.role !== thread.role) continue;
@@ -305,6 +311,23 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
   }
   for (const message of thread.queued) rows.push({ key: `queued-${message.id}`, kind: 'queued', message });
   return rows;
+}
+
+/**
+ * The done reports that a later message of the same turn follows. The executor's last message
+ * usually sums up the work again, so the report shows its status and title, and its body starts
+ * folded (#18).
+ */
+function repeatedReports(thread: ThreadState): Set<string> {
+  const lastMessage = new Map<string, number>();
+  for (const item of thread.items) if (item.kind === 'agent_message') lastMessage.set(item.turn_id, item.seq);
+  const out = new Set<string>();
+  for (const item of thread.items) {
+    if (item.kind !== 'mcp_call' || !item.command_id) continue;
+    const done = asReport(thread.commands[item.command_id])?.args.status === 'done';
+    if (done && (lastMessage.get(item.turn_id) ?? -Infinity) > item.seq) out.add(item.id);
+  }
+  return out;
 }
 
 const DECISION_LABEL: Record<string, string> = {

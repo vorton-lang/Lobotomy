@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { composerHint, harnessName } from '../format';
-import { act, useCommand, useMainRole, useStore } from '../store';
+import { act, setFollowing, useCommand, useMainRole, useStore } from '../store';
 
 export function Composer() {
   const [text, setText] = useState('');
@@ -17,7 +17,10 @@ export function Composer() {
     const body = text.trim();
     if (!body) return;
     const sent = await submit({ role: role.name, task_id: task?.id ?? null, body });
-    if (sent !== undefined) setText('');
+    if (sent === undefined) return;
+    setText('');
+    // What the user just sent, and what comes of it, is at the end of the thread.
+    setFollowing(true);
   };
 
   return (

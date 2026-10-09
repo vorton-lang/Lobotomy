@@ -192,6 +192,7 @@ pub enum Attention {
         role: String,
         turn_id: String,
     },
+    /// The executor asked the user a question, and no reply from the user waits in the queue.
     TaskBlocked {
         task_id: String,
         title: String,
@@ -260,7 +261,11 @@ pub fn attention(
     }
     for view in &overview.tasks {
         let t = &view.task;
-        if let (Phase::Executing, Some(reason)) = (t.phase, &t.blocked_reason) {
+        // After the user replies, the reply waits in the queue for the executor's next turn. The
+        // user has nothing more to do; registering the turn clears the question (#17).
+        if let (Phase::Executing, Some(reason)) = (t.phase, &t.blocked_reason)
+            && view.undelivered_messages == 0
+        {
             out.push(Attention::TaskBlocked { task_id: t.id.clone(), title: t.title.clone(), reason: reason.clone() });
         }
         if t.phase == Phase::Accepting

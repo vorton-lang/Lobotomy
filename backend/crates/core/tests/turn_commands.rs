@@ -1,12 +1,15 @@
 use lobotomy_core::item::{BlobStore, NewItem, STORAGE_THRESHOLD, externalize, record_item};
 use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
-use lobotomy_core::task::{Abandon, CreateTask, Reopen, StartAttempt, load_task, open_attempt, queued_messages};
+use lobotomy_core::task::{
+    Abandon, CreateTask, EditCriteria, Reopen, StartAttempt, load_task, open_attempt, queued_messages,
+};
 use lobotomy_core::turn::{
     Continue, EndTurn, Failure, FailureKind, InputDelivered, MarkUnfinishedUnknown, NewNativeSession, Outcome,
     RegisterTurn, SessionIdentified, TurnLaunched, TurnRegistered, TurnState, current_session, load_turn,
     turn_by_token,
 };
 use lobotomy_core::verify::{CheckOutcome, FinishVerification, StartVerification};
+use lobotomy_core::view::{Attention, attention, overview};
 use lobotomy_core::{Caller, Db};
 use serde_json::json;
 
@@ -366,6 +369,46 @@ fn blocked_sets_the_reason_once_and_progress_clears_it() {
     assert_eq!(reason(&db).as_deref(), Some("用哪个检查命令？"));
     report(&db, &t.turn_id, ReportStatus::Progress, None).unwrap();
     assert_eq!(reason(&db), None);
+}
+
+/// The executor's question waits for the user until a message from the user is bound to its next
+/// turn (#17). A queued reply already takes the question off the user's list; the bound reply
+/// clears it. A message from the runtime is no reply, and asking again brings the question back.
+#[test]
+fn a_reply_bound_to_the_next_turn_clears_the_question() {
+    let db = db();
+    let task = started_task(&db);
+    let reason = || db.read(|c| load_task(c, &task)).unwrap().blocked_reason;
+    let asks_user = || {
+        let list = db.read(|c| Ok(attention(&overview(c, "lobotomy")?, &[], &[], |_| false))).unwrap();
+        list.iter().any(|a| matches!(a, Attention::TaskBlocked { .. }))
+    };
+    let t1 = common::register(&db);
+    report(&db, &t1.turn_id, ReportStatus::Blocked, Some("空值怎么处理？")).unwrap();
+    assert!(asks_user());
+    end(&db, &t1.turn_id, Outcome::Completed);
+
+    let text = "空值报错".into();
+    db.execute(
+        &Caller::User,
+        &EditCriteria { request_id: "e1".into(), task_id: task.clone(), expected_version: 1, text },
+    )
+    .unwrap();
+    let t2 = common::register(&db);
+    assert_eq!(reason().as_deref(), Some("空值怎么处理？"), "the criteria update is not a reply");
+    assert!(asks_user());
+    end(&db, &t2.turn_id, Outcome::Completed);
+
+    common::send(&db, "m1", Some(&task), "空值报错");
+    assert!(!asks_user(), "the reply waits for the next turn; the user has nothing to do");
+    assert_eq!(reason().as_deref(), Some("空值怎么处理？"), "a queued reply does not clear the question");
+    let t3 = common::register(&db);
+    assert_eq!(reason(), None);
+    assert!(!asks_user());
+
+    let again = report(&db, &t3.turn_id, ReportStatus::Blocked, Some("空值怎么处理？")).unwrap();
+    assert_eq!(again, ReportEffect::Recorded);
+    assert!(asks_user());
 }
 
 /// What the GUI shows as a hold and what registering a turn refuses come from one rule (#16):

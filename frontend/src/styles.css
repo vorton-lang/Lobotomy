@@ -204,9 +204,31 @@ pre {
   min-width: 0;
   position: relative;
 }
+.thread-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
 .thread {
   flex: 1;
   padding: 8px 0;
+}
+/* Away from the end of the thread: back to it (#18). */
+.to-latest {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  border-radius: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.to-latest.fresh {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
 }
 .thread.empty {
   display: flex;
@@ -388,6 +410,11 @@ pre {
   font-size: 13px;
   margin: 4px 0;
 }
+.report-body summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12.5px;
+}
 
 .composer {
   border-top: 1px solid var(--line);
@@ -551,6 +578,15 @@ pre {
 .task-panel > .actions {
   padding: 0 18px 8px;
   border-bottom: 1px solid var(--line);
+}
+.task-panel > .now-running {
+  margin: 0;
+  padding: 6px 18px;
+  background: var(--mine);
+  border-bottom: 1px solid var(--line);
+}
+.task-panel > .now-running button {
+  margin-left: 8px;
 }
 .panel-body {
   overflow-y: auto;

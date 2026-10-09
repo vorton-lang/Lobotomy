@@ -5,7 +5,18 @@ import type { CommandRecord, Item, LiveItem, Text } from '../api/types';
 import { asReport, commandSummary, elapsed, REPORT_LABEL, textOf, voidReport } from '../format';
 import { Markdown, Output, useNow } from './common';
 
-export function ItemView({ item, role, commands }: { item: Item; role: string; commands: Record<string, CommandRecord> }) {
+/** `fold`: the item is a report whose body a later message repeats; the body starts folded (#18). */
+export function ItemView({
+  item,
+  role,
+  commands,
+  fold = false,
+}: {
+  item: Item;
+  role: string;
+  commands: Record<string, CommandRecord>;
+  fold?: boolean;
+}) {
   switch (item.kind) {
     case 'agent_message':
       return (
@@ -48,7 +59,15 @@ export function ItemView({ item, role, commands }: { item: Item; role: string; c
               <strong>{title}</strong>
             </div>
             {voided && <p className="report-void">{voided}</p>}
-            {body && <Markdown text={body} />}
+            {body &&
+              (fold ? (
+                <details className="report-body">
+                  <summary>报告全文</summary>
+                  <Markdown text={body} />
+                </details>
+              ) : (
+                <Markdown text={body} />
+              ))}
             {blocked_on && <p className="blocked-on">{blocked_on}</p>}
           </div>
         );

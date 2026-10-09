@@ -109,6 +109,33 @@ describe('buildRows', () => {
     const running = buildRows(thread({}), { t3: { ...live.t3, items: {} } });
     expect(running).toMatchObject([{ kind: 'running', role: 'Malkuth' }]);
   });
+
+  it('folds the body of a done report when a later message of its turn follows (#18)', () => {
+    const call = (id: string, seq: number, turnId: string): Item => ({
+      id,
+      seq,
+      turn_id: turnId,
+      kind: 'mcp_call',
+      content: { server: 'lobotomy', tool: 'org_report', arguments: {}, result_text: null, error_text: null },
+      command_id: `cmd-${id}`,
+      created_at: seq,
+    });
+    const report = (status: 'done' | 'progress'): CommandRecord => ({
+      name: 'org_report',
+      args: { title: 't', body: 'b', status, blocked_on: null },
+      result: 'recorded',
+    });
+    const rows = buildRows(
+      thread({
+        // Followed by a message; a progress report; a done report that ends its turn.
+        items: [call('r1', 1, 't1'), item('a1', 2, 't1'), call('r2', 3, 't2'), item('a2', 4, 't2'), item('a3', 5, 't3'), call('r3', 6, 't3')],
+        commands: { 'cmd-r1': report('done'), 'cmd-r2': report('progress'), 'cmd-r3': report('done') },
+      }),
+      {},
+    );
+    const fold = Object.fromEntries(rows.flatMap((r) => (r.kind === 'item' ? [[r.item.id, r.fold]] : [])));
+    expect(fold).toMatchObject({ r1: true, r2: false, r3: false, a1: false });
+  });
 });
 
 describe('mergePage', () => {
@@ -272,6 +299,14 @@ describe('roleActivity', () => {
     expect(roleActivity(role({ hold, stalled: { task_id: 't', turn_id: 't', report_error: null } }), undefined, 0)).toBe('停下，等你决定');
     expect(roleActivity(role({}), taskView('verifying'), 0)).toBe('验证中');
     expect(roleActivity(role({}), undefined, 0)).toBe('空闲');
+  });
+
+  it('tells a question waiting for the user from a reply waiting for the next turn (#17)', () => {
+    const asked = { ...taskView('executing'), blocked_reason: '空值怎么处理？' };
+    expect(roleActivity(role({}), asked, 0)).toBe('提出了问题，等你回答');
+    expect(roleActivity(role({}), { ...asked, undelivered_messages: 1 }, 0)).toBe('你的回复在排队，下一个 turn 交给它');
+    const registered = { ...turn('t'), state: 'registered' as const, outcome: null };
+    expect(roleActivity(role({ unfinished: registered }), asked, 0)).toBe('即将开始 turn');
   });
 });
 

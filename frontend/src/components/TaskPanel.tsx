@@ -13,6 +13,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const detail = useStore((s) => s.taskDetail);
   const task = useStore((s) => s.snapshot?.tasks.find((t) => t.id === taskId));
   const integration = useStore((s) => s.snapshot?.project?.integration);
+  // The task its executor works on now, when that is another one: after acceptance the next task
+  // starts while this panel stays open (#18).
+  const current = useStore((s) => {
+    const executor = s.snapshot?.roles.find((r) => r.name === task?.executor);
+    if (!executor?.task_id || executor.task_id === taskId) return undefined;
+    return s.snapshot?.tasks.find((t) => t.id === executor.task_id);
+  });
   // The reason to start the send-back dialog with, or `null` while it is closed.
   const [sendingBack, setSendingBack] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -69,6 +76,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           </>
         )}
       </div>
+      {current && (
+        <p className="now-running">
+          {task.executor} 现在做的是「{current.title}」（{PHASE_LABEL[current.phase]}）。
+          <button className="link" onClick={() => selectTask(current.id)}>
+            查看当前任务
+          </button>
+        </p>
+      )}
       {!loaded ? (
         <p className="muted">正在加载…</p>
       ) : (

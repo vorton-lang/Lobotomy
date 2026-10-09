@@ -1,6 +1,7 @@
 // The main role's thread (frontend.md §2 "M1 的布局", §4.2): a virtualized list that loads older
 // pages when scrolled to the top and follows the end while the user is at the end. Whether it
-// follows is kept in the store (`following`).
+// follows is kept in the store (`following`). Away from the end, a button goes back to it and
+// says when something new came (#18).
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { VList, type VListHandle } from 'virtua';
@@ -20,11 +21,21 @@ export function Thread() {
   const rows = useMemo(() => buildRows(thread, live), [thread, live]);
   const list = useRef<VListHandle>(null);
   const [prepending, setPrepending] = useState(false);
+  const following = useStore((s) => s.following);
 
-  // The list follows the end only while the user is there; scrolling is otherwise theirs.
+  // The list follows the end only while the user is there; scrolling is otherwise theirs. When
+  // following starts again, such as from "回到最新", the list goes to the end.
   useLayoutEffect(() => {
-    if (useStore.getState().following && rows.length > 0) list.current?.scrollToIndex(rows.length - 1, { align: 'end' });
-  }, [rows.length]);
+    if (following && rows.length > 0) list.current?.scrollToIndex(rows.length - 1, { align: 'end' });
+  }, [rows.length, following]);
+  // The last row the user saw at the end. A different last row is new to them; older pages
+  // loading above do not change it (#18).
+  const lastKey = rows.at(-1)?.key;
+  const seenLast = useRef(lastKey);
+  useEffect(() => {
+    if (following) seenLast.current = lastKey;
+  }, [following, lastKey]);
+  const fresh = !following && lastKey !== seenLast.current;
   // While an older page loads, the list keeps the visible rows in place as items arrive above
   // them (`shift`). Only the oldest item changing says the page is in: other changes, such as a
   // live item, may come first, and on a slow machine the page always comes later than the next
@@ -91,13 +102,20 @@ export function Thread() {
   }
   const title = (taskId: string | null) => (taskId ? tasks?.find((t) => t.id === taskId)?.title : undefined);
   return (
-    <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} keepMounted={[rows.length - 1]}>
-      {rows.map((row) => (
-        <div key={row.key} className="row" data-key={row.key}>
-          <RowView row={row} role={thread.role} title={title} commands={thread.commands} />
-        </div>
-      ))}
-    </VList>
+    <div className="thread-area">
+      <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} keepMounted={[rows.length - 1]}>
+        {rows.map((row) => (
+          <div key={row.key} className="row" data-key={row.key}>
+            <RowView row={row} role={thread.role} title={title} commands={thread.commands} />
+          </div>
+        ))}
+      </VList>
+      {!following && (
+        <button className={`to-latest ${fresh ? 'fresh' : ''}`} onClick={() => setFollowing(true)}>
+          {fresh ? '有新内容 · 回到最新 ↓' : '回到最新 ↓'}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -132,7 +150,7 @@ function RowView({
     case 'queued':
       return <MessageView source={row.message.source} body={row.message.body} queued />;
     case 'item':
-      return <ItemView item={row.item} role={role} commands={commands} />;
+      return <ItemView item={row.item} role={role} commands={commands} fold={row.fold} />;
     case 'live':
       return <LiveItemView item={row.item} />;
     case 'running':

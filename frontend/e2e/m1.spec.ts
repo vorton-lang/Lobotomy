@@ -88,6 +88,69 @@ test('a failed turn waits for the user to continue', async ({ page, backend }) =
   await expect(stalled).toBeHidden();
 });
 
+// The executor asks the user. The reply takes the question off "等你决定" at once, and the question
+// does not come back while the executor works on the reply (#17).
+test('a question leaves the list once the user replies', async ({ page, backend }) => {
+  await open(page, backend);
+  await createTask(page, '要先问的任务', 'FAKE:blocked');
+  const card = page.locator('.attention .card').filter({ hasText: '执行者在等你' });
+  await expect(card).toContainText('空值怎么处理？');
+  const roleLine = page.locator('.role-line');
+  await expect(roleLine).toContainText('提出了问题，等你回答');
+
+  await card.getByLabel('回复').fill('FAKE:wait=3000 FAKE:done');
+  await card.getByRole('button', { name: '发送' }).click();
+  await expect(card).toBeHidden();
+  await expect(roleLine).toContainText('正在跑 turn');
+  await expect(page.locator('.attention h3 .count')).toHaveCount(0);
+  await expect(page.getByText('现在没有需要你处理的事。')).toBeVisible();
+  await expect(page.locator('.attention .card').filter({ hasText: '等你验收' })).toBeVisible();
+});
+
+// Once the next task starts, the open panel of the accepted one says so and leads to it (#18).
+test('a finished task’s panel leads to the task now in work', async ({ page, backend }) => {
+  await open(page, backend);
+  await createTask(page, '第一个任务', 'FAKE:done');
+  await createTask(page, '第二个任务', 'FAKE:done FAKE:text=two');
+  const card = page.locator('.attention .card').filter({ hasText: '「第一个任务」通过了验证' });
+  await card.getByRole('button', { name: '查看并验收' }).click();
+  const first = taskPanel(page, '第一个任务');
+  await expect(first.locator('.now-running')).toHaveCount(0);
+  await first.getByRole('button', { name: '验收', exact: true }).click();
+  await expect(first.locator('.phase')).toHaveText('已完成');
+  await expect(first.locator('.now-running')).toContainText('「第二个任务」');
+  await first.getByRole('button', { name: '查看当前任务' }).click();
+  await expect(taskPanel(page, '第二个任务')).toBeVisible();
+  // Nothing runs in the backend's directories when the test ends.
+  await expect(page.locator('.attention .card').filter({ hasText: '「第二个任务」通过了验证' })).toBeVisible();
+});
+
+// Reading back in the thread, the user stays where they are. A button says when something new
+// came and goes back to the end (#18). The report the last message repeats starts folded.
+test('back to the latest after reading back', async ({ page, backend }) => {
+  await open(page, backend);
+  const composer = page.getByLabel('消息');
+  await composer.fill('FAKE:many=60');
+  await composer.press('Enter');
+  const latest = page.getByRole('button', { name: /回到最新/ });
+  await expect(page.locator('.thread .message.other').last()).toContainText('finished');
+  await expect(latest).toBeHidden();
+
+  await page.locator('.thread').evaluate((thread) => thread.scrollTo(0, 0));
+  await expect(latest).toHaveText('回到最新 ↓');
+  await createTask(page, '读历史时开始的任务', 'FAKE:done');
+  await expect(page.locator('.attention .card').filter({ hasText: '等你验收' })).toBeVisible();
+  await expect(latest).toHaveText('有新内容 · 回到最新 ↓');
+  await expect(page.locator('.report.done')).toHaveCount(0);
+
+  await latest.click();
+  await expect(latest).toBeHidden();
+  const report = page.locator('.report.done');
+  await expect(report).toBeVisible();
+  await expect(report.locator('details.report-body')).not.toHaveAttribute('open');
+  await expect(report).toContainText('写了 work.txt');
+});
+
 // A Codex whose administrator does not allow full access refuses to start. One click switches
 // Codex to auto review and sends the brief again; the setting stays until the user changes it
 // back (harness-adapter.md §1.9).
