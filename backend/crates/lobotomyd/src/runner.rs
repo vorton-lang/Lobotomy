@@ -212,7 +212,7 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let (program, prefix) = cli.program()?;
     let args: Vec<String> = prefix.iter().cloned().chain(args).collect();
     let what = launch::What::Program { program, args: &args };
-    let mut spawned = match launch::spawn(what, &cwd, &project.empty_gh_config_dir()) {
+    let mut spawned = match launch::spawn(what, &cwd, &project.empty_gh_config_dir()).await {
         Ok(spawned) => spawned,
         Err(e) => {
             let message = format!("无法启动 {}（{}）：{e:#}", harness.label(), program.display());

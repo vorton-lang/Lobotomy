@@ -58,11 +58,53 @@ const marked = new Marked({
   },
 });
 
+/**
+ * Repairs only what marked would read differently once complete. Math is not rendered, so `$$`
+ * is left alone; single tildes and `- >` keep the meaning marked gives them in finished text.
+ */
+const REPAIR = { katex: false, singleTilde: false, comparisonOperators: false } as const;
+
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Where the last block starts. Only it can still be unfinished: marked does not pair emphasis
+ * across a blank line, so repairing earlier blocks would add marks no block closes. A fence still
+ * open at the end makes the last block start at its opening line.
+ */
+export function lastBlockStart(text: string): number {
+  let start = 0;
+  let fence: string | null = null;
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    const marker = FENCE.exec(line)?.[1];
+    const next = offset + line.length + 1;
+    if (fence === null) {
+      if (marker) {
+        fence = marker;
+        start = offset;
+      } else if (line.trim() === '') {
+        start = next;
+      }
+    } else if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) {
+      fence = null;
+      start = next;
+    }
+    offset = next;
+  }
+  return Math.min(start, text.length);
+}
+
+function repair(text: string): string {
+  const start = lastBlockStart(text);
+  return text.slice(0, start) + remend(text.slice(start), REPAIR);
+}
+
 self.onmessage = async (event: MessageEvent<{ id: number; text: string; streaming: boolean }>) => {
   const { id, text, streaming } = event.data;
   try {
-    const html = await marked.parse(streaming ? remend(text) : text);
-    self.postMessage({ id, html });
+    const source = streaming ? repair(text) : text;
+    // Unrepaired live text renders exactly as the completed item will.
+    self.postMessage({ id, html: await marked.parse(source), repaired: source !== text });
   } catch (e) {
     self.postMessage({ id, html: `<pre>${escapeHtml(text)}</pre>`, error: String(e) });
   }

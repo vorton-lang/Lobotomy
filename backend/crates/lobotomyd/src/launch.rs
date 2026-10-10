@@ -1,9 +1,10 @@
-//! Starting the processes the backend runs: role turns, quota checks and project checks. They
-//! share what keeps them safe, so no path can leave a part out (#16):
+//! Starting the processes the backend runs: role turns, quota checks, project checks and trial
+//! terminals. They share what keeps them safe, so no path can leave a part out (#16):
 //! - the trimmed environment (harness-adapter.md §1.6);
 //! - a job of their own, joined before they run (harness-adapter.md §1.8);
 //! - stderr read from the moment they run, so a process that writes much there before it reads
 //!   its input cannot block on a full pipe while the backend waits to write that input (#10).
+//!   A trial terminal has no pipes: its window is its input and output.
 //!
 //! Stdout is the caller's to read once the input is written: Codex reads its input before it
 //! writes anything on stdout.
@@ -25,21 +26,24 @@ pub enum What<'a> {
     Program { program: &'a Path, args: &'a [String] },
     /// A command line for the platform's shell, such as a project check (harness-adapter.md §4.2).
     Shell(&'a str),
+    /// A command line run in a native terminal through `helper`, for a trial (frontend.md §8).
+    Terminal { command: &'a str, title: &'a str, helper: &'a Path },
 }
 
-/// Starts the process in `cwd`, suspended: it does not run until [`run`]. `gh` is the empty
-/// config directory `gh` gets.
-pub fn spawn(what: What<'_>, cwd: &Path, gh: &Path) -> anyhow::Result<Spawned> {
+/// Starts the process in `cwd`, suspended: it does not run until [`run`], or for a terminal,
+/// until [`Spawned::resume`]. `gh` is the empty config directory `gh` gets.
+pub async fn spawn(what: What<'_>, cwd: &Path, gh: &Path) -> anyhow::Result<Spawned> {
     std::fs::create_dir_all(gh).with_context(|| format!("creating {}", gh.display()))?;
     let env = capability::env(gh);
     let (program, args) = match &what {
         What::Program { program, args } => (*program, *args),
-        What::Shell(_) => (Path::new(""), &[][..]),
+        What::Shell(_) | What::Terminal { .. } => (Path::new(""), &[][..]),
     };
     let spec = Spec { program, args, cwd, env: &env, env_remove: capability::REMOVED_VARS };
     Ok(match what {
         What::Program { .. } => process::spawn(&spec)?,
         What::Shell(command) => process::spawn_shell(command, &spec)?,
+        What::Terminal { command, title, helper } => process::spawn_terminal(command, title, helper, &spec).await?,
     })
 }
 

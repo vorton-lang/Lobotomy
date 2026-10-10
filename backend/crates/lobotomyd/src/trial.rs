@@ -1,19 +1,18 @@
 //! User-started trials: a fresh copy of one fixed candidate and a separate native terminal.
 //! Reporting a command never starts it. Only the authenticated GUI's explicit command does.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use lobotomy_core::Error;
 use lobotomy_core::view::task_detail;
-use lobotomy_harness::process::{self, Spec};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::project::Project;
-use crate::{capability, runner};
+use crate::{launch, runner};
 
 #[derive(Clone, Serialize)]
 pub struct TrialView {
@@ -129,14 +128,21 @@ fn copy_root(project: &Project, trial_id: &str) -> PathBuf {
     project.trials_dir().join(trial_id)
 }
 
-/// Deletes a trial's copy. A copy that cannot be deleted now, for example while a file is still
-/// in use, goes at the next startup (results::sweep).
+/// Deletes a trial's copy. Processes just killed may hold it for a moment, so this tries for a few
+/// seconds; a copy still in use after that goes at the next startup (results::sweep).
 async fn discard(root: PathBuf) {
-    let path = root.clone();
-    if let Ok(Err(e)) = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(root)).await
-        && e.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(path = %path.display(), error = %e, "could not delete a trial copy; startup deletes it");
+    const TRIES: u32 = 20;
+    for tried in 1..=TRIES {
+        let dir = root.clone();
+        match tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await {
+            Ok(Err(e)) if e.kind() != std::io::ErrorKind::NotFound && tried == TRIES => {
+                tracing::warn!(path = %root.display(), error = %e, "could not delete a trial copy; startup deletes it");
+            }
+            Ok(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            _ => return,
+        }
     }
 }
 
@@ -187,18 +193,10 @@ async fn launch(project: &Arc<Project>, view: &mut TrialView) -> anyhow::Result<
     if project.trials.closing.load(Ordering::SeqCst) {
         anyhow::bail!("项目正在关闭");
     }
-    let gh = project.empty_gh_config_dir();
-    std::fs::create_dir_all(&gh)?;
-    let env = capability::env(&gh);
-    let spec = Spec {
-        program: std::path::Path::new(""),
-        args: &[],
-        cwd: std::path::Path::new(&view.directory),
-        env: &env,
-        env_remove: capability::REMOVED_VARS,
-    };
     let title = format!("Lobotomy trial {} round {} {}", view.task_id, view.round, &view.candidate[..8]);
-    let mut spawned = process::spawn_terminal(&view.command, &title, &spec).await?;
+    let what =
+        launch::What::Terminal { command: &view.command, title: &title, helper: &project.host.harness.terminal_helper };
+    let mut spawned = launch::spawn(what, Path::new(&view.directory), &project.empty_gh_config_dir()).await?;
     let stop = CancellationToken::new();
     let finished = CancellationToken::new();
     {
@@ -271,6 +269,7 @@ mod tests {
                     claude: cli.clone(),
                     codex: cli,
                     interrupt_helper: vec![],
+                    terminal_helper: PathBuf::new(),
                     probe_timeout: std::time::Duration::from_secs(1),
                 },
             )

@@ -79,7 +79,7 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 | 事项 | 来源 |
 |---|---|
 | 审查：Yesod、独立审查现场、审查结论；一轮返工预算与结论失效规则 | v0.1 的 M2；[#19](https://github.com/vorton-lang/Lobotomy/issues/19) |
-| 试用的改进：阶段进展也能试用，不只是 done 的候选成果；在 GUI 或远程入口中看到试用的输出；Linux 上支持更多终端，并简化进程组接管（现在约 150 行握手，防的是罕见情况），需要在 Linux 桌面上实测 | #20；frontend.md §8 |
+| 试用的改进：阶段进展也能试用，不只是 done 的候选成果；在 GUI 或远程入口中看到试用的输出；Linux 上支持更多终端，并简化进程组接管（现在约 150 行握手，防的是罕见情况），需要在 Linux 桌面上实测，并补上 Linux 终端路径的测试 | #20；frontend.md §8 |
 | 长期记忆扩展：版本化修订、作用域、纠正后通知受影响的任务 | #22 |
 | Binah 与会议；研究任务按非代码证据完成 | v0.1 的 M3；[#5](https://github.com/vorton-lang/Lobotomy/issues/5) |
 | 对外操作与导出：GitHub 写操作的确认、push、成果导出 | #5；manager-actions.md §5 |

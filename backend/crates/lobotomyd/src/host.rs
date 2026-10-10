@@ -34,6 +34,8 @@ pub struct HarnessConfig {
     pub codex: Cli,
     /// The program and arguments that send Ctrl+C to a pid (harness-adapter.md §1.8).
     pub interrupt_helper: Vec<String>,
+    /// The backend executable, which runs a trial's terminal as `trial-terminal` (frontend.md §8).
+    pub terminal_helper: PathBuf,
     /// A quota check that has not finished by then counts as rejected without a reset time; the
     /// domain stays blocked (data-model.md §8.4). A normal check takes seconds.
     pub probe_timeout: Duration,
@@ -56,7 +58,7 @@ impl Cli {
 }
 
 impl HarnessConfig {
-    /// The real CLIs, with this executable as the interrupt helper.
+    /// The real CLIs, with this executable as the interrupt and terminal helper.
     /// `LOBOTOMY_CODEX` and `LOBOTOMY_CLAUDE`, each a JSON array of program and arguments, replace
     /// the located CLIs. The GUI's end-to-end tests put the fake CLIs there.
     pub fn detect() -> anyhow::Result<Self> {
@@ -73,6 +75,7 @@ impl HarnessConfig {
             claude: Cli { command: command("LOBOTOMY_CLAUDE", claude::locate())?, reasoning_effort: None },
             codex: Cli { command: command("LOBOTOMY_CODEX", codex::locate())?, reasoning_effort: None },
             interrupt_helper: vec![exe.to_string_lossy().into_owned(), "ctrl-c".into()],
+            terminal_helper: exe,
             probe_timeout: Duration::from_secs(120),
         })
     }
@@ -185,7 +188,7 @@ impl Host {
         let cwd = self.dir.join("probe");
         std::fs::create_dir_all(&cwd)?;
         let what = launch::What::Program { program, args: &args };
-        let mut spawned = launch::spawn(what, &cwd, &self.dir.join("gh-empty"))?;
+        let mut spawned = launch::spawn(what, &cwd, &self.dir.join("gh-empty")).await?;
         let io = launch::run(&mut spawned, input.as_bytes(), |stderr| tail(stderr, 4096)).await?;
         let stderr_tail = io.stderr;
         let read = async {

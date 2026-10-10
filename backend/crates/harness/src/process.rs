@@ -86,8 +86,9 @@ pub fn spawn_shell(command: &str, spec: &Spec<'_>) -> io::Result<Spawned> {
 }
 
 /// Opens an interactive native terminal for a trial. `spec.program` and `spec.args` are
-/// ignored. The current executable must dispatch `trial-terminal <title> <command> <control>`
-/// to [`run_terminal_helper`] before starting its normal backend runtime.
+/// ignored. `helper`, normally the backend executable, must dispatch
+/// `trial-terminal <title> <command> <control>` to [`run_terminal_helper`] before starting its
+/// normal backend runtime.
 ///
 /// The returned child lives for as long as the terminal is open, including after the command
 /// finishes. Its exit status describes the terminal, not the trial command. Windows creates
@@ -97,11 +98,11 @@ pub fn spawn_shell(command: &str, spec: &Spec<'_>) -> io::Result<Spawned> {
 /// Linux startup asynchronously waits up to ten seconds for that acknowledgement. Launch on
 /// the backend's long-lived runtime, not a short-lived thread: Linux PDEATHSIG follows the
 /// spawning thread's lifetime.
-pub async fn spawn_terminal(command: &str, title: &str, spec: &Spec<'_>) -> io::Result<Spawned> {
+pub async fn spawn_terminal(command: &str, title: &str, helper: &Path, spec: &Spec<'_>) -> io::Result<Spawned> {
     if command.contains('\0') || title.contains('\0') {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "terminal command and title cannot contain NUL"));
     }
-    imp::spawn_terminal(command, title, spec).await
+    imp::spawn_terminal(command, title, helper, spec).await
 }
 
 /// Entry point for the private terminal helper. It must run in a fresh process, before a
@@ -247,8 +248,13 @@ mod imp {
         cmd.creation_flags(CREATE_SUSPENDED | if visible_console { CREATE_NEW_CONSOLE } else { CREATE_NO_WINDOW });
     }
 
-    pub async fn spawn_terminal(command: &str, title: &str, spec: &super::Spec<'_>) -> io::Result<super::Spawned> {
-        let mut cmd = Command::new(std::env::current_exe()?);
+    pub async fn spawn_terminal(
+        command: &str,
+        title: &str,
+        helper: &Path,
+        spec: &super::Spec<'_>,
+    ) -> io::Result<super::Spawned> {
+        let mut cmd = Command::new(helper);
         cmd.args(["trial-terminal", title, command, ""])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -576,17 +582,21 @@ mod imp {
         cmd
     }
 
-    pub async fn spawn_terminal(command: &str, title: &str, spec: &super::Spec<'_>) -> io::Result<super::Spawned> {
+    pub async fn spawn_terminal(
+        command: &str,
+        title: &str,
+        helper: &Path,
+        spec: &super::Spec<'_>,
+    ) -> io::Result<super::Spawned> {
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             return Err(io::Error::new(io::ErrorKind::Unsupported, "native trials require a graphical desktop"));
         }
         let control = TerminalControl::new()?;
         let listener = UnixListener::bind(control.socket())?;
         listener.set_nonblocking(true)?;
-        let helper = std::env::current_exe()?;
         let mut spawned = None;
         for program in ["xfce4-terminal", "xterm"] {
-            let cmd = terminal_command(program, &helper, title, command, &control.socket());
+            let cmd = terminal_command(program, helper, title, command, &control.socket());
             match super::start_with_stdio(cmd, spec, true, false) {
                 Ok(child) => {
                     spawned = Some(child);
