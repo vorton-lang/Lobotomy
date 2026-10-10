@@ -127,20 +127,10 @@ export function BlobButton({ hash, label }: { hash: string; label?: string }) {
  * never scrolls by itself, so the thread and the task panel are the only scrolling areas (#13).
  */
 export function Output({ value }: { value: unknown }) {
-  if (isBlob(value)) {
-    return (
-      <div className="output">
-        <pre>{firstLines(value.head)}</pre>
-        <div className="elided">
-          …中间省略，共 {bytes(value.size)} · <BlobButton hash={value.blob} />
-        </div>
-        <pre>{lastLines(value.tail)}</pre>
-      </div>
-    );
-  }
-  const text = typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value, null, 2);
-  if (!text) return null;
-  if (fits(text)) {
+  const blob = isBlob(value) ? value : null;
+  const text = blob ? '' : typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value, null, 2);
+  if (!blob && !text) return null;
+  if (!blob && fits(text)) {
     return (
       <div className="output">
         <pre>{text}</pre>
@@ -149,11 +139,12 @@ export function Output({ value }: { value: unknown }) {
   }
   return (
     <div className="output">
-      <pre>{firstLines(text)}</pre>
+      <pre>{firstLines(blob ? blob.head : text)}</pre>
       <div className="elided">
-        …中间省略，共 {text.split('\n').length} 行 · <FullText load={async () => text} />
+        …中间省略，共 {blob ? bytes(blob.size) : `${text.split('\n').length} 行`} ·{' '}
+        {blob ? <BlobButton hash={blob.blob} /> : <FullText load={async () => text} />}
       </div>
-      <pre>{lastLines(text)}</pre>
+      <pre>{lastLines(blob ? blob.tail : text)}</pre>
     </div>
   );
 }
