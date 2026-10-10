@@ -19,6 +19,8 @@ import {
   abnormalEnd,
   asReport,
   attentionKey,
+  attentionSummary,
+  attentionTask,
   buildRows,
   checkSummary,
   commandSummary,
@@ -409,6 +411,17 @@ describe('attentionKey', () => {
     expect(attentionKey(blocked('a'))).not.toBe(attentionKey(blocked('b')));
     const accept: Attention = { kind: 'accept', task_id: 'a', title: 't', verification_id: 'v' };
     expect(attentionKey(accept)).not.toBe(attentionKey(blocked('a')));
+  });
+});
+
+describe('attentionSummary', () => {
+  it('says in one line what waits, and names the task going there opens', () => {
+    const accept: Attention = { kind: 'accept', task_id: 'a', title: '导出', verification_id: 'v' };
+    expect(attentionSummary(accept)).toBe('「导出」通过了验证，等你验收');
+    expect(attentionTask(accept)).toBe('a');
+    const failed: Attention = { kind: 'hold', role: 'Malkuth', hold: { kind: 'abnormal', turn: { ...turn('t1'), outcome: 'interrupted' } } };
+    expect(attentionSummary(failed)).toBe('Malkuth 的上一个 turn 被中断，停下等你决定');
+    expect(attentionTask(failed)).toBe(null);
   });
 });
 

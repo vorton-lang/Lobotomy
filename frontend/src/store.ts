@@ -55,7 +55,10 @@ interface State {
   status: Status;
   /** The projects and what the host shows across them (frontend.md §3 rule 8). */
   host: HostSnapshot | null;
-  /** The project the window shows; requests about a project name it. */
+  /**
+   * The project the window shows; requests about a project name it. `null` is 「全部」: what waits
+   * for the user in every project (frontend.md §2 "M3 的布局").
+   */
   project: string | null;
   snapshot: Snapshot | null;
   live: Record<string, LiveTurn>;
@@ -89,19 +92,27 @@ const emptyThread = (role: string): ThreadState => ({
   loaded: false,
 });
 
-export const useStore = create<State>(() => ({
-  status: 'connecting',
-  host: null,
-  project: null,
+/** What the window holds about the project it shows; another project starts from this. */
+const emptyProject = () => ({
   snapshot: null,
   live: {},
   thread: emptyThread(''),
   following: true,
   selectedTask: null,
   taskDetail: null,
-  toasts: [],
   search: null,
+});
+
+export const useStore = create<State>(() => ({
+  status: 'connecting',
+  host: null,
+  project: null,
+  ...emptyProject(),
+  toasts: [],
 }));
+
+/** Whether the window still shows `project`: a reply about another one is dropped. */
+const showing = (project: string | null) => useStore.getState().project === project;
 
 let connection: Connection | null = null;
 
@@ -210,12 +221,23 @@ async function reloadProject() {
 }
 
 /**
- * The project the window shows: the current one while it stays open, else the first open one.
- * The window shows one project until the project list comes (roadmap M3 step 2).
+ * The project the window shows, or `null` for 「全部」. The window keeps its project while it stays
+ * open; when it closes, the window shows 「全部」. At start, `initial`, the window shows the only
+ * open project, or 「全部」 when there are several or none.
  */
-export function chooseProject(host: HostSnapshot, current: string | null): string | null {
+export function chooseProject(host: HostSnapshot, current: string | null, initial: boolean): string | null {
   const open = host.projects.filter((p) => p.state === 'running' && p.error === null);
-  return open.find((p) => p.id === current)?.id ?? open[0]?.id ?? null;
+  if (current !== null && open.some((p) => p.id === current)) return current;
+  return initial && open.length === 1 ? open[0].id : null;
+}
+
+/**
+ * What waits for the user in all projects, for the window title and the tray: each project's,
+ * and the host's blocked quota domains once (data-model.md §10.5).
+ */
+export function totalAttention(host: HostSnapshot | null): number {
+  if (!host) return 0;
+  return host.projects.reduce((n, p) => n + p.attention.length, host.attention.length);
 }
 
 let hostRequest = 0;
@@ -227,14 +249,31 @@ async function loadHost(): Promise<boolean> {
   const host = await call<HostSnapshot>('host');
   if (request < appliedHost) return false;
   appliedHost = request;
-  const current = useStore.getState().project;
-  const project = chooseProject(host, current);
+  const { project: current, host: before } = useStore.getState();
+  const project = chooseProject(host, current, before === null);
   if (project === current) {
     useStore.setState({ host });
     return false;
   }
-  useStore.setState({ host, project, snapshot: null, live: {}, thread: emptyThread(''), selectedTask: null, taskDetail: null, search: null });
+  useStore.setState({ host, project, ...emptyProject() });
   return true;
+}
+
+/**
+ * Shows a project, or 「全部」 for `null`, and opens one of its tasks if `taskId` names one. The
+ * project must be open: the list offers no others.
+ */
+export async function selectProject(project: string | null, taskId: string | null = null) {
+  if (!showing(project)) {
+    useStore.setState({ project, ...emptyProject() });
+    try {
+      await reloadProject();
+    } catch (e) {
+      toast(e instanceof RequestFailed ? e.remote.message : String(e));
+      return;
+    }
+  }
+  if (taskId && showing(project)) selectTask(taskId);
 }
 
 /** After the project list or a host setting changed. Host settings show in the project snapshot. */
@@ -248,18 +287,22 @@ let snapshotRequest = 0;
 let appliedSnapshot = 0;
 
 async function loadSnapshot() {
+  const { project } = useStore.getState();
+  if (project === null) return;
   const request = ++snapshotRequest;
   const snapshot = await call<Snapshot>('snapshot');
-  if (request < appliedSnapshot) return;
+  if (request < appliedSnapshot || !showing(project)) return;
   appliedSnapshot = request;
   useStore.setState({ snapshot, live: snapshot.live });
 }
 
 /** The newest page replaces the thread; the list follows its end again. */
 async function loadNewestThread() {
-  const role = mainRole(useStore.getState().snapshot)?.name;
+  const { project, snapshot } = useStore.getState();
+  const role = mainRole(snapshot)?.name;
   if (!role) return;
   const page = await call<ThreadPage>('thread', { role });
+  if (!showing(project)) return;
   useStore.setState({ thread: { ...mergePage(emptyThread(role), page, 'replace'), loaded: true }, following: true });
 }
 
@@ -273,28 +316,28 @@ let older: Promise<void> | null = null;
 /** Loads the page before the oldest item. A call while a page loads waits for that one. */
 export function loadOlder(): Promise<void> {
   older ??= (async () => {
-    const thread = useStore.getState().thread;
+    const { project, thread } = useStore.getState();
     if (!thread.hasMore || thread.items.length === 0) return;
     const page = await call<ThreadPage>('thread', { role: thread.role, before: thread.items[0].seq });
-    useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'older') }));
+    if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'older') }));
   })().finally(() => (older = null));
   return older;
 }
 
 async function catchUp() {
-  const thread = useStore.getState().thread;
+  const { project, thread } = useStore.getState();
   if (!thread.loaded) return;
   const after = thread.items.at(-1)?.seq ?? 0;
   const page = await call<ThreadPage>('thread', { role: thread.role, after });
-  useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'newer') }));
+  if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'newer') }));
 }
 
 /** A turn can change state without new items (it ends); the newest page carries its state. */
 async function refreshTurns() {
-  const thread = useStore.getState().thread;
+  const { project, thread } = useStore.getState();
   if (!thread.loaded) return;
   const page = await call<ThreadPage>('thread', { role: thread.role });
-  useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'newer') }));
+  if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'newer') }));
 }
 
 export function mergePage(thread: ThreadState, page: ThreadPage, mode: 'replace' | 'older' | 'newer'): ThreadState {
@@ -316,8 +359,9 @@ export function mergePage(thread: ThreadState, page: ThreadPage, mode: 'replace'
 }
 
 export async function loadTaskDetail(taskId: string) {
+  const { project } = useStore.getState();
   const detail = await call<TaskDetail>('task', { task_id: taskId });
-  if (useStore.getState().selectedTask === taskId) useStore.setState({ taskDetail: detail });
+  if (showing(project) && useStore.getState().selectedTask === taskId) useStore.setState({ taskDetail: detail });
 }
 
 export function selectTask(taskId: string | null) {
@@ -328,6 +372,8 @@ export function selectTask(taskId: string | null) {
 // ---- search (frontend.md §4.1 "搜索") ----
 
 export function openSearch() {
+  // 「全部」 has no thread to search.
+  if (useStore.getState().project === null) return;
   const search = useStore.getState().search;
   useStore.setState({ search: search ? { ...search, focus: search.focus + 1 } : { query: '', matches: [], more: false, current: -1, jump: 0, focus: 1 } });
   // A task panel would cover the matches.
@@ -400,6 +446,10 @@ function debounced(f: () => Promise<void>, ms: number) {
 
 const refreshSnapshot = debounced(loadSnapshot, 120);
 const refreshHostSoon = debounced(refreshHost, 120);
+/** The project list's counts and the window title follow every project's events. */
+const refreshCounts = debounced(async () => {
+  if (await loadHost()) await reloadProject();
+}, 300);
 const refreshThread = debounced(catchUp, 80);
 const refreshTurnStates = debounced(refreshTurns, 120);
 const refreshDetail = debounced(async () => {
@@ -408,7 +458,8 @@ const refreshDetail = debounced(async () => {
 }, 150);
 
 function onPush(push: Push) {
-  // Another project's changes do not show in this window yet (roadmap M3 step 2).
+  if (push.type === 'events') refreshCounts();
+  // Beyond the counts, the window shows only its own project.
   if ('project' in push && push.project !== useStore.getState().project) return;
   switch (push.type) {
     case 'events': {

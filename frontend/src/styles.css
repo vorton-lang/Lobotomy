@@ -164,7 +164,7 @@ pre {
   margin: 15vh auto;
   padding: 0 16px;
 }
-.onboarding form {
+.connect-repo form {
   display: flex;
   gap: 8px;
 }
@@ -200,10 +200,90 @@ pre {
   color: var(--error);
 }
 
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
 .main {
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
+}
+
+/* The project list (frontend.md §2 "M3 的布局"). */
+.projects {
+  width: 200px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  overflow-y: auto;
+  padding: 8px 6px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.project-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: transparent;
+}
+button.project-item:hover:not(:disabled) {
+  background: var(--sunken);
+}
+.project-item.selected {
+  background: var(--mine);
+}
+.project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-item .busy {
+  color: var(--ok);
+  font-size: 10px;
+}
+.project-item.failed .failure {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  word-break: break-word;
+}
+.projects .archived summary {
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.projects .new-project {
+  align-self: flex-start;
+  margin: 10px 0 0 8px;
+}
+
+/* 「全部」: what waits for the user in every project. */
+.overview {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 24px 24px;
+  max-width: 760px;
+}
+.overview h2 {
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.overview .group h3 {
+  font-size: 13px;
+  margin: 18px 0 8px;
 }
 .conversation {
   flex: 1;

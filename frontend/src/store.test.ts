@@ -25,9 +25,11 @@ vi.mock('./api/connection', async (original) => ({
   },
 }));
 
-import { chooseProject, connect, useStore } from './store';
+import { chooseProject, connect, selectProject, totalAttention, useStore } from './store';
 
 afterEach(() => {
+  // A debounced refresh still waiting would swallow the next test's.
+  if (vi.isFakeTimers()) vi.runOnlyPendingTimers();
   vi.useRealTimers();
   probe.pending = [];
   useStore.setState({ host: null, project: null, snapshot: null, live: {} });
@@ -85,11 +87,43 @@ test('requests about the project name it; the host snapshot does not', async () 
   vi.useFakeTimers();
   connect('ws://unused');
   probe.events!.opened();
-  await answer('host', host('p1', 'p2'));
+  await answer('host', host('p1'));
   expect(useStore.getState().project).toBe('p1');
   expect(pending('snapshot')[0].params).toEqual({ project: 'p1' });
   await answer('snapshot', snapshot('full'));
   expect(probe.pending.find((p) => p.method === 'host')?.params ?? {}).not.toHaveProperty('project');
+});
+
+test('a reply about the project the window left is dropped', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  useStore.setState({ host: host('p1', 'p2'), project: 'p1' });
+  probe.events!.push({ type: 'events', project: 'p1', events: [{ seq: 2, kind: 'task.updated', entity: 't', payload: {} }] });
+  await vi.advanceTimersByTimeAsync(120);
+  expect(pending('snapshot')[0].params).toEqual({ project: 'p1' });
+
+  const switching = selectProject('p2');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(pending('snapshot')[1].params).toEqual({ project: 'p2' });
+  // The reply about p1 comes after the switch.
+  await answer('snapshot', snapshot('full'));
+  expect(useStore.getState().snapshot).toBe(null);
+
+  const current = snapshot('auto_review');
+  await answer('snapshot', current);
+  await switching;
+  expect(useStore.getState().project).toBe('p2');
+  expect(useStore.getState().snapshot).toBe(current);
+});
+
+test('another project’s events refresh the counts, not the window', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  useStore.setState({ host: host('p1', 'p2'), project: 'p1' });
+  probe.events!.push({ type: 'events', project: 'p2', events: [{ seq: 2, kind: 'task.updated', entity: 't', payload: {} }] });
+  await vi.advanceTimersByTimeAsync(300);
+  expect(pending('host')).toHaveLength(1);
+  expect(pending('snapshot')).toHaveLength(0);
 });
 
 test('pushes about another project do not change the window', async () => {
@@ -102,10 +136,28 @@ test('pushes about another project do not change the window', async () => {
   expect(Object.keys(useStore.getState().live)).toEqual(['t']);
 });
 
-test('the window keeps its project while it stays open, else takes the first open one', () => {
+test('the window keeps its project while it stays open; at start it shows the only open one', () => {
   const failed = project('p1', { error: '数据目录不存在' });
   const archived = project('p2', { state: 'archived' });
-  expect(chooseProject(host('p1', 'p2'), 'p2')).toBe('p2');
-  expect(chooseProject({ projects: [failed, archived, project('p3')], attention: [], harnesses: [] }, 'p1')).toBe('p3');
-  expect(chooseProject({ projects: [failed, archived], attention: [], harnesses: [] }, null)).toBe(null);
+  const others = { projects: [failed, archived, project('p3')], attention: [], harnesses: [] };
+  expect(chooseProject(host('p1', 'p2'), 'p2', false)).toBe('p2');
+  // A project that closes leaves the window on 「全部」.
+  expect(chooseProject(others, 'p1', false)).toBe(null);
+  expect(chooseProject(others, null, false)).toBe(null);
+  // At start: the only open project, else 「全部」.
+  expect(chooseProject(others, null, true)).toBe('p3');
+  expect(chooseProject(host('p1', 'p2'), null, true)).toBe(null);
+  expect(chooseProject({ projects: [failed, archived], attention: [], harnesses: [] }, null, true)).toBe(null);
+});
+
+test('the total counts each project’s items and the host’s quota domains once', () => {
+  const accept = { kind: 'accept', task_id: 't', title: 'T', verification_id: 'v' } as const;
+  const quota = { kind: 'quota', domain: { harness: 'claude', account: '', blocked_at: 1, resets_at: null, message: null } } as const;
+  const counted: HostSnapshot = {
+    projects: [project('p1', { attention: [accept] }), project('p2', { attention: [accept, accept] })],
+    attention: [quota],
+    harnesses: [],
+  };
+  expect(totalAttention(counted)).toBe(4);
+  expect(totalAttention(null)).toBe(0);
 });

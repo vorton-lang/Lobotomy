@@ -1,16 +1,19 @@
-// The M1 window (frontend.md §2 "M1 的布局"): the executor's thread in the main area, what waits for
-// the user and the Workboard on the right, a task's detail in a panel over the thread.
+// The window (frontend.md §2 "M3 的布局"): the project list on the left. 「全部」 lists what waits for
+// the user in every project. A project shows as in M1: the executor's thread in the main area, what
+// waits for the user and the Workboard on the right, a task's detail in a panel over the thread.
 
 import { useEffect, useState } from 'react';
 import { backendUrl, inElectron } from './bridge';
 import { Composer } from './components/Composer';
 import { Onboarding } from './components/Onboarding';
+import { Overview } from './components/Overview';
+import { ProjectList } from './components/ProjectList';
 import { SearchBar } from './components/SearchBar';
 import { Sidebar } from './components/Sidebar';
 import { TaskPanel } from './components/TaskPanel';
 import { Thread } from './components/Thread';
 import { TopBar } from './components/TopBar';
-import { connect, openSearch, useStore } from './store';
+import { connect, openSearch, totalAttention, useStore } from './store';
 
 export function App() {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
@@ -18,11 +21,12 @@ export function App() {
   const [failed, setFailed] = useState<string | null>(null);
   const host = useStore((s) => s.host);
   const project = useStore((s) => s.project);
-  const snapshot = useStore((s) => s.snapshot);
+  const opened = useStore((s) => s.snapshot?.project != null);
   const selectedTask = useStore((s) => s.selectedTask);
   const toasts = useStore((s) => s.toasts);
   const searching = useStore((s) => s.search !== null);
-  const attention = snapshot?.attention.length ?? 0;
+  // The title and the tray count every project's items (data-model.md §10.5).
+  const attention = totalAttention(host);
 
   const find = () => {
     setFailed(null);
@@ -69,23 +73,33 @@ export function App() {
     );
   }
   if (url === undefined) return <div className="splash">正在连接…</div>;
-  // No open project yet: connect a repository. Projects that could not be opened say why.
-  if (url === null || host === null || project === null) {
-    return <Onboarding connected={host !== null} failed={host?.projects.filter((p) => p.error !== null) ?? []} />;
+  // No project yet: connect the first repository. One being connected shows once it runs.
+  if (url === null || host === null || host.projects.every((p) => p.state === 'onboarding')) {
+    return <Onboarding connected={host !== null} />;
   }
-  if (!snapshot?.project) return <div className="splash">正在连接…</div>;
   return (
     <div className="app">
       <TopBar />
-      <main className="main">
-        <section className="conversation">
-          <Thread />
-          <Composer />
-          {searching && <SearchBar />}
-          {selectedTask && <TaskPanel taskId={selectedTask} />}
-        </section>
-        <Sidebar />
-      </main>
+      <div className="body">
+        <ProjectList />
+        <main className="main">
+          {project === null ? (
+            <Overview />
+          ) : !opened ? (
+            <div className="splash">正在打开项目…</div>
+          ) : (
+            <>
+              <section className="conversation">
+                <Thread />
+                <Composer />
+                {searching && <SearchBar />}
+                {selectedTask && <TaskPanel taskId={selectedTask} />}
+              </section>
+              <Sidebar />
+            </>
+          )}
+        </main>
+      </div>
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className="toast">

@@ -247,6 +247,42 @@ export function voidReport(report: ReportRecord): string | null {
 }
 
 /** A stable key for a card that waits for the user: a card keeps its draft while others come and go (#16). */
+/**
+ * One line for an item of "等你决定" in 「全部」, where the user sees every project's items and
+ * goes to the project to act on one (frontend.md §2 "M3 的布局").
+ */
+export function attentionSummary(a: Attention): string {
+  switch (a.kind) {
+    case 'hold':
+      if (a.hold.kind === 'abnormal') return `${a.role} 的上一个 turn ${abnormalEnd(a.hold.turn)}，停下等你决定`;
+      if (a.hold.kind === 'session_unidentified') return `${a.role} 的会话没有记下会话 ID，要开新会话`;
+      return a.hold.capture.state === 'oversized'
+        ? `${a.role} 的这次采集超过了体积上限，等你决定`
+        : `${a.role} 的工作目录里有采集无法保存的内容，等你决定`;
+    case 'outside_changes':
+      return `${a.role} 在任务之外改了 ${a.capture.detail?.changed?.length ?? 0} 个文件，等你决定`;
+    case 'unknown_turn':
+      return `后端重启前启动的 ${a.role} 的 CLI 仍在运行`;
+    case 'task_blocked':
+      return `「${a.title}」的执行者在等你回答`;
+    case 'stalled':
+      return `「${a.title}」没有完成，${a.role} 的 turn 已经结束，等你发消息`;
+    case 'accept':
+      return `「${a.title}」通过了验证，等你验收`;
+    case 'quota':
+      return quotaNote(a.domain);
+    case 'job_failed':
+      return `运行时的工作出错：${a.key}`;
+    case 'preview_stopped':
+      return `预览已停止：${a.reason}`;
+  }
+}
+
+/** The task an item of "等你决定" is about, which going to its project opens. */
+export function attentionTask(a: Attention): string | null {
+  return a.kind === 'accept' || a.kind === 'task_blocked' || a.kind === 'stalled' ? a.task_id : null;
+}
+
 export function attentionKey(a: Attention): string {
   switch (a.kind) {
     case 'hold':

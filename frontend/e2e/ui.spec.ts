@@ -2,44 +2,10 @@
 // fed snapshots, thread pages and task details the test controls. The backend's own rules have
 // Rust tests; these check only what the GUI makes of them (AGENTS.md "测试的目的").
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
-import type { CommandRecord, Item, LogEvent, Message, Push, RoleView, Snapshot, TaskDetail, TaskView, Turn } from '../src/api/types';
-import { PROJECT, hostSnapshot } from './mocked';
+import type { CommandRecord, Item, LogEvent, Message, Push, Snapshot, TaskDetail, Turn } from '../src/api/types';
+import { PROJECT, detail, hostSnapshot, role, task } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
-
-const role = (taskId: string | null): RoleView => ({
-  name: 'Malkuth', kind: 'worker', harness: 'codex', model: null, slot: 'worker', task_id: taskId, unfinished: null,
-  last_turn: null, hold: null, stalled: null, outside: null, workspace: null, queued_messages: 0,
-});
-
-const task = (id: string, title: string, phase: TaskView['phase'], undelivered = 0): TaskView => ({
-  id, title, body: '', executor: 'Malkuth', phase, paused: false, blocked_reason: null, criteria_version: 1,
-  queue_pos: null, revision: 1, created_at: 1, closed_at: phase === 'done' ? 9 : null, origin_capture: null,
-  attempt_seq: phase === 'queued' ? null : 1, attempt_open: phase === 'executing', verification: null,
-  undelivered_messages: undelivered,
-});
-
-/** A task whose first round's candidate passed verification. */
-const detail = (view: TaskView, undelivered: Message[] = []): TaskDetail => {
-  const { id, title, body, executor, phase, paused, blocked_reason, criteria_version, queue_pos, revision, created_at, closed_at, origin_capture } = view;
-  return {
-    task: { id, title, body, executor, phase, paused, blocked_reason, criteria_version, queue_pos, revision, created_at, closed_at, origin_capture },
-    criteria: [{ version: 1, text: 'work.txt 存在', created_by: 'user', created_at: 1 }],
-    attempts: [{
-      id: `a-${view.id}`, task_id: view.id, seq: 1, started_at: 1, ended_at: 2, end_reason: 'candidate', code_start: null,
-      done_turn_id: `t-${view.id}`, done_summary: '完成\n\n写了 work.txt', trial: null, candidate_id: `c-${view.id}`, conflicts: [],
-    }],
-    captures: [{
-      id: `c-${view.id}`, turn_id: `t-${view.id}`, role: 'Malkuth', task_id: view.id, attempt_id: `a-${view.id}`, kind: 'candidate',
-      base: 'base0000', state: 'pinned', commit_id: '1111111111', detail: null, created_at: 2, outside: null,
-    }],
-    verifications: [{
-      id: `v-${view.id}`, task_id: view.id, attempt_id: `a-${view.id}`, capture_id: `c-${view.id}`, base: 'base0000', config_version: 1,
-      commit_id: '2222222222', conflicts: [], state: 'passed', created_at: 3, finished_at: 4,
-    }],
-    checks: [], decisions: [], publications: [], undelivered_messages: undelivered,
-  };
-};
 
 const turn = (id: string, taskId: string | null): Turn => ({
   id, role: 'Malkuth', harness: 'codex', task_id: taskId, attempt_id: null, input: '', state: 'ended', outcome: 'completed',

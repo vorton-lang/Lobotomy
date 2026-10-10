@@ -2,7 +2,7 @@
 // (harness-adapter.md §1.9); the harness of each role, which also applies at once; then the project
 // configuration (data-model.md §9.1 project_config): check commands, capture scope and the size
 // guardrail. Each save of the project configuration is a new version; checks and captures name
-// the version they used.
+// the version they used. In 「全部」 only the host's part shows.
 
 import { useEffect, useState } from 'react';
 import type { Check, HarnessView, Permission, ProjectConfig, RoleView } from '../api/types';
@@ -103,8 +103,8 @@ const lines = (text: string) =>
     .filter(Boolean);
 
 export function Settings({ onClose }: { onClose: () => void }) {
-  const current = useStore((s) => s.snapshot?.config);
-  const harnesses = useStore((s) => s.snapshot?.harnesses ?? []);
+  const current = useStore((s) => (s.project === null ? undefined : s.snapshot?.config));
+  const harnesses = useStore((s) => s.host?.harnesses ?? []);
   const roles = useStore((s) => s.snapshot?.roles ?? []);
   // The version the form was filled from. A version saved meanwhile, in another window, makes the
   // backend refuse this save instead of being written over (#16).
@@ -114,7 +114,13 @@ export function Settings({ onClose }: { onClose: () => void }) {
   const [forced, setForced] = useState((current?.config.force_tracked ?? []).join('\n'));
   const [maxFiles, setMaxFiles] = useState(current?.config.max_new_files ?? 1000);
   const [maxMb, setMaxMb] = useState(Math.round((current?.config.max_new_bytes ?? 50 * 1024 * 1024) / 1024 / 1024));
-  if (!current) return null;
+  if (!current) {
+    return (
+      <Modal title="设置" onClose={onClose} wide>
+        <Permissions harnesses={harnesses} />
+      </Modal>
+    );
+  }
 
   const save = async () => {
     const config: ProjectConfig = {
