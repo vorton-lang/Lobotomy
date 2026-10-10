@@ -56,7 +56,7 @@ test('screenshots', async ({ page, backend }) => {
   }
   await page.screenshot({ path: `${out}/2-main.png` });
   await page.locator('.attention .card').filter({ hasText: '等你验收' }).getByRole('button', { name: '查看并验收' }).click();
-  await expect(page.getByText('1 个文件')).toBeVisible();
+  await expect(taskPanel(page, '写 work.txt').getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${out}/3-task-panel.png` });
   await page.emulateMedia({ colorScheme: 'dark' });
