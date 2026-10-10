@@ -2,7 +2,6 @@
 // shown as text, links only open http(s) and mailto, images are not loaded.
 
 import { Marked, type Tokens } from 'marked';
-import remend from 'remend';
 import { createHighlighter, type Highlighter } from 'shiki';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import { escapeHtml, safeHref } from './escape';
@@ -58,10 +57,10 @@ const marked = new Marked({
   },
 });
 
-self.onmessage = async (event: MessageEvent<{ id: number; text: string; streaming: boolean }>) => {
-  const { id, text, streaming } = event.data;
+self.onmessage = async (event: MessageEvent<{ id: number; text: string }>) => {
+  const { id, text } = event.data;
   try {
-    const html = await marked.parse(streaming ? remend(text) : text);
+    const html = await marked.parse(text);
     self.postMessage({ id, html });
   } catch (e) {
     self.postMessage({ id, html: `<pre>${escapeHtml(text)}</pre>`, error: String(e) });

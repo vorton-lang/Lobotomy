@@ -117,7 +117,7 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
 | 用途 | 选型 | 说明 |
 |---|---|---|
 | 对话列表虚拟化 | virtua | LobeHub 从 Virtuoso 迁到 virtua，Cherry Studio、Kilo 也在用。备选 TanStack Virtual ≥3.17.6 的 chat 模式 |
-| 流式 Markdown | 在 worker 中用 marked 分块，已结束的块封存，未闭合语法用 `remend` 补齐，每条流各自保存解析状态 | 不整套使用 Streamdown：它每次更新都重切整条消息，尾部缓存是全局单例，多路并行流会互相干扰 |
+| Markdown（含流式文本） | 当前实现把每次更新的完整文本交给 worker 中的 marked 解析，并缓存完成的结果；超过大小上限时显示纯文本 | 当前实现不保存逐块解析状态，也不补齐未闭合语法；逐块解析与补齐未闭合语法仍是待实现的设计目标 |
 | 代码高亮 | Shiki 放在 worker 中，用 JS 正则引擎，加 LRU 缓存与输入大小上限 | 流式中的代码块先显示纯文本，围栏闭合后再高亮。反例：Kilo 同步调用 Shiki 卡住主线程 2.3 秒 |
 | 超大单条输出 | 对话中只显示头尾若干行，加"在查看器中打开"；查看器是只读的 CodeMirror 6，ANSI 颜色在 worker 中转为装饰 | CodeMirror 官方演示可流畅加载数百万行 |
 | diff | @pierre/diffs | 自带 worker 池与虚拟化；opencode、t3code 在用 |

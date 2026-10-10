@@ -38,7 +38,7 @@ export function renderMarkdown(text: string): Promise<string> {
       if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value!);
       resolve(html);
     });
-    getWorker().postMessage({ id, text, streaming: false });
+    getWorker().postMessage({ id, text });
   });
 }
 
