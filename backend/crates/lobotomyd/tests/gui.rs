@@ -269,3 +269,91 @@ async fn the_gui_can_stop_the_backend() {
     tokio::time::timeout(Duration::from_secs(5), stopped).await.unwrap().unwrap();
     backend.shutdown(Duration::from_secs(5)).await;
 }
+
+/// Upgraded sockets are not owned by axum's HTTP server. Shutdown must join them too,
+/// including clients that never send a close frame.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_releases_the_project_with_connected_gui_clients() {
+    use lobotomyd::{host::Host, project::Project};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
+    let data = dir.path().join("project");
+    for _ in 0..20 {
+        let backend =
+            lobotomyd::Backend::start(Arc::new(Project::open(&data, host.clone()).unwrap()), 0).await.unwrap();
+        let first = Client::connect(&backend).await;
+        let second = Client::connect(&backend).await;
+        let project = Arc::downgrade(&backend.project);
+        backend.shutdown(Duration::from_secs(5)).await;
+        // Keep both client sockets alive. Returning from shutdown, not closing a client or
+        // retrying the lock, must establish that the backend released the project.
+        assert_eq!(project.strong_count(), 0, "project owners remain after shutdown");
+        drop(Project::open(&data, host.clone()).unwrap());
+        drop((first, second));
+    }
+}
+
+/// A request already admitted must finish even when its client disconnects. Use a gated fake
+/// quota probe to observe admission and completion without relying on a fast request's timing.
+#[tokio::test]
+async fn shutdown_drains_an_admitted_gui_request_after_disconnect() {
+    admitted_gui_request_shutdown(false).await;
+}
+
+#[tokio::test]
+async fn shutdown_leaves_a_timed_out_gui_request_and_its_lock_alive() {
+    admitted_gui_request_shutdown(true).await;
+}
+
+async fn admitted_gui_request_shutdown(expires: bool) {
+    use lobotomyd::{host::Host, project::Project};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("gated-probe.mjs");
+    std::fs::write(
+        &script,
+        r#"
+        import fs from 'node:fs';
+        for await (const chunk of process.stdin) {}
+        fs.writeFileSync('started', '');
+        while (!fs.existsSync('release')) await new Promise(resolve => setTimeout(resolve, 10));
+        console.log(JSON.stringify({type: 'turn.completed', usage: {input_tokens: 1, output_tokens: 1}}));
+    "#,
+    )
+    .unwrap();
+    let mut harness = fake_codex();
+    harness.codex.command = vec!["node".into(), script.to_string_lossy().into_owned()];
+    let host = Arc::new(Host::open(&host_dir(dir.path()), harness).unwrap());
+    host.db.block("codex", None, "test quota block", 1).unwrap();
+    let data = dir.path().join("project");
+    let backend = lobotomyd::Backend::start(Arc::new(Project::open(&data, host.clone()).unwrap()), 0).await.unwrap();
+    let mut client = Client::connect(&backend).await;
+    let request =
+        json!({"id": 1, "method": "command", "params": {"name": "quota_retry", "args": {"harness": "codex"}}});
+    client.socket.send(Message::Text(request.to_string().into())).await.unwrap();
+    let probe = host.dir.join("probe");
+    wait_for("the admitted quota request", || probe.join("started").exists().then_some(())).await;
+    drop(client);
+    let project = Arc::downgrade(&backend.project);
+    let grace = if expires { Duration::from_millis(10) } else { Duration::from_secs(5) };
+    let mut shutdown = tokio::spawn(backend.shutdown(grace));
+    if expires {
+        tokio::time::timeout(Duration::from_secs(5), &mut shutdown).await.unwrap().unwrap();
+        assert!(Project::open(&data, host.clone()).is_err());
+        assert!(host.db.domain("codex").unwrap().is_blocked());
+    } else {
+        // A bounded negative assertion: the gate is the cause of waiting, not a slow process.
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut shutdown).await.is_err());
+    }
+    std::fs::write(probe.join("release"), "").unwrap();
+    if expires {
+        wait_for("the admitted request to release its project", || (project.strong_count() == 0).then_some(())).await;
+    } else {
+        tokio::time::timeout(Duration::from_secs(5), shutdown).await.unwrap().unwrap();
+    }
+    drop(Project::open(&data, host.clone()).unwrap());
+    assert!(!host.db.domain("codex").unwrap().is_blocked());
+}

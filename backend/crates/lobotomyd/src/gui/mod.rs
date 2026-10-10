@@ -35,7 +35,9 @@ use lobotomy_core::view::{events_after, last_event, thread_heads};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::project::Project;
 use crate::runner::db;
@@ -46,8 +48,15 @@ const TICK: Duration = Duration::from_secs(15);
 /// Pushes kept for slow clients. A client further behind gets `resync`.
 pub const PUSH_BUFFER: usize = 512;
 
-pub fn gui_router(project: Arc<Project>) -> Router {
-    Router::new().route("/gui", get(upgrade)).with_state(project)
+#[derive(Clone)]
+struct Service {
+    project: Arc<Project>,
+    shutdown: CancellationToken,
+    sessions: TaskTracker,
+}
+
+pub fn gui_router(project: Arc<Project>, shutdown: CancellationToken, sessions: TaskTracker) -> Router {
+    Router::new().route("/gui", get(upgrade)).with_state(Service { project, shutdown, sessions })
 }
 
 #[derive(Deserialize)]
@@ -56,18 +65,27 @@ struct Connect {
 }
 
 async fn upgrade(
-    State(project): State<Arc<Project>>,
+    State(service): State<Service>,
     Query(connect): Query<Connect>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
+    let Service { project, shutdown, sessions } = service;
+    if shutdown.is_cancelled() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     if !local_host(&headers) || !local_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     if !connect.token.as_deref().is_some_and(|t| same(t, &project.host.gui_token)) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    ws.on_upgrade(move |socket| session(socket, project))
+    // Register before the upgrade callback runs: shutdown can race with the handshake.
+    let owner = sessions.token();
+    ws.on_upgrade(move |socket| async move {
+        session(socket, project, shutdown).await;
+        drop(owner);
+    })
 }
 
 /// Compares without stopping at the first difference.
@@ -102,7 +120,7 @@ fn local_origin(headers: &HeaderMap) -> bool {
     origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")).is_some_and(is_local)
 }
 
-async fn session(socket: WebSocket, project: Arc<Project>) {
+async fn session(socket: WebSocket, project: Arc<Project>, shutdown: CancellationToken) {
     let (mut sink, mut stream) = socket.split();
     let (out, mut outbox) = mpsc::channel::<String>(256);
     let writer = tokio::spawn(async move {
@@ -112,41 +130,55 @@ async fn session(socket: WebSocket, project: Arc<Project>) {
             }
         }
     });
+    let mut requests = JoinSet::new();
     let mut pushes = project.gui_push.subscribe();
     let mut tick = tokio::time::interval(TICK);
-    loop {
-        tokio::select! {
-            incoming = stream.next() => match incoming {
-                Some(Ok(Message::Text(text))) => {
-                    let (project, out) = (project.clone(), out.clone());
-                    // A request may take long (a quota check); others go on meanwhile.
-                    tokio::spawn(async move {
-                        let reply = respond(&project, text.as_str()).await;
-                        let _ = out.send(reply).await;
-                    });
+    let read = async {
+        loop {
+            tokio::select! {
+                _ = requests.join_next(), if !requests.is_empty() => {}
+                incoming = stream.next() => match incoming {
+                    Some(Ok(Message::Text(text))) => {
+                        let (project, out) = (project.clone(), out.clone());
+                        // A request may take long (a quota check); others go on meanwhile.
+                        requests.spawn(async move {
+                            let reply = respond(&project, text.as_str()).await;
+                            let _ = out.send(reply).await;
+                        });
+                    }
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(_)) => {}
+                },
+                push = pushes.recv() => {
+                    let text = match push {
+                        Ok(text) => text.to_string(),
+                        Err(broadcast::error::RecvError::Lagged(_)) => json!({ "type": "resync" }).to_string(),
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    };
+                    if out.send(text).await.is_err() {
+                        break;
+                    }
                 }
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                Some(Ok(_)) => {}
-            },
-            push = pushes.recv() => {
-                let text = match push {
-                    Ok(text) => text.to_string(),
-                    Err(broadcast::error::RecvError::Lagged(_)) => json!({ "type": "resync" }).to_string(),
-                    Err(broadcast::error::RecvError::Closed) => break,
-                };
-                if out.send(text).await.is_err() {
-                    break;
-                }
-            }
-            _ = tick.tick() => {
-                if out.send(json!({ "type": "tick" }).to_string()).await.is_err() {
-                    break;
+                _ = tick.tick() => {
+                    if out.send(json!({ "type": "tick" }).to_string()).await.is_err() {
+                        break;
+                    }
                 }
             }
         }
+    };
+    // Covers sends to a full outbox too, so a slow client cannot hold shutdown open.
+    tokio::select! {
+        biased;
+        _ = shutdown.cancelled() => {}
+        _ = read => {}
     }
-    drop(out);
+    // Dropping the receiver releases replies waiting on a full outbox. Requests already
+    // admitted may have side effects; finish them rather than aborting a database/store write.
+    writer.abort();
     let _ = writer.await;
+    drop(out);
+    while requests.join_next().await.is_some() {}
 }
 
 /// Pushes changes to every connected GUI: new entries of the event log and the live view of

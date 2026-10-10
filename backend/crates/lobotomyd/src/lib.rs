@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::project::Project;
 
@@ -30,6 +31,7 @@ pub struct Backend {
     server: JoinHandle<()>,
     watcher: JoinHandle<()>,
     scheduler: JoinHandle<()>,
+    gui_sessions: TaskTracker,
 }
 
 impl Backend {
@@ -42,7 +44,12 @@ impl Backend {
         scheduler::recover(&project).await?;
 
         let serving = CancellationToken::new();
-        let app = mcp::org_router(project.clone(), serving.clone()).merge(gui::gui_router(project.clone()));
+        let gui_sessions = TaskTracker::new();
+        let app = mcp::org_router(project.clone(), serving.clone()).merge(gui::gui_router(
+            project.clone(),
+            serving.clone(),
+            gui_sessions.clone(),
+        ));
         let watcher = tokio::spawn(gui::watch(project.clone(), serving.clone()));
         let stop = serving.clone();
         let server = tokio::spawn(async move {
@@ -52,12 +59,14 @@ impl Backend {
         });
         let scheduling = CancellationToken::new();
         let scheduler = tokio::spawn(scheduler::run(project.clone(), scheduling.clone()));
-        Ok(Self { project, addr, scheduling, serving, server, watcher, scheduler })
+        Ok(Self { project, addr, scheduling, serving, server, watcher, scheduler, gui_sessions })
     }
 
     /// Normal shutdown (harness-adapter.md §1.8): stop scheduling, interrupt the running CLIs and
     /// wait for them to exit. The MCP service stays up meanwhile, so a CLI can still report. After
-    /// `grace`, the remaining CLIs end with their jobs when the process exits.
+    /// `grace`, the remaining CLIs end with their jobs when the process exits. GUI requests and
+    /// store jobs get the unused part of the same grace period to finish. Timed-out work is not
+    /// aborted: it still owns its project lock until it finishes or the process exits.
     pub async fn shutdown(self, grace: Duration) {
         self.scheduling.cancel();
         let _ = self.scheduler.await;
@@ -75,5 +84,15 @@ impl Backend {
         let _ = self.server.await;
         // Cancellation only asks the watcher to stop; join it before releasing its project.
         let _ = self.watcher.await;
+        // No new upgrades after the server stopped, and no new store jobs after the scheduler.
+        self.gui_sessions.close();
+        self.project.store_tasks.close();
+        let drained = async {
+            self.gui_sessions.wait().await;
+            self.project.store_tasks.wait().await;
+        };
+        if tokio::time::timeout_at(deadline.into(), drained).await.is_err() {
+            tracing::warn!("shutdown grace elapsed with GUI requests or store jobs still running");
+        }
     }
 }

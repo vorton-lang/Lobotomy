@@ -28,6 +28,8 @@ pub struct Project {
     /// Store work in progress (materializing, capturing, verifying, previewing), by key, so the
     /// scheduler starts each job once.
     pub jobs: Mutex<HashSet<String>>,
+    /// Owns store jobs through completion, including their final project references.
+    pub(crate) store_tasks: tokio_util::task::TaskTracker,
     /// Store work that failed, by key, with the reason. It waits for the user's retry.
     pub failed: Mutex<HashMap<String, String>>,
     /// The verification site is one directory: a verification holds this from writing it until
@@ -47,7 +49,20 @@ pub struct Project {
     /// An exclusive lock on `<data_dir>/lock`, held while the instance lives: two backends on one
     /// data directory would run two schedulers on one database (#16). The OS releases it when
     /// the process ends, however it ends.
-    _lock: std::fs::File,
+    _lock: ProjectLock,
+}
+
+/// Closing our descriptor alone may leave the lock held by a forked child until it execs.
+/// Release it explicitly when the last project owner is gone. This is the project's last
+/// field so the database and store fields are dropped before the lock is released.
+struct ProjectLock(std::fs::File);
+
+impl Drop for ProjectLock {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            tracing::warn!(%error, "could not release the project lock");
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -102,6 +117,7 @@ impl Project {
             mcp_base: Mutex::new(String::new()),
             running: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashSet::new()),
+            store_tasks: tokio_util::task::TaskTracker::new(),
             failed: Mutex::new(HashMap::new()),
             verify_site: tokio::sync::Mutex::new(()),
             live: Mutex::new(HashMap::new()),
@@ -109,7 +125,7 @@ impl Project {
             wake: Notify::new(),
             shutdown_requested: Notify::new(),
             gui_push: tokio::sync::broadcast::channel(crate::gui::PUSH_BUFFER).0,
-            _lock: lock,
+            _lock: ProjectLock(lock),
         })
     }
 
@@ -156,5 +172,27 @@ impl Project {
 
     pub fn mcp_url(&self, token: &str) -> String {
         format!("{}/mcp/{token}", self.mcp_base.lock().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn releasing_the_project_lock_does_not_wait_for_an_inherited_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lock");
+        let file = std::fs::File::create(&path).unwrap();
+        file.try_lock().unwrap();
+        // A clone shares the file description, as a forked child's descriptor does on Unix.
+        // No child needs to execute code or reach exec before the owner can release its lock.
+        let inherited = file.try_clone().unwrap();
+        let lock = ProjectLock(file);
+        let next = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        assert!(matches!(next.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+        drop(lock);
+        next.try_lock().unwrap();
+        drop(inherited);
     }
 }
