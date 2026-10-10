@@ -20,6 +20,7 @@ export function Thread() {
   const tasks = useStore((s) => s.snapshot?.tasks);
   const rows = useMemo(() => buildRows(thread, live), [thread, live]);
   const list = useRef<VListHandle>(null);
+  const wheel = useRef<{ offset: number; direction: number } | null>(null);
   const [prepending, setPrepending] = useState(false);
   const following = useStore((s) => s.following);
 
@@ -85,6 +86,12 @@ export function Thread() {
   const onScroll = (offset: number) => {
     const handle = list.current;
     if (!handle) return;
+    if (wheel.current && Math.sign(offset - wheel.current.offset) === wheel.current.direction) {
+      wheel.current = null;
+      // Replace the pending scrollToIndex with the user's actual position. Otherwise its next
+      // row measurement can pull the list back to the end after the wheel moved it away.
+      handle.scrollTo(offset);
+    }
     setFollowing(offset + handle.viewportSize >= handle.scrollSize - AT_END_SLACK);
     if (offset < 200 && thread.hasMore) {
       setPrepending(true);
@@ -102,7 +109,11 @@ export function Thread() {
   }
   const title = (taskId: string | null) => (taskId ? tasks?.find((t) => t.id === taskId)?.title : undefined);
   return (
-    <div className="thread-area">
+    <div className="thread-area" onWheelCapture={(event) => {
+      if (event.deltaY && !event.ctrlKey && list.current) {
+        wheel.current = { offset: list.current.scrollOffset, direction: Math.sign(event.deltaY) };
+      }
+    }}>
       <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} keepMounted={[rows.length - 1]}>
         {rows.map((row) => (
           <div key={row.key} className="row" data-key={row.key}>

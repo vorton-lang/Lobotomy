@@ -89,7 +89,9 @@ async function openMocked(page: Page, state: State) {
 // Reading back in the thread, the user stays where they are. A button says when something new
 // came and goes back to the end (#18). The report the last message repeats starts folded.
 test('back to the latest after reading back', async ({ page }) => {
-  const items = Array.from({ length: 60 }, (_, i) => message(i + 1, 't1', `第 ${i + 1} 条`));
+  const items = Array.from({ length: 60 }, (_, i) =>
+    message(i + 1, 't1', `第 ${i + 1} 条` + (i < 50 && i % 3 === 0 ? '\n\n较长的段落。'.repeat(12) : '')),
+  );
   const backend = await openMocked(page, {
     snapshot: { roles: [role(null)], tasks: [], attention: [] },
     items,
@@ -108,6 +110,18 @@ test('back to the latest after reading back', async ({ page }) => {
     await page.mouse.wheel(0, -100_000);
     await expect(latest).toHaveText('回到最新 ↓', { timeout: 1_000 });
   }).toPass();
+
+  // Immediately read back again while scrollToIndex is still measuring rows. The wheel must
+  // win over that request, including when the newly visible messages have different heights.
+  const area = await page.locator('.thread').boundingBox();
+  await latest.click();
+  await page.mouse.move(area!.x + area!.width / 2, area!.y + area!.height / 2);
+  await page.mouse.wheel(0, -1500);
+  // Let the newly visible rows measure and apply their layout before checking the position.
+  await page.evaluate(() => new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  ));
+  await expect(latest).toHaveText('回到最新 ↓');
 
   // A turn of a new task reports done, then says the same again.
   items.push(
