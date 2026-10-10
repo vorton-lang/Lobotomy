@@ -969,7 +969,7 @@ async fn shutdown_drains_a_store_job_before_releasing_the_project() {
     drop(Project::open(&data, host).unwrap());
 }
 
-/// The process-exit contract remains bounded. Expiring the grace must not abort a store job
+/// Waiting for store work stays within the unused grace. Expiry must not abort a store job
 /// or release its project lock while its side effects are still running.
 #[tokio::test]
 async fn shutdown_leaves_a_timed_out_store_job_and_its_lock_alive() {
@@ -987,8 +987,11 @@ async fn shutdown_leaves_a_timed_out_store_job_and_its_lock_alive() {
     });
     tokio::time::timeout(Duration::from_secs(5), backend.shutdown(Duration::from_millis(10))).await.unwrap();
     assert!(Project::open(&data, host.clone()).is_err());
+    let project = project.upgrade().expect("unfinished store work owns the project");
     release.send(()).unwrap();
     done.await.unwrap();
-    wait_for("the store job to release its project", || (project.strong_count() == 0).then_some(())).await;
+    wait_for("the store job to release its project", || (Arc::strong_count(&project) == 1).then_some(())).await;
+    // Drop the last owner here: observing a zero weak count alone can race its destructor.
+    drop(project);
     drop(Project::open(&data, host).unwrap());
 }

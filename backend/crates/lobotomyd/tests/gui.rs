@@ -340,17 +340,22 @@ async fn admitted_gui_request_shutdown(expires: bool) {
     let project = Arc::downgrade(&backend.project);
     let grace = if expires { Duration::from_millis(10) } else { Duration::from_secs(5) };
     let mut shutdown = tokio::spawn(backend.shutdown(grace));
-    if expires {
+    let finishing = if expires {
         tokio::time::timeout(Duration::from_secs(5), &mut shutdown).await.unwrap().unwrap();
         assert!(Project::open(&data, host.clone()).is_err());
         assert!(host.db.domain("codex").unwrap().is_blocked());
+        Some(project.upgrade().expect("the admitted request owns the project"))
     } else {
         // A bounded negative assertion: the gate is the cause of waiting, not a slow process.
         assert!(tokio::time::timeout(Duration::from_millis(100), &mut shutdown).await.is_err());
-    }
+        None
+    };
     std::fs::write(probe.join("release"), "").unwrap();
-    if expires {
-        wait_for("the admitted request to release its project", || (project.strong_count() == 0).then_some(())).await;
+    if let Some(project) = finishing {
+        wait_for("the admitted request to release its project", || (Arc::strong_count(&project) == 1).then_some(()))
+            .await;
+        // Synchronize the final destructor rather than observing a zero weak count.
+        drop(project);
     } else {
         tokio::time::timeout(Duration::from_secs(5), shutdown).await.unwrap().unwrap();
     }
