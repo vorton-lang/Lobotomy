@@ -1021,6 +1021,43 @@ async fn a_session_limit_on_claude_blocks_its_domain_only() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// The quota domain belongs to the host (data-model.md §10.5, roadmap M3 acceptance): Claude's
+/// session limit in one project stops Claude's roles in every project, Codex's roles go on, and
+/// the user's retry lets them all continue.
+#[tokio::test]
+async fn a_session_limit_in_one_project_stops_claude_in_every_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let a = backend.project.clone();
+    on_claude(&a.db);
+    create_task(&a.db, "FAKE:quota");
+    assert_eq!(ended_turn(&a.db).await.failure.unwrap().kind, FailureKind::Quota);
+    assert!(a.host.is_blocked("claude").unwrap());
+
+    let projects = backend.backend.projects.clone();
+    let open = |name: &str| {
+        let projects = projects.clone();
+        let repo = user_repo(&dir.path().join(name));
+        async move {
+            let entry = projects.create(&repo).await.unwrap();
+            projects.get(&entry.id).unwrap()
+        }
+    };
+    let (b, c) = (open("b").await, open("c").await);
+    on_claude(&b.db);
+    create_task(&b.db, "FAKE:done");
+    create_task(&c.db, "FAKE:done");
+    assert_eq!(ended_turn(&c.db).await.outcome, Some(Outcome::Completed), "Codex goes on");
+    settle(&backend).await;
+    assert!(last(&b.db).is_none(), "Claude starts nothing in another project");
+
+    assert!(!a.host.retry("claude").await.unwrap().is_blocked());
+    projects.wake_all();
+    assert_eq!(ended_turn(&b.db).await.outcome, Some(Outcome::Completed));
+    drop((a, b, c));
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// Shutdown does not wait for store jobs: an unfinished one runs again after a restart. It must
 /// not abort the job or release the project lock while the job's side effects are still running.
 #[tokio::test]
