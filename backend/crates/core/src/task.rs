@@ -141,8 +141,9 @@ fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attemp
                 done_summary, trial
          FROM attempt WHERE task_id = ?1 {filter}"
     ))?;
-    let rows = stmt.query_map([task_id], |r| {
-        let attempt = Attempt {
+    let rows = stmt.query_and_then([task_id], |r| {
+        let conflicts: Option<String> = r.get(9)?;
+        Ok(Attempt {
             id: r.get(0)?,
             task_id: r.get(1)?,
             seq: r.get(2)?,
@@ -152,19 +153,12 @@ fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attemp
             code_start: r.get(6)?,
             done_turn_id: r.get(7)?,
             done_summary: r.get(10)?,
-            trial: None,
+            trial: r.get::<_, Option<String>>(11)?.as_deref().map(serde_json::from_str).transpose()?,
             candidate_id: r.get(8)?,
-            conflicts: vec![],
-        };
-        Ok((attempt, r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(11)?))
+            conflicts: conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default(),
+        })
     })?;
-    rows.map(|row| {
-        let (mut attempt, conflicts, trial) = row?;
-        attempt.conflicts = conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
-        attempt.trial = trial.as_deref().map(serde_json::from_str).transpose()?;
-        Ok(attempt)
-    })
-    .collect()
+    rows.collect()
 }
 
 /// The task's open attempt, if any (data-model.md §4.1).

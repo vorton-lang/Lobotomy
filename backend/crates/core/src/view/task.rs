@@ -68,15 +68,9 @@ pub struct Publication {
     pub created_at: i64,
 }
 
-fn rows<T>(
-    conn: &Connection,
-    sql: &str,
-    task_id: &str,
-    row: impl FnMut(&Row<'_>) -> rusqlite::Result<T>,
-) -> Result<Vec<T>> {
+fn rows<T>(conn: &Connection, sql: &str, task_id: &str, row: impl FnMut(&Row<'_>) -> Result<T>) -> Result<Vec<T>> {
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map([task_id], row)?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    stmt.query_and_then([task_id], row)?.collect()
 }
 
 pub fn task_detail(conn: &Connection, task_id: &str) -> Result<TaskDetail> {
@@ -94,46 +88,32 @@ pub fn task_detail(conn: &Connection, task_id: &str) -> Result<TaskDetail> {
          ORDER BY v.created_at, c.seq",
         task_id,
         |r| {
-            let check = CheckRun {
+            Ok(CheckRun {
                 id: r.get(0)?,
                 verification_id: r.get(1)?,
                 seq: r.get(2)?,
                 command: r.get(3)?,
                 exit_code: r.get(4)?,
                 timed_out: r.get(5)?,
-                output: Value::Null,
+                output: serde_json::from_str(&r.get::<_, String>(6)?)?,
                 duration_ms: r.get(7)?,
-            };
-            Ok((check, r.get::<_, String>(6)?))
+            })
         },
-    )?
-    .into_iter()
-    .map(|(mut check, output)| {
-        check.output = serde_json::from_str(&output)?;
-        Ok(check)
-    })
-    .collect::<Result<_>>()?;
+    )?;
     let decisions = rows(
         conn,
         "SELECT id, kind, actor, detail, created_at FROM decision WHERE task_id = ?1 ORDER BY created_at, id",
         task_id,
         |r| {
-            let decision = Decision {
+            Ok(Decision {
                 id: r.get(0)?,
                 kind: r.get(1)?,
                 actor: r.get(2)?,
-                detail: Value::Null,
+                detail: serde_json::from_str(&r.get::<_, String>(3)?)?,
                 created_at: r.get(4)?,
-            };
-            Ok((decision, r.get::<_, String>(3)?))
+            })
         },
-    )?
-    .into_iter()
-    .map(|(mut decision, detail)| {
-        decision.detail = serde_json::from_str(&detail)?;
-        Ok(decision)
-    })
-    .collect::<Result<_>>()?;
+    )?;
     let publications = rows(
         conn,
         "SELECT rev, commit_id, previous, created_at FROM publication WHERE task_id = ?1 ORDER BY rev",

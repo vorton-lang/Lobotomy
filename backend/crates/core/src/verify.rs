@@ -53,8 +53,9 @@ const SELECT: &str = "SELECT id, task_id, attempt_id, capture_id, base, config_v
 
 fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Verification>> {
     let mut stmt = conn.prepare(&format!("{SELECT} {filter}"))?;
-    let rows = stmt.query_map(args, |r| {
-        let v = Verification {
+    let rows = stmt.query_and_then(args, |r| {
+        let conflicts: Option<String> = r.get(7)?;
+        Ok(Verification {
             id: r.get(0)?,
             task_id: r.get(1)?,
             attempt_id: r.get(2)?,
@@ -62,19 +63,13 @@ fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result
             base: r.get(4)?,
             config_version: r.get(5)?,
             commit_id: r.get(6)?,
-            conflicts: vec![],
+            conflicts: conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default(),
             state: r.get(8)?,
             created_at: r.get(9)?,
             finished_at: r.get(10)?,
-        };
-        Ok((v, r.get::<_, Option<String>>(7)?))
+        })
     })?;
-    rows.map(|row| {
-        let (mut v, conflicts) = row?;
-        v.conflicts = conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
-        Ok(v)
-    })
-    .collect()
+    rows.collect()
 }
 
 pub fn load_verification(conn: &Connection, id: &str) -> Result<Verification> {
