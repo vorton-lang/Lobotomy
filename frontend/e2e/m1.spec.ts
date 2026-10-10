@@ -388,9 +388,9 @@ test('search goes to a match pages back', async ({ page, backend }) => {
 test('delivery descriptions distinguish pending, older and invalidated rounds', async ({ page, backend }, testInfo) => {
   await page.setViewportSize({ width: 1400, height: 860 });
   await open(page, backend);
-  await createTask(page, '交付说明', 'FAKE:done');
+  await createTask(page, '查看交付内容', 'FAKE:done');
   await page.locator('.attention .card').filter({ hasText: '等你验收' }).getByRole('button', { name: '查看并验收' }).click();
-  const panel = taskPanel(page, '交付说明');
+  const panel = taskPanel(page, '查看交付内容');
   await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
   const delivery = panel.getByRole('region', { name: '交付说明' });
   const update = async (state: 'pending' | 'old' | 'new' | 'invalidated' | 'failed') => page.evaluate(async (state) => {
