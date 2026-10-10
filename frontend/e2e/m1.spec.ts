@@ -68,11 +68,16 @@ test('a task goes from creation to the user repository', async ({ page, backend 
 // "验收" button would accept (#13).
 test('an open task panel follows the candidate through a send-back', async ({ page, backend }) => {
   await open(page, backend);
-  // A slow check keeps each candidate in verification long enough to look at it there.
+  // The test releases the check after inspecting the candidate. The file is outside the
+  // repository and verification site, so materializing another round does not move it.
+  const gate = path.join(path.dirname(backend.repo), 'check-gate');
+  fs.writeFileSync(gate, '');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '设置' });
   await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
-  await settings.getByLabel('检查命令').fill('node -e "setTimeout(() => {}, 6000)"');
+  await settings.getByLabel('检查命令').fill(
+    'node -e "const fs=require(\'fs\');setTimeout(()=>process.exit(1),30000);setInterval(()=>{if(fs.existsSync(process.env.LOBOTOMY_TEST_CHECK_GATE))process.exit(0)},20)"',
+  );
   await settings.getByRole('button', { name: /保存项目设置为/ }).click();
   await expect(settings).toBeHidden();
 
@@ -82,15 +87,17 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   const panel = taskPanel(page, '改 work.txt');
   await expect(panel.locator('.diff')).toContainText('first');
 
+  fs.unlinkSync(gate);
   await panel.getByRole('button', { name: '退回…' }).click();
   const sendBack = page.getByRole('dialog', { name: '退回候选成果' });
   await sendBack.getByLabel(/理由/).fill('FAKE:done FAKE:text=second');
   await sendBack.getByRole('button', { name: '退回', exact: true }).click();
   // While the new candidate is verified, its own changes show, not the last round's. The check
-  // runs for 6 s; an old diff left on screen would still be there after 2.
+  // stays blocked until these assertions finish or its 30-second deadline expires.
   await expect(panel.locator('.now')).toHaveText('第 2 轮的候选成果正在验证。');
   await expect(panel.locator('.diff')).toContainText('second', { timeout: 2_000 });
   await expect(panel.locator('.diff')).not.toContainText('first');
+  fs.writeFileSync(gate, '');
   await expect(panel.locator('.now')).toHaveText('第 2 轮的候选成果通过了验证，等你验收。');
   await expect(panel.locator('.diff')).toContainText('second');
   await expect(panel.locator('.diff')).not.toContainText('first');

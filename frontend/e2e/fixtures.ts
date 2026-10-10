@@ -41,7 +41,7 @@ async function startBackend(): Promise<Backend & { stop: () => Promise<void> }> 
   const host = path.join(root, 'host');
   const log = fs.openSync(path.join(root, 'backend.log'), 'a');
   const child = spawn(exe, ['--data-dir', data, '--host-dir', host, '--repo', repo], {
-    env: { ...process.env, LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]), LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]) },
+    env: { ...process.env, LOBOTOMY_TEST_CHECK_GATE: path.join(root, 'check-gate'), LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]), LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]) },
     stdio: ['ignore', log, log],
   });
   const info = path.join(data, 'backend.json');
