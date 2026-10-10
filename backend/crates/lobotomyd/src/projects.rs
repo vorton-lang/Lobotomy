@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use lobotomy_core::Error;
 use lobotomy_core::host::{ProjectEntry, ProjectState};
 use lobotomy_core::id::{new_id, now_ms};
 use lobotomy_core::project::{load_project, peek_project};
@@ -39,14 +40,16 @@ impl Running {
     }
 
     /// Normal shutdown of this project (harness-adapter.md §1.8): its trials stop, scheduling
-    /// stops, and its running CLIs are interrupted and waited for until `deadline`. The MCP
-    /// service stays up meanwhile, so a CLI can still report. Store jobs are not waited for: one
-    /// that has not finished runs again when the project opens next (data-model.md §5). Work
-    /// still running keeps the project lock until it finishes or the process exits.
+    /// stops, its check commands stop, and its running CLIs are interrupted and waited for until
+    /// `deadline`. The MCP service stays up meanwhile, so a CLI can still report. Other store jobs
+    /// are not waited for: one that has not finished runs again when the project opens next
+    /// (data-model.md §5). Work still running keeps the project lock until it finishes or the
+    /// process exits.
     pub async fn stop(self, deadline: Instant) {
         let _ = tokio::time::timeout_at(deadline.into(), self.project.trials.stop_all()).await;
         self.scheduling.cancel();
         let _ = self.scheduler.await;
+        self.project.stop_checks();
         let running: Vec<String> = self.project.running.lock().unwrap().keys().cloned().collect();
         for turn_id in running {
             if let Err(e) = runner::interrupt(&self.project, &turn_id).await {
@@ -60,7 +63,27 @@ impl Running {
         // Cancellation only asks the watcher to stop; join it before releasing its project.
         let _ = self.watcher.await;
     }
+
+    /// Stops this project while the backend runs on, for archiving (data-model.md §10.4): as
+    /// [`Running::stop`], then the CLIs still running end with their process trees, and the
+    /// store jobs in progress finish. Returns the instance, still open; the caller lets it go.
+    async fn close(self, grace: Duration) -> Arc<Project> {
+        let project = self.project.clone();
+        self.stop(Instant::now() + grace).await;
+        project.end_turns();
+        project.tasks.close();
+        project.tasks.wait().await;
+        project
+    }
 }
+
+/// How long archiving waits for the CLIs it interrupted, as quitting does (harness-adapter.md
+/// §1.8).
+pub const STOP_GRACE: Duration = Duration::from_secs(30);
+
+/// How long archiving waits, after the project's work has ended, for the last requests that use
+/// it, such as a GUI read, so its data directory's lock is free to open it again.
+const RELEASE_WAIT: Duration = Duration::from_secs(10);
 
 pub struct Projects {
     host: Arc<Host>,
@@ -71,6 +94,8 @@ pub struct Projects {
     runtimes: Mutex<BTreeMap<String, Running>>,
     /// Registered projects that could not be opened, with the reason (data-model.md §10.3).
     failed: Mutex<BTreeMap<String, String>>,
+    /// Archiving, unarchiving and opening again happen one at a time.
+    changing: tokio::sync::Mutex<()>,
 }
 
 impl Projects {
@@ -80,6 +105,7 @@ impl Projects {
             open: Mutex::new(BTreeMap::new()),
             runtimes: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(BTreeMap::new()),
+            changing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -155,6 +181,80 @@ impl Projects {
         self.insert(&entry, running);
         self.host.changed();
         Ok(entry)
+    }
+
+    /// Archives a project (data-model.md §10.4): it is recorded as archived at once, so a backend
+    /// that exits meanwhile does not open it again, then stopped as quitting stops it, and its
+    /// instance closed. Its data stays. A project that could not be opened is archived too.
+    pub async fn archive(&self, id: &str) -> anyhow::Result<()> {
+        self.archive_within(id, STOP_GRACE).await
+    }
+
+    /// [`Projects::archive`], waiting `grace` for interrupted CLIs to exit.
+    pub async fn archive_within(&self, id: &str, grace: Duration) -> anyhow::Result<()> {
+        let _changing = self.changing.lock().await;
+        let entry = self.entry(id)?;
+        match entry.state {
+            ProjectState::Archived => return Ok(()),
+            ProjectState::Onboarding => {
+                return Err(Error::rejected("onboarding", format!("项目「{}」还在接入，不能归档", entry.name)).into());
+            }
+            ProjectState::Running => {}
+        }
+        self.host.db.set_project_state(id, ProjectState::Archived)?;
+        self.failed.lock().unwrap().remove(id);
+        self.host.changed();
+        let running = self.runtimes.lock().unwrap().remove(id);
+        if let Some(running) = running {
+            let project = Arc::downgrade(&running.close(grace).await);
+            self.open.lock().unwrap().remove(id);
+            let deadline = Instant::now() + RELEASE_WAIT;
+            while project.strong_count() > 0 && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            if project.strong_count() > 0 {
+                tracing::warn!(
+                    project = id,
+                    "the archived project is still in use; its lock is released when that ends"
+                );
+            }
+        }
+        tracing::info!(project = id, name = entry.name, "archived");
+        self.host.changed();
+        Ok(())
+    }
+
+    /// Takes a project out of the archive and opens it as at startup (data-model.md §10.4).
+    /// Refused while its repository has another unarchived project. A project that cannot be
+    /// opened stays unarchived, with the reason, for the user to open again.
+    pub async fn unarchive(&self, id: &str) -> anyhow::Result<()> {
+        let _changing = self.changing.lock().await;
+        let entry = self.entry(id)?;
+        if entry.state != ProjectState::Archived {
+            return Ok(());
+        }
+        self.host.db.set_project_state(id, ProjectState::Running)?;
+        let entry = ProjectEntry { state: ProjectState::Running, ..entry };
+        self.insert(&entry, open(&self.host, &entry).await);
+        self.host.changed();
+        Ok(())
+    }
+
+    /// Opens again a project that could not be opened, once the user has dealt with the reason
+    /// (data-model.md §10.3).
+    pub async fn retry_open(&self, id: &str) -> anyhow::Result<()> {
+        let _changing = self.changing.lock().await;
+        let entry = self.entry(id)?;
+        if entry.state != ProjectState::Running || self.get(id).is_some() {
+            return Ok(());
+        }
+        self.insert(&entry, open(&self.host, &entry).await);
+        self.host.changed();
+        Ok(())
+    }
+
+    fn entry(&self, id: &str) -> anyhow::Result<ProjectEntry> {
+        self.host.db.project(id)?.ok_or_else(|| Error::rejected("unknown_project", format!("没有项目 {id}")).into())
     }
 
     /// Stops every open project, side by side, until `deadline` (harness-adapter.md §1.8).

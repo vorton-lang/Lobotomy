@@ -5,7 +5,8 @@
 //!   key, so a repeated request does nothing twice.
 //! - A request about a project names it: `params.project` for reads, and for `command`, whose
 //!   params are `{name, args, project}`. `host` reads the host snapshot; the host's commands
-//!   (`create_project`, `set_permission`, `quota_retry`, `shutdown`) need no project.
+//!   (`create_project`, `archive_project`, `unarchive_project`, `retry_open`, `set_permission`,
+//!   `quota_retry`, `shutdown`) need no project.
 //! - The server pushes what changed, not the content. About a project, with its id in `project`:
 //!   `{type: "events", events}` with its event log, `{type: "thread", role, seq}` when a thread
 //!   has a new item, `{type: "live", live}` with items of running turns. About the host:

@@ -856,6 +856,47 @@ async fn a_hanging_quota_check_times_out() {
     }
 }
 
+/// Archiving stops one project as quitting does (data-model.md §10.4): a CLI that does not exit
+/// when interrupted ends with its process tree once the grace period is over, and the data
+/// directory is free. Unarchiving opens the project as at startup: the turn ends as interrupted
+/// and its role waits for the user.
+#[tokio::test]
+async fn archiving_ends_a_cli_that_ignores_the_interrupt_and_unarchiving_reconciles_its_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("deaf-cli.mjs");
+    std::fs::write(
+        &script,
+        "process.on('SIGINT', () => {});\nfor await (const chunk of process.stdin) {}\nsetInterval(() => {}, 1000);\n",
+    )
+    .unwrap();
+    let mut harness = fake_codex();
+    harness.codex.command = vec!["node".into(), script.to_string_lossy().into_owned()];
+    let Started { backend, project, .. } = start_with(dir.path(), harness).await;
+    let (id, data, host) = (project.id.clone(), project.data_dir.clone(), project.host.clone());
+    let db = project.db.clone();
+    create_task(&db, "deaf");
+    let turn =
+        wait_for("the turn to run", || last(&db).filter(|t| t.state == TurnState::Running && t.pid.is_some())).await;
+    drop(project);
+
+    backend.projects.archive_within(&id, Duration::from_secs(1)).await.unwrap();
+    assert!(backend.projects.get(&id).is_none());
+    let (pid, start) = (turn.pid.unwrap() as u32, turn.process_start.unwrap());
+    wait_for("the CLI to end", || (!lobotomy_harness::process::is_running(pid, start)).then_some(())).await;
+    drop(Project::open(&id, &data, host.clone()).expect("the archived project's directory is free"));
+    let snapshot = host.db.project(&id).unwrap().unwrap();
+    assert_eq!(snapshot.state, lobotomy_core::host::ProjectState::Archived);
+
+    backend.projects.unarchive(&id).await.unwrap();
+    let reopened = backend.projects.get(&id).expect("the project opened again");
+    let ended = ended_turn(&reopened.db).await;
+    assert_eq!((ended.id.as_str(), ended.outcome), (turn.id.as_str(), Some(Outcome::Interrupted)));
+    // Once the runtime has captured the interrupted turn's scene.
+    wait_for("the role to wait for the user to continue", || reopened.db.read(|c| hold(c, "Malkuth")).unwrap()).await;
+    drop(reopened);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 fn next_task(db: &Db) -> String {
     db.read(|c| lobotomy_core::task::next_queued_task(c, "Malkuth")).unwrap().unwrap().id
 }

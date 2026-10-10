@@ -259,6 +259,13 @@ button.project-item:hover:not(:disabled) {
   font-size: 12px;
   word-break: break-word;
 }
+.project-item.failed .actions {
+  flex-basis: 100%;
+  margin-top: 2px;
+}
+.projects .small {
+  margin-left: 0;
+}
 .projects .archived summary {
   padding: 6px 8px;
   cursor: pointer;

@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import type { Check, HarnessView, Permission, ProjectConfig, RoleView } from '../api/types';
 import { bytes, harnessName, PERMISSION_LABEL } from '../format';
-import { call, run, setPermission, useStore } from '../store';
+import { act, call, run, setPermission, useStore } from '../store';
 import { Modal } from './common';
 
 const permissionNote = (permission: Permission, harness: string) =>
@@ -76,6 +76,43 @@ function Roles({ roles, harnesses }: { roles: RoleView[]; harnesses: HarnessView
   );
 }
 
+/**
+ * Archiving stops the project as quitting does and keeps its data (data-model.md §10.4). It
+ * interrupts running turns, so it asks once more.
+ */
+function Archive({ onClose }: { onClose: () => void }) {
+  const project = useStore((s) => s.project);
+  const name = useStore((s) => s.host?.projects.find((p) => p.id === s.project)?.name);
+  const [confirming, setConfirming] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const archive = async () => {
+    setArchiving(true);
+    const done = await act('archive_project', { project_id: project });
+    setArchiving(false);
+    if (done !== undefined) onClose();
+  };
+  return (
+    <>
+      <h3>归档</h3>
+      <p className="muted">
+        归档后这个项目不再调度：正在运行的 turn 被中断，检查命令停止，最多等 30 秒。数据全部保留。取消归档后，被中断的角色等你选择继续，没有完成的验证重新运行。
+      </p>
+      {confirming ? (
+        <div className="actions">
+          <button onClick={() => setConfirming(false)} disabled={archiving}>
+            取消
+          </button>
+          <button className="primary" onClick={archive} disabled={archiving}>
+            {archiving ? '正在归档…' : `归档「${name ?? ''}」`}
+          </button>
+        </div>
+      ) : (
+        <button onClick={() => setConfirming(true)}>归档这个项目…</button>
+      )}
+    </>
+  );
+}
+
 /** What the raw output of turns takes on disk (data-model.md §7.4); read when the settings open. */
 function Storage() {
   const [usage, setUsage] = useState<{ files: number; bytes: number } | null>(null);
@@ -140,6 +177,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
       <Permissions harnesses={harnesses} />
       <Roles roles={roles} harnesses={harnesses} />
       <Storage />
+      <Archive onClose={onClose} />
 
       <h2 className="settings-group">项目设置 · 第 {version} 版</h2>
       {current.version !== version && (

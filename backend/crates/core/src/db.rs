@@ -145,9 +145,18 @@ impl Db {
 /// rebuild a table other tables point to, as SQLite's "twelve steps" require for changing a CHECK
 /// constraint: with foreign keys on, dropping the old table would fail (#16). SQLite ignores the
 /// pragma inside a transaction, so a migration cannot switch it itself.
+///
+/// A database a newer backend has migrated further is refused, not used: this backend does not
+/// know what the newer tables mean. A project's then fails to open alone (data-model.md §10.3).
 pub(crate) fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
-    conn.pragma_update(None, "foreign_keys", false)?;
     let applied = conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))? as usize;
+    if applied > migrations.len() {
+        return Err(Error::rejected(
+            "newer_database",
+            format!("数据库是更新版本的 Lobotomy 写的（第 {applied} 版，这个后端只认到第 {} 版）", migrations.len()),
+        ));
+    }
+    conn.pragma_update(None, "foreign_keys", false)?;
     for (i, sql) in migrations.iter().enumerate().skip(applied) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
@@ -198,6 +207,16 @@ mod tests {
         assert_eq!(version, 1, "the broken migration rolled back");
         let parents: i64 = conn.query_row("SELECT COUNT(*) FROM parent", [], |r| r.get(0)).unwrap();
         assert_eq!(parents, 1);
+    }
+
+    #[test]
+    fn a_database_from_a_newer_backend_is_refused_untouched() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn, &[PARENT_AND_CHILD, WIDEN_PARENT]).unwrap();
+        let err = migrate(&mut conn, &[PARENT_AND_CHILD]).unwrap_err();
+        assert_eq!(err.code(), Some("newer_database"), "{err}");
+        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(version, 2);
     }
 
     /// A database in a file, as a project's is; one in memory has no read connection.

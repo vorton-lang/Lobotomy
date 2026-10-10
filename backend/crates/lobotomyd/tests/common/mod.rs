@@ -225,7 +225,7 @@ pub fn backend_diagnostic(project: &Project) -> String {
         }
         Ok(serde_json::Value::Object(snapshot))
     });
-    let mut jobs: Vec<_> = project.jobs.lock().unwrap().iter().cloned().collect();
+    let mut jobs: Vec<_> = project.jobs.lock().unwrap().keys().cloned().collect();
     jobs.sort();
     let running = project.running.lock().unwrap().clone();
     let failed = lobotomyd::results::failures(project);

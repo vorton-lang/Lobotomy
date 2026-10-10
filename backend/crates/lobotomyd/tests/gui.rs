@@ -304,6 +304,46 @@ async fn one_backend_runs_the_projects_and_a_lost_one_fails_alone() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// The GUI archives a project, unarchives it, and opens again a project whose data directory came
+/// back (data-model.md §10.3, §10.4).
+#[tokio::test]
+async fn the_gui_archives_unarchives_and_opens_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (host, first) = idle_project(dir.path(), fake_codex()).await;
+    let moved = dir.path().join("moved");
+    let second_data = dir.path().join("second");
+    let second = lobotomyd::projects::create(&host, &user_repo(&dir.path().join("b")), Some(second_data.clone()))
+        .await
+        .unwrap()
+        .id
+        .clone();
+    std::fs::rename(&second_data, &moved).unwrap();
+
+    let backend = lobotomyd::Backend::start(host.clone(), 0).await.unwrap();
+    let mut gui = Client::open(backend.addr, &host.gui_token, &first).await;
+    let state = |snapshot: &Value, id: &str| {
+        let project = snapshot["projects"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+        (project["state"].as_str().unwrap().to_owned(), project["error"].is_null())
+    };
+
+    std::fs::rename(&moved, &second_data).unwrap();
+    gui.command("retry_open", json!({ "project_id": second })).await.unwrap();
+    let snapshot = gui.call("host", json!({})).await.unwrap();
+    assert_eq!(state(&snapshot, &second), ("running".to_owned(), true), "{snapshot}");
+    gui.call("snapshot", json!({ "project": second })).await.unwrap();
+
+    gui.command("archive_project", json!({ "project_id": first })).await.unwrap();
+    let snapshot = gui.call("host", json!({})).await.unwrap();
+    assert_eq!(state(&snapshot, &first).0, "archived", "{snapshot}");
+    assert_eq!(gui.call("snapshot", json!({})).await.unwrap_err()["code"], "unknown_project");
+
+    gui.command("unarchive_project", json!({ "project_id": first })).await.unwrap();
+    let snapshot = gui.call("host", json!({})).await.unwrap();
+    assert_eq!(state(&snapshot, &first), ("running".to_owned(), true), "{snapshot}");
+    gui.call("snapshot", json!({})).await.unwrap();
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 #[tokio::test]
 async fn the_gui_can_stop_the_backend() {
     let dir = tempfile::tempdir().unwrap();

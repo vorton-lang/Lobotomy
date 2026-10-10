@@ -42,19 +42,27 @@ pub fn spawn_job<F>(project: &Arc<Project>, key: String, job: F)
 where
     F: Future<Output = anyhow::Result<()>> + Send + 'static,
 {
-    if project.failed.lock().unwrap().contains_key(&key) || !project.jobs.lock().unwrap().insert(key.clone()) {
+    if project.failed.lock().unwrap().contains_key(&key) {
         return;
     }
-    let project = project.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::runner::catch_panic(job).await {
-            let reason = format!("{e:#}");
-            tracing::error!(key, error = reason, "store job failed; waiting for the user to retry");
-            project.failed.lock().unwrap().insert(key.clone(), reason);
-        }
-        project.jobs.lock().unwrap().remove(&key);
-        project.wake.notify_one();
-    });
+    // Held while the job starts, so it records its handle before it can remove its entry.
+    let mut jobs = project.jobs.lock().unwrap();
+    if jobs.contains_key(&key) {
+        return;
+    }
+    let task = {
+        let (project, key) = (project.clone(), key.clone());
+        project.clone().tasks.spawn(async move {
+            if let Err(e) = crate::runner::catch_panic(job).await {
+                let reason = format!("{e:#}");
+                tracing::error!(key, error = reason, "store job failed; waiting for the user to retry");
+                project.failed.lock().unwrap().insert(key.clone(), reason);
+            }
+            project.jobs.lock().unwrap().remove(&key);
+            project.wake.notify_one();
+        })
+    };
+    jobs.insert(key, task.abort_handle());
 }
 
 /// Jobs that failed and why, by key: `slot:<name>`, `capture:<id>`, `verify:<id>`, `preview`.

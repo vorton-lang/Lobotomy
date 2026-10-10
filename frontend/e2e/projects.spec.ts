@@ -16,7 +16,8 @@ const entry = (id: string, attention: Attention[] = [], busy = false): HostSnaps
 });
 
 const snapshotOf = (id: string): Snapshot => ({
-  seq: 1, config: null, quota: [], harnesses: [], live: {},
+  seq: 1, quota: [], harnesses: [], live: {},
+  config: { version: 1, config: { checks: [], excluded: [], force_tracked: [], max_new_files: 1000, max_new_bytes: 50 << 20 } },
   project: { id, repo_path: `C:\\code\\${id}`, branch: 'main', author_name: 'Test', author_email: 'test@example.com', integration: 'base0000', integration_rev: 1, previewed: 'base0000' },
   roles: [role(id === 'alpha' ? 'task1' : null)],
   tasks: id === 'alpha' ? [exported] : [],
@@ -38,6 +39,7 @@ async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: strin
       else if (method === 'thread') result = { items: [], has_more: false, turns: {}, messages: [], commands: {}, queued: [] };
       else if (method === 'task') result = detail(exported);
       else if (method === 'trials' || method === 'diff') result = [];
+      else if (method === 'disk_usage') result = { raw_output: { files: 0, bytes: 0 } };
       else if (method === 'command') result = onCommand?.(params.name, params.args) ?? null;
       route.send(JSON.stringify({ id, result }));
     });
@@ -95,12 +97,38 @@ test('a new project connects from the list and opens', async ({ page }) => {
   await expect(page.locator('.topbar')).toContainText('gamma · main');
 });
 
-// A project that could not be opened says why in the list and cannot be chosen.
-test('a project that could not be opened says why', async ({ page }) => {
+// A project that could not be opened says why in the list and cannot be chosen; it can be opened
+// again or archived. An archived one can come back (data-model.md §10.3, §10.4).
+test('a project that could not be opened says why; archived ones come back', async ({ page }) => {
   const broken = { ...entry('broken'), error: '数据目录不存在：/data/broken' };
-  await openHost(page, { projects: [entry('alpha'), broken], attention: [], harnesses: [] });
+  const old = { ...entry('old'), state: 'archived' as const };
+  const sent: [string, unknown][] = [];
+  await openHost(page, { projects: [entry('alpha'), broken, old], attention: [], harnesses: [] }, (name, args) => {
+    sent.push([name, args.project_id]);
+  });
   const list = page.getByRole('navigation', { name: '项目' });
   await expect(list.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-current', 'true');
-  await expect(list.locator('.project-item.failed')).toContainText('数据目录不存在：/data/broken');
-  await expect(list.getByRole('button', { name: /broken/ })).toHaveCount(0);
+  const failed = list.locator('.project-item.failed');
+  await expect(failed).toContainText('数据目录不存在：/data/broken');
+  await expect(list.getByRole('button', { name: /^broken/ })).toHaveCount(0);
+  await failed.getByRole('button', { name: '重试打开' }).click();
+  await failed.getByRole('button', { name: '归档' }).click();
+  await list.getByText('已归档 1').click();
+  await list.getByRole('button', { name: '取消归档' }).click();
+  await expect.poll(() => sent).toEqual([['retry_open', 'broken'], ['archive_project', 'broken'], ['unarchive_project', 'old']]);
+});
+
+// Archiving the project shown stops it; the settings ask once more first.
+test('the settings archive the project after asking', async ({ page }) => {
+  const sent: [string, unknown][] = [];
+  await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [] }, (name, args) => {
+    sent.push([name, args.project_id]);
+  });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await settings.getByRole('button', { name: '归档这个项目…' }).click();
+  expect(sent).toEqual([]);
+  await settings.getByRole('button', { name: '归档「alpha」' }).click();
+  await expect(settings).toHaveCount(0);
+  expect(sent).toEqual([['archive_project', 'alpha']]);
 });

@@ -70,26 +70,33 @@ pub fn launch(project: &Arc<Project>, turn_id: String) {
         if running.contains_key(&turn_id) {
             return;
         }
-        running.insert(turn_id.clone(), RunningTurn { pid: None, interrupt_requested: false });
+        running.insert(turn_id.clone(), RunningTurn { pid: None, interrupt_requested: false, abort: None });
     }
-    let project = project.clone();
-    tokio::spawn(async move {
-        if let Err(e) = catch_panic(run(&project, &turn_id)).await {
-            tracing::error!(turn_id, error = format!("{e:#}"), "turn runner failed");
-            // The turn must not stay running without a runner. If the CLI may still be alive,
-            // the turn becomes unknown at the next start and is reconciled then.
-            let end = EndTurn {
-                turn_id: turn_id.clone(),
-                outcome: Outcome::Failed,
-                failure: Some(Failure::new(FailureKind::Other, format!("运行时出错：{e:#}"))),
-            };
-            if let Err(e) = runtime(&project, end).await {
-                tracing::error!(turn_id, error = format!("{e:#}"), "could not end the turn");
+    let id = turn_id.clone();
+    let runner = project.tasks.spawn({
+        let project = project.clone();
+        async move {
+            if let Err(e) = catch_panic(run(&project, &turn_id)).await {
+                tracing::error!(turn_id, error = format!("{e:#}"), "turn runner failed");
+                // The turn must not stay running without a runner. If the CLI may still be alive,
+                // the turn becomes unknown at the next start and is reconciled then.
+                let end = EndTurn {
+                    turn_id: turn_id.clone(),
+                    outcome: Outcome::Failed,
+                    failure: Some(Failure::new(FailureKind::Other, format!("运行时出错：{e:#}"))),
+                };
+                if let Err(e) = runtime(&project, end).await {
+                    tracing::error!(turn_id, error = format!("{e:#}"), "could not end the turn");
+                }
             }
+            project.running.lock().unwrap().remove(&turn_id);
+            project.wake.notify_one();
         }
-        project.running.lock().unwrap().remove(&turn_id);
-        project.wake.notify_one();
     });
+    // A runner that already ended has removed its entry.
+    if let Some(turn) = project.running.lock().unwrap().get_mut(&id) {
+        turn.abort = Some(runner.abort_handle());
+    }
 }
 
 /// Asks the turn's CLI to stop (harness-adapter.md §1.3 rule 6). The turn ends as interrupted

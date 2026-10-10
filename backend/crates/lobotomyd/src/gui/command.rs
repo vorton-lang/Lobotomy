@@ -54,6 +54,11 @@ struct CreateProjectParams {
 }
 
 #[derive(Deserialize)]
+struct ProjectParams {
+    project_id: String,
+}
+
+#[derive(Deserialize)]
 struct HarnessParams {
     harness: String,
 }
@@ -73,6 +78,20 @@ pub async fn host(host: &Arc<Host>, projects: &Projects, params: &CommandParams)
             async {
                 let CreateProjectParams { repo_path } = serde_json::from_value(args)?;
                 Ok(serde_json::to_value(projects.create(Path::new(&repo_path)).await?)?)
+            }
+            .await
+        }
+        // Archiving stops the project and keeps its data; unarchiving and opening again open it as
+        // at startup (data-model.md §10.3, §10.4).
+        "archive_project" | "unarchive_project" | "retry_open" => {
+            async {
+                let ProjectParams { project_id } = serde_json::from_value(args)?;
+                match params.name.as_str() {
+                    "archive_project" => projects.archive(&project_id).await?,
+                    "unarchive_project" => projects.unarchive(&project_id).await?,
+                    _ => projects.retry_open(&project_id).await?,
+                }
+                Ok(Value::Null)
             }
             .await
         }

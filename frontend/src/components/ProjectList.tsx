@@ -1,10 +1,11 @@
 // The project list (frontend.md §2 "M3 的布局"): 「全部」 first, then each project with how many
 // items wait for the user in it and whether a turn of it runs. A project that could not be opened
-// says why. Archived projects are folded at the end; 「+ 新项目」 connects another repository.
+// says why and can be opened again or archived. Archived projects are folded at the end, each
+// with 「取消归档」; 「+ 新项目」 connects another repository (data-model.md §10.3, §10.4).
 
 import { useState } from 'react';
 import type { ProjectStatus } from '../api/types';
-import { selectProject, totalAttention, useStore } from '../store';
+import { act, selectProject, totalAttention, useStore } from '../store';
 import { Modal } from './common';
 import { ConnectRepo } from './ConnectRepo';
 
@@ -35,6 +36,9 @@ export function ProjectList() {
           {archived.map((p) => (
             <div key={p.id} className="project-item muted" title={p.repo_path}>
               <span className="project-name">{p.name}</span>
+              <button className="small" onClick={() => act('unarchive_project', { project_id: p.id })}>
+                取消归档
+              </button>
             </div>
           ))}
         </details>
@@ -58,6 +62,14 @@ function ProjectItem({ project: p, selected }: { project: ProjectStatus; selecte
         <span className="project-name">{p.name}</span>
         <span className="badge">打不开</span>
         <p className="muted failure">{p.error}</p>
+        <div className="actions">
+          <button className="small" onClick={() => act('retry_open', { project_id: p.id })}>
+            重试打开
+          </button>
+          <button className="small" onClick={() => act('archive_project', { project_id: p.id })} title="数据保留；之后可以为这个仓库新建项目">
+            归档
+          </button>
+        </div>
       </div>
     );
   }

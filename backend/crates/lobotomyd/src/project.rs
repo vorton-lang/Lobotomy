@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -8,6 +8,8 @@ use lobotomy_core::Db;
 use lobotomy_core::item::BlobStore;
 use lobotomy_store::Store;
 use tokio::sync::Notify;
+use tokio::task::AbortHandle;
+use tokio_util::task::TaskTracker;
 
 use crate::host::Host;
 
@@ -27,8 +29,10 @@ pub struct Project {
     /// Turns this backend runs right now, with the pids to interrupt them.
     pub running: Mutex<HashMap<String, RunningTurn>>,
     /// Store work in progress (materializing, capturing, verifying, previewing), by key, so the
-    /// scheduler starts each job once.
-    pub jobs: Mutex<HashSet<String>>,
+    /// scheduler starts each job once; with the handle that stops it.
+    pub jobs: Mutex<HashMap<String, AbortHandle>>,
+    /// The turn runners and store jobs: closing the project waits for them (data-model.md §10.4).
+    pub tasks: TaskTracker,
     /// Store work that failed, by key, with the reason. It waits for the user's retry.
     pub failed: Mutex<HashMap<String, String>>,
     /// The verification site is one directory: a verification holds this from writing it until
@@ -80,6 +84,8 @@ pub struct RunningTurn {
     pub pid: Option<u32>,
     /// Set when the runtime asked the CLI to stop; the turn then ends as interrupted.
     pub interrupt_requested: bool,
+    /// Stops the runner. Its CLI's process tree ends with it.
+    pub abort: Option<AbortHandle>,
 }
 
 /// Takes an exclusive lock on `path`, created if missing. `what` names the holder in the refusal.
@@ -119,7 +125,8 @@ impl Project {
             store: Arc::new(store),
             host,
             running: Mutex::new(HashMap::new()),
-            jobs: Mutex::new(HashSet::new()),
+            jobs: Mutex::new(HashMap::new()),
+            tasks: TaskTracker::new(),
             failed: Mutex::new(HashMap::new()),
             verify_site: tokio::sync::Mutex::new(()),
             live: Mutex::new(HashMap::new()),
@@ -127,6 +134,28 @@ impl Project {
             wake: Notify::new(),
             _lock: ProjectLock(lock),
         })
+    }
+
+    /// Stops the running verifications: their check commands end with everything they started.
+    /// A verification stopped so has no result; it runs again when the project opens next
+    /// (data-model.md §5).
+    pub fn stop_checks(&self) {
+        for (key, job) in self.jobs.lock().unwrap().iter() {
+            if key.starts_with("verify:") {
+                job.abort();
+            }
+        }
+    }
+
+    /// Stops the runners of the turns still running: each CLI ends with its process tree, as when
+    /// the backend exits. Their turns are reconciled when the project opens next (data-model.md
+    /// §3.3).
+    pub fn end_turns(&self) {
+        for turn in self.running.lock().unwrap().values() {
+            if let Some(abort) = &turn.abort {
+                abort.abort();
+            }
+        }
     }
 
     /// Tells the GUIs about a change in this project: `push` is a JSON object, sent with the
