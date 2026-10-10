@@ -112,7 +112,8 @@ fn an_upgraded_database_keeps_the_summary_of_an_earlier_done() {
     // The database as migration 7 left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE attempt DROP COLUMN trial; ALTER TABLE attempt DROP COLUMN done_summary; PRAGMA user_version = 7;",
+        "ALTER TABLE event DROP COLUMN command_id;
+         ALTER TABLE attempt DROP COLUMN trial; ALTER TABLE attempt DROP COLUMN done_summary; PRAGMA user_version = 7;",
     )
     .unwrap();
     drop(conn);

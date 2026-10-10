@@ -288,13 +288,21 @@ pub fn attention(
 
 // ---- what is pushed ----
 
-/// An entry of the global event log.
+/// An entry of the global event log, with the command that wrote it (data-model.md §7.6). The
+/// three source fields are `None` for an event from before events named their command.
 #[derive(Serialize)]
 pub struct Event {
     pub seq: i64,
     pub kind: String,
     pub entity: String,
     pub payload: Value,
+    /// The command record of the command that wrote it.
+    pub command_id: Option<String>,
+    /// Who issued that command, as the command log keeps it: `user`, `runtime` or `role:<name>`
+    /// (`Caller::scope`).
+    pub caller: Option<String>,
+    /// For a role's command, the turn it came from.
+    pub caller_turn_id: Option<String>,
 }
 
 /// Events one push carries at most; the rest follow in the next.
@@ -305,14 +313,23 @@ pub fn last_event(conn: &Connection) -> Result<i64> {
 }
 
 pub fn events_after(conn: &Connection, seq: i64) -> Result<Vec<Event>> {
-    let mut stmt = conn.prepare("SELECT seq, kind, entity, payload FROM event WHERE seq > ?1 ORDER BY seq LIMIT ?2")?;
-    let rows =
-        stmt.query_map([seq, EVENTS_PER_PUSH], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?;
-    rows.map(|row| {
-        let (seq, kind, entity, payload) = row?;
-        Ok(Event { seq, kind, entity, payload: serde_json::from_str(&payload)? })
-    })
-    .collect()
+    let mut stmt = conn.prepare(
+        "SELECT e.seq, e.kind, e.entity, e.payload, e.command_id, c.caller, c.turn_id
+         FROM event e LEFT JOIN command_record c ON c.id = e.command_id
+         WHERE e.seq > ?1 ORDER BY e.seq LIMIT ?2",
+    )?;
+    let rows = stmt.query_and_then([seq, EVENTS_PER_PUSH], |r| {
+        Ok(Event {
+            seq: r.get(0)?,
+            kind: r.get(1)?,
+            entity: r.get(2)?,
+            payload: serde_json::from_str(&r.get::<_, String>(3)?)?,
+            command_id: r.get(4)?,
+            caller: r.get(5)?,
+            caller_turn_id: r.get(6)?,
+        })
+    })?;
+    rows.collect()
 }
 
 /// The newest item of each role's thread.
