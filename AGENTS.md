@@ -22,7 +22,16 @@
 
 ## 测试：改什么跑什么
 
-全套测试很慢，主要时间花在等待进程和 I/O 上。所以本地只运行受改动影响的测试。推送到 main 后，CI 在 Windows 和 Ubuntu 上运行全套：格式、后端测试、Clippy、前端类型检查与单元测试、构建、e2e。推送后要看 CI 的结果；CI 失败时，先在本地运行失败的那个测试。
+全套测试很慢，主要时间花在等待进程和 I/O 上。所以本地只运行受改动影响的测试。推送到 main 后，CI 在 Windows 和 Ubuntu 上运行全套：格式、后端测试、Clippy、前端类型检查与单元测试、构建、e2e。
+
+提交与 CI 的流程：
+
+1. 本地运行下表中受影响的测试。
+2. 自己的改动通过后直接推送到 main，不开 PR，也不等 PR 的 CI。合进 main 后，CI 会把同样的测试再跑一遍。
+3. 不要停下来等 CI。把等待放到后台，例如 `gh run watch <run id> --exit-status`，先做下一件事；没有下一件事时，先汇报 CI 正在运行。
+4. CI 失败时，先在本地运行失败的那个测试，修好后再推送一次，不回滚。
+
+审查别人的分支（例如另一个 agent 的集成分支）时才开 PR 合入 main，CI 只跑这一轮。
 
 | 改动 | 本地运行 |
 |---|---|
@@ -38,8 +47,8 @@
 | 只改 `notes/`、注释或文档 | 不运行测试 |
 
 - 改动跨多个 crate，或改了 core 中运行时依赖的命令时，加上 `lobotomyd` 中相关路径的测试。
-- 改了共用的测试工具时，运行用到它的整个测试二进制或整个 e2e。共用的测试工具包括：假 CLI（`tests/fixtures/fake-*.mjs`）、`tests/common`、`e2e/fixtures.ts`。
+- 改了共用的测试工具时，本地只运行用到改动部分的测试，整套交给 CI。共用的测试工具包括：假 CLI（`tests/fixtures/fake-*.mjs`）、`tests/common`、`e2e/fixtures.ts`。
 - e2e 使用 debug 版后端。改了后端之后，先运行 `cargo build -p lobotomyd`，再运行 e2e。
 - 改了 Rust 代码后，提交前运行 `cargo fmt`，以及受影响 crate 的 `cargo clippy -p <crate> --all-targets -- -D warnings`。
 - 默认忽略的真实 CLI 测试会消耗订阅额度。只在改了 adapter 的参数、事件解析或 MCP 接口时运行，例如 `cargo test -p lobotomyd --test backend a_real_claude -- --ignored`。MCP 契约测试在 `--test mcp_contract` 中，也默认忽略。
-- 性能基线（`npm run bench`）每次推送到 main 时由 CI 运行。本地只在改了渲染或流式更新时运行。
+- 性能基线（`npm run bench`）每次推送到 main 时由 CI 运行，只记录，不设门槛。本地不运行；改了渲染或流式更新时，看 CI 的 bench 摘要。
