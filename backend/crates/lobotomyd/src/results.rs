@@ -45,8 +45,9 @@ where
     if project.failed.lock().unwrap().contains_key(&key) || !project.jobs.lock().unwrap().insert(key.clone()) {
         return;
     }
+    let tasks = project.store_tasks.clone();
     let project = project.clone();
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         if let Err(e) = crate::runner::catch_panic(job).await {
             let reason = format!("{e:#}");
             tracing::error!(key, error = reason, "store job failed; waiting for the user to retry");
