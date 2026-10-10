@@ -5,11 +5,7 @@ use lobotomy_core::task::{
 use lobotomy_core::{Caller, Db};
 
 mod common;
-use common::{db, rejection, start};
-
-fn create(db: &Db, request_id: &str, title: &str) -> String {
-    common::create_titled(db, request_id, title)
-}
+use common::{create_titled as create, db, rejection, start};
 
 fn task(db: &Db, id: &str) -> lobotomy_core::task::Task {
     db.read(|c| load_task(c, id)).unwrap()

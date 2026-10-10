@@ -15,14 +15,12 @@ use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceState, current_workspace}
 use lobotomy_core::{Caller, Db};
 
 mod common;
-use common::{BASE, ROLE, SLOT, create, db, end_turn, idle_slot, pin_captures, ready_slot, register, rejection, start};
+use common::{
+    BASE, ROLE, SLOT, create, db, end_turn, idle_slot, pin_captures, ready_slot, register, rejection, send, start,
+};
 
 fn report(db: &Db, turn_id: &str, status: ReportStatus) -> ReportEffect {
     common::report(db, turn_id, status, None).unwrap()
-}
-
-fn send(db: &Db, request_id: &str, task: Option<&str>, body: &str) -> String {
-    common::send(db, request_id, task, body)
 }
 
 /// A task waiting for acceptance, and its passed verification.
