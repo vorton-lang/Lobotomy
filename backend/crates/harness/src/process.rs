@@ -12,8 +12,9 @@
 //!   (harness-adapter.md §4.1).
 //! - Its own console lets a helper process send Ctrl+C to this CLI only.
 //!
-//! On Linux the CLI gets `PR_SET_PDEATHSIG`. Managed shell commands have a kill-on-drop process
-//! group; native trials also adopt the separate process group created for the terminal's PTY.
+//! On Linux every CLI has a kill-on-drop process group and gets `PR_SET_PDEATHSIG`. Native trials
+//! also adopt the separate process group created for the terminal's PTY. Descendants that start
+//! a different group/session are outside the Linux group's guarantee.
 
 use std::ffi::OsStr;
 use std::io;
@@ -52,13 +53,25 @@ impl Spawned {
     pub fn reap(self) {
         drop(self.guard);
     }
+
+    /// Ends the owned process tree and confirms it has exited. Used before releasing a project;
+    /// dropping the task/guard alone only requests termination and cannot confirm completion.
+    pub async fn finish(mut self) -> io::Result<()> {
+        self.guard.end()?;
+        self.child.wait().await?;
+        while self.guard.is_running()? {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        self.guard.disarm();
+        Ok(())
+    }
 }
 
 /// Starts the CLI with piped stdio.
 pub fn spawn(spec: &Spec<'_>) -> io::Result<Spawned> {
     let mut cmd = Command::new(spec.program);
     cmd.args(spec.args);
-    start(cmd, spec, false)
+    start(cmd, spec, true)
 }
 
 /// Runs a command line through the platform's shell, `cmd.exe` on Windows and `sh` elsewhere,
@@ -113,8 +126,7 @@ pub fn run_terminal_helper(command: &str, title: &str, control: &Path) -> io::Re
     imp::run_terminal_helper(command, title, control)
 }
 
-/// `own_group`: on Unix, the process leads a new process group that reaping kills. Harness CLIs
-/// do not get one; they clean up after themselves (harness-adapter.md §1.8).
+/// `own_group`: on Unix, the process leads a new process group that reaping kills.
 fn start(mut cmd: Command, spec: &Spec<'_>, own_group: bool) -> io::Result<Spawned> {
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     start_with_stdio(cmd, spec, own_group, false)
@@ -124,7 +136,7 @@ fn start_with_stdio(mut cmd: Command, spec: &Spec<'_>, own_group: bool, visible_
     for name in spec.env_remove {
         cmd.env_remove(name);
     }
-    cmd.current_dir(spec.cwd).envs(spec.env.iter().map(|(k, v)| (OsStr::new(k), OsStr::new(v))));
+    cmd.current_dir(spec.cwd).envs(spec.env.iter().map(|(k, v)| (OsStr::new(k), OsStr::new(v)))).kill_on_drop(true);
     imp::prepare(&mut cmd, own_group, visible_console);
     let mut child = cmd.spawn()?;
     let pid = child.id().ok_or_else(|| io::Error::other("the process exited before it started"))?;
@@ -192,7 +204,9 @@ mod imp {
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+        SetInformationJobObject, TerminateJobObject,
     };
     use windows_sys::Win32::System::Threading::{
         CREATE_NEW_CONSOLE, CREATE_NO_WINDOW, CREATE_SUSPENDED, GetProcessTimes, OpenProcess, OpenThread,
@@ -234,6 +248,26 @@ mod imp {
     }
 
     impl Guard {
+        pub fn end(&self) -> io::Result<()> {
+            check(unsafe { TerminateJobObject(self._job.0, 1) })
+        }
+
+        pub fn is_running(&self) -> io::Result<bool> {
+            let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { zeroed() };
+            check(unsafe {
+                QueryInformationJobObject(
+                    self._job.0,
+                    JobObjectBasicAccountingInformation,
+                    &mut info as *mut _ as *mut _,
+                    size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                    std::ptr::null_mut(),
+                )
+            })?;
+            Ok(info.ActiveProcesses != 0)
+        }
+
+        pub fn disarm(&mut self) {}
+
         pub fn resume(&mut self, pid: u32) -> io::Result<()> {
             if self.suspended {
                 resume_main_thread(pid)?;
@@ -501,6 +535,39 @@ mod imp {
     }
 
     impl Guard {
+        pub fn end(&self) -> io::Result<()> {
+            for group in [self.group, self.terminal_group].into_iter().flatten() {
+                if unsafe { libc::killpg(group, libc::SIGKILL) } != 0 {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        pub fn is_running(&self) -> io::Result<bool> {
+            for entry in std::fs::read_dir("/proc")? {
+                let entry = entry?;
+                let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+                match process_stat(pid) {
+                    Ok(stat) if stat.alive && [self.group, self.terminal_group].contains(&Some(stat.group)) => {
+                        return Ok(true);
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(false)
+        }
+
+        pub fn disarm(&mut self) {
+            self.group = None;
+            self.terminal_group = None;
+        }
+
         pub fn resume(&mut self, _pid: u32) -> io::Result<()> {
             Ok(())
         }
@@ -703,19 +770,33 @@ mod imp {
         Ok(status.code().unwrap_or(1))
     }
 
-    /// Field 22 of /proc/<pid>/stat: start time in clock ticks after boot.
-    fn start_time(pid: u32) -> io::Result<i64> {
+    struct ProcessStat {
+        start: i64,
+        group: libc::pid_t,
+        alive: bool,
+    }
+
+    fn process_stat(pid: u32) -> io::Result<ProcessStat> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
         let after_name = stat.rsplit_once(')').map(|(_, rest)| rest).unwrap_or_default();
-        after_name
-            .split_whitespace()
-            .nth(19)
-            .and_then(|field| field.parse().ok())
-            .ok_or_else(|| io::Error::other(format!("cannot read the start time of {pid}")))
+        let fields: Vec<_> = after_name.split_whitespace().collect();
+        let parsed = || {
+            Some(ProcessStat {
+                start: fields.get(19)?.parse().ok()?,
+                group: fields.get(2)?.parse().ok()?,
+                alive: !matches!(*fields.first()?, "Z" | "X"),
+            })
+        };
+        parsed().ok_or_else(|| io::Error::other(format!("cannot read the process state of {pid}")))
+    }
+
+    /// Field 22 of /proc/<pid>/stat: start time in clock ticks after boot.
+    fn start_time(pid: u32) -> io::Result<i64> {
+        Ok(process_stat(pid)?.start)
     }
 
     pub fn is_running(pid: u32, process_start: i64) -> bool {
-        start_time(pid).is_ok_and(|start| start == process_start)
+        process_stat(pid).is_ok_and(|stat| stat.alive && stat.start == process_start)
     }
 
     pub fn terminate(pid: u32, process_start: i64) -> io::Result<bool> {

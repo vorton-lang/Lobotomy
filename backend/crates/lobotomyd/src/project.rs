@@ -9,6 +9,8 @@ use lobotomy_core::item::BlobStore;
 use lobotomy_store::Store;
 use tokio::sync::Notify;
 use tokio::task::AbortHandle;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::host::Host;
@@ -79,13 +81,14 @@ pub struct LiveItem {
     pub started_at: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RunningTurn {
     pub pid: Option<u32>,
     /// Set when the runtime asked the CLI to stop; the turn then ends as interrupted.
     pub interrupt_requested: bool,
-    /// Stops the runner. Its CLI's process tree ends with it.
-    pub abort: Option<AbortHandle>,
+    /// Asks the runner to end and wait for its process tree before returning.
+    pub stop: CancellationToken,
+    pub task: Option<JoinHandle<anyhow::Result<()>>>,
 }
 
 /// Takes an exclusive lock on `path`, created if missing. `what` names the holder in the refusal.
@@ -150,12 +153,22 @@ impl Project {
     /// Stops the runners of the turns still running: each CLI ends with its process tree, as when
     /// the backend exits. Their turns are reconciled when the project opens next (data-model.md
     /// §3.3).
-    pub fn end_turns(&self) {
-        for turn in self.running.lock().unwrap().values() {
-            if let Some(abort) = &turn.abort {
-                abort.abort();
+    pub async fn end_turns(&self) -> anyhow::Result<()> {
+        let turns = std::mem::take(&mut *self.running.lock().unwrap());
+        for turn in turns.values() {
+            turn.stop.cancel();
+        }
+        // Join every runner, even if another failed, so no CLI is abandoned on error.
+        let mut result = Ok(());
+        for turn in turns.into_values() {
+            if let Some(task) = turn.task {
+                let ended = task.await.map_err(anyhow::Error::from).and_then(|r| r);
+                if result.is_ok() {
+                    result = ended;
+                }
             }
         }
+        result
     }
 
     /// Tells the GUIs about a change in this project: `push` is a JSON object, sent with the

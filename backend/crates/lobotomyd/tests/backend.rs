@@ -864,9 +864,25 @@ async fn a_hanging_quota_check_times_out() {
 async fn archiving_ends_a_cli_that_ignores_the_interrupt_and_unarchiving_reconciles_its_turn() {
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("deaf-cli.mjs");
+    let ready = dir.path().join("tree-ready");
     std::fs::write(
         &script,
-        "process.on('SIGINT', () => {});\nfor await (const chunk of process.stdin) {}\nsetInterval(() => {}, 1000);\n",
+        format!(
+            r#"import {{ fork }} from 'node:child_process';
+import fs from 'node:fs';
+process.on('SIGINT', () => {{}});
+if (process.argv[2] === 'child') {{
+  process.send(process.pid);
+  setInterval(() => {{}}, 1000);
+}} else {{
+  const child = fork(process.argv[1], ['child'], {{ stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }});
+  child.once('message', pid => fs.writeFileSync({}, String(pid)));
+  for await (const chunk of process.stdin) {{}}
+  setInterval(() => {{}}, 1000);
+}}
+"#,
+            serde_json::to_string(&ready).unwrap()
+        ),
     )
     .unwrap();
     let mut harness = fake_codex();
@@ -877,12 +893,18 @@ async fn archiving_ends_a_cli_that_ignores_the_interrupt_and_unarchiving_reconci
     create_task(&db, "deaf");
     let turn =
         wait_for("the turn to run", || last(&db).filter(|t| t.state == TurnState::Running && t.pid.is_some())).await;
+    // The handlers and the ordinary child are ready before the interrupt; a launched pid alone
+    // could let SIGINT end Node before it installed its handler and hide the forced-stop bug.
+    let child: u32 =
+        wait_for("the process tree to be ready", || std::fs::read_to_string(&ready).ok()?.parse().ok()).await;
+    assert!(child_is_running(child));
     drop(project);
 
     backend.projects.archive_within(&id, Duration::from_secs(1)).await.unwrap();
     assert!(backend.projects.get(&id).is_none());
     let (pid, start) = (turn.pid.unwrap() as u32, turn.process_start.unwrap());
-    wait_for("the CLI to end", || (!lobotomy_harness::process::is_running(pid, start)).then_some(())).await;
+    assert!(!lobotomy_harness::process::is_running(pid, start), "archive returns after the CLI exits");
+    assert!(!child_is_running(child), "archive returns after the ordinary child exits");
     drop(Project::open(&id, &data, host.clone()).expect("the archived project's directory is free"));
     let snapshot = host.db.project(&id).unwrap().unwrap();
     assert_eq!(snapshot.state, lobotomy_core::host::ProjectState::Archived);
@@ -895,6 +917,20 @@ async fn archiving_ends_a_cli_that_ignores_the_interrupt_and_unarchiving_reconci
     wait_for("the role to wait for the user to continue", || reopened.db.read(|c| hold(c, "Malkuth")).unwrap()).await;
     drop(reopened);
     backend.shutdown(Duration::from_secs(5)).await;
+}
+
+fn child_is_running(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        stat.rsplit_once(')').is_some_and(|(_, rest)| !matches!(rest.split_whitespace().next(), Some("Z" | "X")))
+    }
+    #[cfg(windows)]
+    {
+        let out =
+            std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+    }
 }
 
 fn next_task(db: &Db) -> String {
