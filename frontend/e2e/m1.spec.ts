@@ -54,6 +54,11 @@ test('a task goes from creation to the user repository', async ({ page, backend 
 
   const panel = taskPanel(page, '写 work.txt');
   await expect(panel.locator('.badge.passed')).toHaveText('通过');
+  await expect(panel.getByRole('region', { name: '交付说明' })).toContainText('写了 work.txt');
+  await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
+  await expect(panel.locator('.verification-details')).not.toHaveAttribute('open');
+  await expect(panel.locator('.changes-details')).not.toHaveAttribute('open');
+  await panel.locator('.changes-details > summary').click();
   await expect(panel.getByText('1 个文件')).toBeVisible();
   await panel.getByRole('button', { name: '验收', exact: true }).click();
   await expect(panel.locator('.phase')).toHaveText('已完成');
@@ -85,6 +90,7 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
   await card.getByRole('button', { name: '查看并验收' }).click();
   const panel = taskPanel(page, '改 work.txt');
+  await panel.locator('.changes-details > summary').click();
   await expect(panel.locator('.diff')).toContainText('first');
 
   fs.unlinkSync(gate);
@@ -95,6 +101,7 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   // While the new candidate is verified, its own changes show, not the last round's. The check
   // stays blocked until these assertions finish or its 30-second deadline expires.
   await expect(panel.locator('.now')).toHaveText('第 2 轮的候选成果正在验证。');
+  await expect(panel.getByRole('heading', { name: '本轮交付（第 2 轮）' })).toBeVisible();
   await expect(panel.locator('.diff')).toContainText('second', { timeout: 2_000 });
   await expect(panel.locator('.diff')).not.toContainText('first');
   fs.writeFileSync(gate, '');
@@ -122,6 +129,7 @@ test('a failed turn waits for the user to continue', async ({ page, backend }) =
   await expect(stalled).toBeVisible();
   await stalled.getByRole('button', { name: '查看任务' }).click();
   const panel = taskPanel(page, '会失败的任务');
+  await expect(panel.getByRole('region', { name: '交付说明' })).toContainText('本轮还没有交付说明。');
   await expect(panel.locator('.now')).toHaveText('第 1 轮执行中，还没有交出候选成果。');
   await panel.getByRole('button', { name: '放弃' }).click();
   await expect(stalled).toBeHidden();
@@ -373,4 +381,52 @@ test('search goes to a match pages back', async ({ page, backend }) => {
   await bar.getByLabel('搜索对话').press('Escape');
   await expect(bar).toBeHidden();
   expect(await page.evaluate(() => CSS.highlights.has('search-current'))).toBe(false);
+});
+
+// Exercise report-only states without making the fake CLI promise extra delivery formats.
+// The real backend supplies the task; subsequent detail snapshots model report/capture timing.
+test('delivery descriptions distinguish pending, older and invalidated rounds', async ({ page, backend }, testInfo) => {
+  await page.setViewportSize({ width: 1400, height: 860 });
+  await open(page, backend);
+  await createTask(page, '交付说明', 'FAKE:done');
+  await page.locator('.attention .card').filter({ hasText: '等你验收' }).getByRole('button', { name: '查看并验收' }).click();
+  const panel = taskPanel(page, '交付说明');
+  await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
+  const delivery = panel.getByRole('region', { name: '交付说明' });
+  const update = async (state: 'pending' | 'old' | 'new' | 'invalidated' | 'failed') => page.evaluate(async (state) => {
+    const module = '/src/store.ts';
+    const { useStore } = await import(module);
+    const detail = structuredClone(useStore.getState().taskDetail);
+    const first = detail.attempts[0];
+    first.done_summary = '预览入口：[示例页面](https://example.com)\n\n本地文件：`dist/report.html`\n\n体验前运行 `npm run dev`，重点检查页面内容。';
+    if (state === 'pending') first.candidate_id = null;
+    else first.candidate_id = 'candidate1';
+    detail.attempts = state === 'old' || state === 'new' || state === 'invalidated'
+      ? [first, { ...first, id: 'second', seq: 2, candidate_id: null, done_summary: state === 'new' ? '第二轮成果：`output.txt`' : null }]
+      : [first];
+    if (state === 'failed') detail.verifications.at(-1).state = 'failed';
+    useStore.setState({ taskDetail: detail });
+  }, state);
+
+  await update('pending');
+  await expect(delivery).toContainText('成果尚未固定');
+  await expect(delivery.getByRole('link', { name: '示例页面' })).toHaveAttribute('href', 'https://example.com');
+  await expect(delivery.locator('code', { hasText: 'npm run dev' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('delivery-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(delivery).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('delivery-mobile.png') });
+  await update('old');
+  await expect(delivery).toContainText('上一轮交付说明（第 1 轮）');
+  await expect(delivery).toContainText('本轮还没有交付说明');
+  await update('new');
+  await expect(delivery).toContainText('本轮交付（第 2 轮）');
+  await expect(delivery).toContainText('第二轮成果');
+  await expect(delivery).not.toContainText('示例页面');
+  await update('invalidated');
+  await expect(delivery).not.toContainText('第二轮成果');
+  await expect(delivery).toContainText('上一轮交付说明');
+  await update('failed');
+  await expect(panel.locator('.verification-details')).not.toHaveAttribute('open');
+  await expect(panel.locator('.verification-details > summary .badge')).toHaveText('未通过');
 });

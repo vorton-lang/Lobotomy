@@ -111,7 +111,7 @@ pub enum ReportStatusArg {
 pub struct OrgReportArgs {
     /// 一句话标题
     pub title: String,
-    /// 详细内容。done 时说明做了什么、怎样验证的
+    /// 详细内容。done 时简述做了什么、验证结果、成果在哪里、怎样体验、重点验证及已知限制；按需提供链接、路径或命令和使用前提
     pub body: String,
     pub status: ReportStatusArg,
     /// status 为 blocked 时，需要用户决定的问题

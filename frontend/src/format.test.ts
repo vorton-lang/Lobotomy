@@ -24,6 +24,7 @@ import {
   commandSummary,
   composerHint,
   continueNote,
+  deliveryReport,
   firstLines,
   fits,
   lastLines,
@@ -407,5 +408,31 @@ describe('attentionKey', () => {
     expect(attentionKey(blocked('a'))).not.toBe(attentionKey(blocked('b')));
     const accept: Attention = { kind: 'accept', task_id: 'a', title: 't', verification_id: 'v' };
     expect(attentionKey(accept)).not.toBe(attentionKey(blocked('a')));
+  });
+});
+
+describe('deliveryReport', () => {
+  const first = { ...attempt(1, 10, 20), done_summary: 'First delivery', candidate_id: 'candidate1' };
+  const second = { ...attempt(2, 30, null), done_summary: 'Second delivery' };
+
+  it('shows the newest report without calling an unpinned candidate ready', () => {
+    expect(deliveryReport([first, second])).toEqual({ text: 'Second delivery', round: 2, earlier: false, pending: true });
+    expect(deliveryReport([first, { ...second, candidate_id: 'candidate2' }])?.pending).toBe(false);
+  });
+
+  it('labels a previous report as old while the latest round has none', () => {
+    expect(deliveryReport([first, attempt(2, 30, null)])).toEqual({ text: 'First delivery', round: 1, earlier: true, pending: false });
+  });
+
+  it('handles missing and empty reports without inventing a delivery', () => {
+    expect(deliveryReport([])).toBeNull();
+    expect(deliveryReport([attempt(1, 10, null)])).toBeNull();
+    expect(deliveryReport([{ ...first, done_summary: '  ' }])).toBeNull();
+  });
+
+  it('does not retain an invalidated report when the backend clears it', () => {
+    expect(deliveryReport([second])?.text).toBe('Second delivery');
+    expect(deliveryReport([{ ...second, done_summary: null }])).toBeNull();
+    expect(deliveryReport([first, { ...second, done_summary: null }])?.earlier).toBe(true);
   });
 });
