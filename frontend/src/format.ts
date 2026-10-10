@@ -2,6 +2,7 @@
 // says is tested without rendering (#16).
 
 import type {
+  Attempt,
   Attention,
   BlobRef,
   Capture,
@@ -431,4 +432,27 @@ export function workRange(detail: TaskDetail): WorkRange | null {
     return { from: done.base, to: done.commit_id!, label: `上一轮（第 ${seq} 轮）的候选成果`, earlier: true };
   }
   return null;
+}
+
+// A done report arrives before candidate capture. Keep that distinction visible, and never
+// present a previous round's report as the current delivery. Invalidated reports are cleared.
+export function deliveryReport(attempts: Attempt[]) {
+  const report = attempts.findLast((attempt) => !!attempt.done_summary?.trim());
+  if (!report) return null;
+  return {
+    text: report.done_summary!,
+    round: report.seq,
+    earlier: report.id !== attempts.at(-1)?.id,
+    pending: !report.candidate_id,
+  };
+}
+
+/** Only the current round's explicitly pinned candidate can be launched. */
+export function trialCandidate(detail: TaskDetail): string | null {
+  const latest = detail.attempts.at(-1);
+  if (!latest?.candidate_id) return null;
+  return detail.captures.find((capture) =>
+    capture.id === latest.candidate_id && capture.task_id === detail.task.id &&
+    capture.attempt_id === latest.id && capture.kind === 'candidate' && capture.state === 'pinned',
+  )?.commit_id ?? null;
 }

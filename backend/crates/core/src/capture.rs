@@ -93,8 +93,8 @@ const SELECT: &str = "SELECT id, turn_id, role, task_id, attempt_id, kind, works
 
 fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Capture>> {
     let mut stmt = conn.prepare(&format!("{SELECT} {filter}"))?;
-    let rows = stmt.query_map(args, |r| {
-        let capture = Capture {
+    let rows = stmt.query_and_then(args, |r| {
+        Ok(Capture {
             id: r.get(0)?,
             turn_id: r.get(1)?,
             role: r.get(2)?,
@@ -105,22 +105,14 @@ fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result
             base: r.get(7)?,
             config_version: r.get(8)?,
             state: r.get(9)?,
-            options: CaptureOptions::default(),
+            options: serde_json::from_str(&r.get::<_, String>(10)?)?,
             commit_id: r.get(11)?,
-            detail: None,
+            detail: r.get::<_, Option<String>>(12)?.as_deref().map(serde_json::from_str).transpose()?,
             created_at: r.get(13)?,
             outside: r.get(14)?,
-        };
-        let json: (String, Option<String>) = (r.get(10)?, r.get(12)?);
-        Ok((capture, json))
+        })
     })?;
-    rows.map(|row| {
-        let (mut capture, (options, detail)) = row?;
-        capture.options = serde_json::from_str(&options)?;
-        capture.detail = detail.as_deref().map(serde_json::from_str).transpose()?;
-        Ok(capture)
-    })
-    .collect()
+    rows.collect()
 }
 
 pub fn load_capture(conn: &Connection, id: &str) -> Result<Capture> {
@@ -206,13 +198,6 @@ pub fn require_captured(conn: &Connection, role: &str) -> Result<()> {
 /// The role's latest capture while the runtime has yet to write it.
 pub fn capture_in_progress(conn: &Connection, role: &str) -> Result<Option<Capture>> {
     Ok(latest_capture(conn, role)?.filter(|c| c.state == CaptureState::Intent))
-}
-
-pub fn require_no_pending_capture(conn: &Connection, role: &str) -> Result<()> {
-    match capture_in_progress(conn, role)? {
-        Some(c) => Err(Error::rejected("capture_pending", format!("capture {} of {role} is pending", c.id))),
-        None => Ok(()),
-    }
 }
 
 /// Changes a turn outside any task left in the role's slot, while the user has not decided about

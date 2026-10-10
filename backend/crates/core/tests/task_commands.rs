@@ -5,11 +5,7 @@ use lobotomy_core::task::{
 use lobotomy_core::{Caller, Db};
 
 mod common;
-use common::{db, rejection, start};
-
-fn create(db: &Db, request_id: &str, title: &str) -> String {
-    common::create_titled(db, request_id, title)
-}
+use common::{create_titled as create, db, rejection, start};
 
 fn task(db: &Db, id: &str) -> lobotomy_core::task::Task {
     db.read(|c| load_task(c, id)).unwrap()
@@ -295,4 +291,26 @@ fn every_change_lands_in_the_event_log_in_order() {
         kinds,
         ["project.onboarded", "task.created", "workspace.materializing", "message.queued", "attempt.started"]
     );
+}
+
+#[test]
+fn attempt_json_keeps_null_defaults_and_distinct_read_errors() {
+    use lobotomy_core::{Error, task::open_attempt};
+    let db = db();
+    let id = create(&db, "json", "read JSON");
+    start(&db, &id);
+    let attempt = db.read(|c| open_attempt(c, &id)).unwrap().unwrap();
+    assert!(attempt.conflicts.is_empty() && attempt.trial.is_none());
+    for value in ["'invalid JSON'", "'null'", "x'00'"] {
+        let error = db
+            .read(|c| {
+                c.execute(&format!("UPDATE attempt SET conflicts = {value} WHERE task_id = ?1"), [&id])?;
+                open_attempt(c, &id)
+            })
+            .unwrap_err();
+        match value {
+            "x'00'" => assert!(matches!(error, Error::Sqlite(_))),
+            _ => assert!(matches!(error, Error::Json(_))),
+        }
+    }
 }

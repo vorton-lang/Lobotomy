@@ -353,9 +353,28 @@ export interface Attempt {
   done_turn_id: string | null;
   /** The title and body of that turn's done, for the candidate's commit message. */
   done_summary: string | null;
+  /** An optional launch recipe from this round's done report; never inferred from its prose. */
+  trial?: TrialRecipe | null;
   candidate_id: string | null;
   /** Files its code start left with conflict markers. */
   conflicts: string[];
+}
+
+export interface TrialRecipe {
+  command: string;
+  purpose: string;
+}
+
+/** Runtime-only desktop terminals; an open terminal does not mean the command succeeded. */
+export interface TrialView extends TrialRecipe {
+  id: string;
+  task_id: string;
+  attempt_id: string;
+  round: number;
+  candidate: string;
+  directory: string;
+  state: 'open' | 'closed';
+  error: string | null;
 }
 
 export interface Decision {

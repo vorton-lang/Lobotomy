@@ -11,6 +11,7 @@ pub mod project;
 pub mod results;
 pub mod runner;
 pub mod scheduler;
+pub mod trial;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::project::Project;
 
@@ -30,6 +32,7 @@ pub struct Backend {
     server: JoinHandle<()>,
     watcher: JoinHandle<()>,
     scheduler: JoinHandle<()>,
+    gui_sessions: TaskTracker,
 }
 
 impl Backend {
@@ -42,7 +45,12 @@ impl Backend {
         scheduler::recover(&project).await?;
 
         let serving = CancellationToken::new();
-        let app = mcp::org_router(project.clone(), serving.clone()).merge(gui::gui_router(project.clone()));
+        let gui_sessions = TaskTracker::new();
+        let app = mcp::org_router(project.clone(), serving.clone()).merge(gui::gui_router(
+            project.clone(),
+            serving.clone(),
+            gui_sessions.clone(),
+        ));
         let watcher = tokio::spawn(gui::watch(project.clone(), serving.clone()));
         let stop = serving.clone();
         let server = tokio::spawn(async move {
@@ -52,13 +60,17 @@ impl Backend {
         });
         let scheduling = CancellationToken::new();
         let scheduler = tokio::spawn(scheduler::run(project.clone(), scheduling.clone()));
-        Ok(Self { project, addr, scheduling, serving, server, watcher, scheduler })
+        Ok(Self { project, addr, scheduling, serving, server, watcher, scheduler, gui_sessions })
     }
 
     /// Normal shutdown (harness-adapter.md §1.8): stop scheduling, interrupt the running CLIs and
     /// wait for them to exit. The MCP service stays up meanwhile, so a CLI can still report. After
-    /// `grace`, the remaining CLIs end with their jobs when the process exits.
+    /// `grace`, the remaining CLIs end with their jobs when the process exits. Trials stop first.
+    /// GUI requests already admitted get the unused part of the grace period. Store jobs are not
+    /// waited for: one that has not finished runs again after a restart (data-model.md §5). Work
+    /// still running keeps the project lock until it finishes or the process exits.
     pub async fn shutdown(self, grace: Duration) {
+        let _ = tokio::time::timeout(grace, self.project.trials.stop_all()).await;
         self.scheduling.cancel();
         let _ = self.scheduler.await;
         let running: Vec<String> = self.project.running.lock().unwrap().keys().cloned().collect();
@@ -75,5 +87,10 @@ impl Backend {
         let _ = self.server.await;
         // Cancellation only asks the watcher to stop; join it before releasing its project.
         let _ = self.watcher.await;
+        // No new upgrades after the server stopped.
+        self.gui_sessions.close();
+        if tokio::time::timeout_at(deadline.into(), self.gui_sessions.wait()).await.is_err() {
+            tracing::warn!("shutdown grace elapsed with GUI requests still running");
+        }
     }
 }

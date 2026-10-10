@@ -20,7 +20,10 @@ use lobotomy_core::{Caller, Db};
 use serde_json::json;
 
 mod common;
-use common::{BASE, ROLE, SLOT, create, db, end_turn, pin_captures, ready_slot, register, rejection, report, start};
+use common::{
+    BASE, ROLE, SLOT, candidate, create, db, end_turn, pin_captures, ready_slot, register, rejection, report, start,
+    verify,
+};
 
 fn report_done(db: &Db, turn_id: &str) {
     report(db, turn_id, ReportStatus::Done, None).unwrap();
@@ -34,17 +37,6 @@ fn finish_capture(db: &Db, capture_id: &str, result: CaptureResult) {
     db.execute(&Caller::Runtime, &FinishCapture { capture_id: capture_id.into(), result }).unwrap();
 }
 
-/// A task whose executor reported done; its capture is pinned as the candidate.
-fn candidate(db: &Db) -> (String, String) {
-    let task = create(db, "c1");
-    start(db, &task);
-    let t = register(db);
-    report_done(db, &t.turn_id);
-    end_turn(db, &t.turn_id);
-    let commit = pin_captures(db).pop().unwrap();
-    (task, commit)
-}
-
 fn check(exit_code: i64) -> CheckOutcome {
     CheckOutcome {
         command: "cargo test".into(),
@@ -54,15 +46,6 @@ fn check(exit_code: i64) -> CheckOutcome {
         duration_ms: 5,
         tail: "test result: FAILED".into(),
     }
-}
-
-/// Verifies the task's candidate and returns the verification id.
-fn verify(db: &Db, task: &str, commit: &str, conflicts: Vec<String>, checks: Vec<CheckOutcome>) -> String {
-    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.into() }).unwrap();
-    let finish =
-        FinishVerification { verification_id: v.clone(), commit: commit.into(), conflicts, checks, blobs: vec![] };
-    db.execute(&Caller::Runtime, &finish).unwrap();
-    v
 }
 
 fn phase(db: &Db, task: &str) -> Phase {
@@ -128,7 +111,10 @@ fn an_upgraded_database_keeps_the_summary_of_an_earlier_done() {
     let (task, _) = candidate(&common::onboard(Db::open(&path).unwrap()));
     // The database as migration 7 left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("ALTER TABLE attempt DROP COLUMN done_summary; PRAGMA user_version = 7;").unwrap();
+    conn.execute_batch(
+        "ALTER TABLE attempt DROP COLUMN trial; ALTER TABLE attempt DROP COLUMN done_summary; PRAGMA user_version = 7;",
+    )
+    .unwrap();
     drop(conn);
 
     let db = Db::open(&path).unwrap();

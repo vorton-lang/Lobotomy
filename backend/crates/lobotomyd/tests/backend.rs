@@ -948,3 +948,31 @@ async fn a_session_limit_on_claude_blocks_its_domain_only() {
     assert!(last_args(&host_dir(dir.path()).join("probe")).contains(&"--no-session-persistence".to_owned()));
     backend.shutdown(Duration::from_secs(5)).await;
 }
+
+/// Shutdown does not wait for store jobs: an unfinished one runs again after a restart. It must
+/// not abort the job or release the project lock while the job's side effects are still running.
+#[tokio::test]
+async fn shutdown_leaves_a_running_store_job_and_its_lock_alive() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
+    let data = dir.path().join("project");
+    let backend = lobotomyd::Backend::start(Arc::new(Project::open(&data, host.clone()).unwrap()), 0).await.unwrap();
+    let project = Arc::downgrade(&backend.project);
+    let (release, gate) = tokio::sync::oneshot::channel();
+    let (finished, done) = tokio::sync::oneshot::channel();
+    lobotomyd::results::spawn_job(&backend.project, "test:gate".into(), async move {
+        gate.await.unwrap();
+        finished.send(()).unwrap();
+        Ok(())
+    });
+    // A grace longer than the timeout: returning in time shows shutdown did not wait for the job.
+    tokio::time::timeout(Duration::from_secs(5), backend.shutdown(Duration::from_secs(30))).await.unwrap();
+    assert!(Project::open(&data, host.clone()).is_err());
+    let project = project.upgrade().expect("unfinished store work owns the project");
+    release.send(()).unwrap();
+    done.await.unwrap();
+    wait_for("the store job to release its project", || (Arc::strong_count(&project) == 1).then_some(())).await;
+    // Drop the last owner here: observing a zero weak count alone can race its destructor.
+    drop(project);
+    drop(Project::open(&data, host).unwrap());
+}

@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
-use crate::task::{Phase, Task, load_task, open_attempt};
+use crate::task::{Phase, Task, Trial, load_task, open_attempt};
 use crate::turn::{Turn, TurnState, load_turn};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +24,9 @@ pub struct OrgReport {
     pub body: String,
     pub status: ReportStatus,
     pub blocked_on: Option<String>,
+    /// Suggested manual trial, saved only with the first accepted done. Never executed here.
+    #[serde(default)]
+    pub trial: Option<Trial>,
 }
 
 impl OrgReport {
@@ -106,9 +109,14 @@ impl Command for OrgReport {
                     // occupied meanwhile (harness-adapter.md §4.1).
                     cx.tx.execute("UPDATE turn SET done_at = ?2 WHERE id = ?1", params![turn.id, cx.now])?;
                     cx.tx.execute(
-                        "UPDATE attempt SET done_turn_id = ?2, done_summary = ?3
+                        "UPDATE attempt SET done_turn_id = ?2, done_summary = ?3, trial = ?4
                          WHERE id = ?1 AND done_turn_id IS NULL",
-                        params![turn.attempt_id, turn.id, self.summary()],
+                        params![
+                            turn.attempt_id,
+                            turn.id,
+                            self.summary(),
+                            self.trial.as_ref().map(serde_json::to_string).transpose()?
+                        ],
                     )?;
                     set_blocked(cx, &task, None)?;
                     ReportEffect::Recorded

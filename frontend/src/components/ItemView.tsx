@@ -187,7 +187,7 @@ export function LiveItemView({ item, role }: { item: LiveItem; role: string }) {
       return (
         <div className="message other live">
           <div className="who">{role}</div>
-          <Markdown text={textOf(item.content.text)} />
+          <Markdown text={textOf(item.content.text)} streaming />
         </div>
       );
     case 'tool_call':

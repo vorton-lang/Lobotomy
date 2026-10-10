@@ -4,10 +4,11 @@
 
 import { useState } from 'react';
 import type { CheckRun, TaskDetail } from '../api/types';
-import { checkPassed, checkSummary, clock, PHASE_LABEL, shortSha, taskNow, timeline, VERIFICATION_LABEL, workRange } from '../format';
+import { checkPassed, checkSummary, clock, deliveryReport, PHASE_LABEL, shortSha, taskNow, timeline, VERIFICATION_LABEL, workRange } from '../format';
 import { run, selectTask, useStore } from '../store';
 import { Markdown, Modal, Output } from './common';
 import { DiffPool, DiffView } from './DiffView';
+import { TrialControls } from './TrialControls';
 
 export function TaskPanel({ taskId }: { taskId: string }) {
   const detail = useStore((s) => s.taskDetail);
@@ -30,6 +31,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const verification = loaded?.verifications.at(-1);
   const criteria = loaded?.criteria.at(-1);
   const latest = loaded?.attempts.at(-1);
+  const delivery = loaded && deliveryReport(loaded.attempts);
   // A verification of an earlier round stays visible, but never as the current result (#13).
   const verifiedRound = loaded?.attempts.find((a) => a.id === verification?.attempt_id)?.seq;
   const earlier = !!verification && verification.attempt_id !== latest?.id;
@@ -106,6 +108,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               </div>
             </section>
           )}
+          <section className={`delivery${delivery?.earlier ? ' earlier' : ''}`} aria-label="交付说明">
+            <h3>{delivery?.earlier ? `上一轮交付说明（第 ${delivery.round} 轮）` : `本轮交付${latest ? `（第 ${latest.seq} 轮）` : ''}`}</h3>
+            {delivery?.earlier && <p className="muted">本轮还没有交付说明，以下是旧轮说明。</p>}
+            {delivery ? (
+              <>
+                {delivery.pending && <p className="muted">执行者已提交说明，成果尚未固定。</p>}
+                <Markdown key={`${delivery.round}:${delivery.text}`} text={delivery.text} />
+              </>
+            ) : <p className="muted">本轮还没有交付说明。</p>}
+          </section>
+          <TrialControls key={task.id} detail={loaded} />
           <section>
             <h3>你的原话</h3>
             <Markdown text={loaded.task.body || '（无）'} />
@@ -122,11 +135,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             <Markdown text={criteria?.text || '（无）'} />
           </section>
           {verification && (
-            <section className={earlier ? 'earlier' : ''}>
-              <h3>
+            // A failure of this round opens: sending back starts from its reasons.
+            <details
+              key={verification.id}
+              className={`verification-details${earlier ? ' earlier' : ''}`}
+              open={!earlier && verification.state === 'failed'}
+            >
+              <summary>
                 {earlier ? `上一轮的验证（第 ${verifiedRound} 轮）` : `验证（第 ${verifiedRound} 轮）`}{' '}
                 <span className={`badge ${verification.state}`}>{VERIFICATION_LABEL[verification.state]}</span>
-              </h3>
+              </summary>
               <p className="muted">
                 {earlier && `第 ${latest?.seq} 轮还没有验证。`}基于集成版本 {shortSha(verification.base)} · 检查设置第 {verification.config_version} 版 ·{' '}
                 {clock(verification.created_at)}
@@ -142,7 +160,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 !loaded.checks.some((c) => c.verification_id === verification.id) && (
                   <p className="muted">没有设置检查命令，验证只确认采集完整、没有冲突。可以在 ⚙ 设置里添加。</p>
                 )}
-            </section>
+            </details>
           )}
           <Changes detail={loaded} />
           <History detail={loaded} />
@@ -171,13 +189,13 @@ function Changes({ detail }: { detail: TaskDetail }) {
   const range = workRange(detail);
   if (!range) return null;
   return (
-    <section className={range.earlier ? 'earlier' : ''}>
-      <h3>改动</h3>
+    <details className={`changes-details${range.earlier ? ' earlier' : ''}`}>
+      <summary>改动 · {range.label}</summary>
       <p className="muted">{range.label}</p>
       <DiffPool>
         <DiffView from={range.from} to={range.to} />
       </DiffPool>
-    </section>
+    </details>
   );
 }
 

@@ -15,6 +15,7 @@ use axum::{
 };
 use lobotomy_core::Caller;
 use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
+use lobotomy_core::task::Trial;
 use lobotomy_core::turn::turn_by_token;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -108,14 +109,24 @@ pub enum ReportStatusArg {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct TrialArg {
+    /// 从候选成果根目录运行的具体命令。Windows 上由 Windows PowerShell 执行，Linux 上由 sh 执行
+    pub command: String,
+    /// 用户运行此命令可以体验或验证什么
+    pub purpose: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct OrgReportArgs {
     /// 一句话标题
     pub title: String,
-    /// 详细内容。done 时说明做了什么、怎样验证的
+    /// 详细内容。done 时简述做了什么、验证结果、成果在哪里、怎样体验、重点验证及已知限制；按需提供链接、路径或命令和使用前提
     pub body: String,
     pub status: ReportStatusArg,
     /// status 为 blocked 时，需要用户决定的问题
     pub blocked_on: Option<String>,
+    /// 仅 done 可附带的体验建议。只保存元数据，用户明确点击后才会运行，不会自动执行，也不是自动验证检查
+    pub trial: Option<TrialArg>,
 }
 
 #[tool_router]
@@ -143,7 +154,13 @@ impl OrgTools {
                 ReportStatusArg::Blocked => ReportStatus::Blocked,
                 ReportStatusArg::Done => ReportStatus::Done,
             };
-            let report = OrgReport { title: args.title, body: args.body, status, blocked_on: args.blocked_on };
+            let report = OrgReport {
+                title: args.title,
+                body: args.body,
+                status,
+                blocked_on: args.blocked_on,
+                trial: args.trial.map(|trial| Trial { command: trial.command, purpose: trial.purpose }),
+            };
             project.db.execute_recorded(&caller, &report)
         })
         .await
@@ -193,6 +210,25 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn org_report_trial_is_optional_and_described_in_the_schema() {
+        let legacy = json!({ "title": "完成", "body": "已验证", "status": "done" });
+        let args: OrgReportArgs = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(args.trial.is_none(), "older workers do not need to send trial");
+
+        let mut with_trial = legacy;
+        with_trial["trial"] = json!({ "command": "npm run dev", "purpose": "体验页面" });
+        let args: OrgReportArgs = serde_json::from_value(with_trial).unwrap();
+        let trial = args.trial.unwrap();
+        assert_eq!((trial.command.as_str(), trial.purpose.as_str()), ("npm run dev", "体验页面"));
+
+        let schema = serde_json::to_value(schemars::schema_for!(OrgReportArgs)).unwrap();
+        assert!(schema["properties"]["trial"].is_object());
+        assert!(!schema["required"].as_array().unwrap().contains(&json!("trial")));
+        let required = schema["$defs"]["TrialArg"]["required"].as_array().unwrap();
+        assert!(required.contains(&json!("command")) && required.contains(&json!("purpose")));
+    }
 
     #[derive(serde::Deserialize, schemars::JsonSchema)]
     struct EchoArgs {

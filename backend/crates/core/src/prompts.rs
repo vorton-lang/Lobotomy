@@ -20,7 +20,11 @@ pub(crate) fn brief(title: &str, body: &str, seq: i64, version: i64, criteria: &
         "任务：{title}（第 {seq} 轮执行）\n\n\
          用户原话：\n{body}\n\n\
          完成条件（第 {version} 版）：\n{criteria}\n\n\
-         完成后调用 org_report，status 为 done。遇到需要用户决定的问题时，调用 org_report，status 为 blocked，\
+         完成后调用 org_report，status 为 done。若有适合用户体验成果的命令，可附带 trial：\
+         command 是从候选成果根目录运行的具体命令，Windows 上由 Windows PowerShell 执行，\
+         Linux 上由 sh 执行；purpose 说明体验目的。\
+         trial 只提供建议，用户明确点击后才会运行；它不会自动执行，也不属于自动验证检查。\
+         遇到需要用户决定的问题时，调用 org_report，status 为 blocked，\
          并在 blocked_on 中写明问题。"
     )
 }

@@ -10,33 +10,23 @@ use lobotomy_core::task::{
     Abandon, AdoptOutsideChanges, CodeStart, EditCriteria, StartAttempt, load_task, queued_messages,
 };
 use lobotomy_core::turn::RegisterTurn;
-use lobotomy_core::verify::{Accept, FinishVerification, SendBack, StartVerification, work_so_far};
+use lobotomy_core::verify::{Accept, SendBack, work_so_far};
 use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceState, current_workspace};
 use lobotomy_core::{Caller, Db};
 
 mod common;
-use common::{BASE, ROLE, SLOT, create, db, end_turn, idle_slot, pin_captures, ready_slot, register, rejection, start};
+use common::{
+    BASE, ROLE, SLOT, candidate, create, db, end_turn, idle_slot, ready_slot, register, rejection, send, start, verify,
+};
 
 fn report(db: &Db, turn_id: &str, status: ReportStatus) -> ReportEffect {
     common::report(db, turn_id, status, None).unwrap()
 }
 
-fn send(db: &Db, request_id: &str, task: Option<&str>, body: &str) -> String {
-    common::send(db, request_id, task, body)
-}
-
 /// A task waiting for acceptance, and its passed verification.
 fn accepting(db: &Db) -> (String, String) {
-    let task = create(db, "c1");
-    start(db, &task);
-    let t = register(db);
-    report(db, &t.turn_id, ReportStatus::Done);
-    end_turn(db, &t.turn_id);
-    let commit = pin_captures(db).pop().unwrap();
-    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
-    let finish =
-        FinishVerification { verification_id: v.clone(), commit, conflicts: vec![], checks: vec![], blobs: vec![] };
-    db.execute(&Caller::Runtime, &finish).unwrap();
+    let (task, commit) = candidate(db);
+    let v = verify(db, &task, &commit, vec![], vec![]);
     (task, v)
 }
 

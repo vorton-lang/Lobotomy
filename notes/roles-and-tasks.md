@@ -114,7 +114,7 @@ Yesod    审查：实现 Codex adapter               进行中
 | 使用方 | 工具 |
 |---|---|
 | Manager | `assign(role, title, done_when, quote, context?, ledger?, interpretation, links?)`；`send_to_role(..., task_id?)` 追加说明；`accept(task_id)`；`send_back(task_id, items: [id], reason)`；`abandon(task_id, reason)` |
-| 执行者 | `org_report(title, body, status: progress \| blocked \| done, blocked_on?)` |
+| 执行者 | `org_report(title, body, status: progress \| blocked \| done, blocked_on?, trial?)`；`trial` 是 done 时可选的试用建议，只保存，不执行（frontend.md §8） |
 | Reviewer | `org_report(..., verdict: approve \| changes_requested, items)` |
 | 用户（GUI） | Manager 的全部控制流命令（建任务、验收、退回、放弃），以及调整队列、重开、暂停某个 role；立即生效，Manager 只收到通知 |
 

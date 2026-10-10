@@ -23,34 +23,38 @@ function getWorker() {
   return worker;
 }
 
-export function renderMarkdown(text: string): Promise<string> {
-  const cached = cache.get(text);
+// Identical text has different meaning while live and after completion.
+const cacheKey = (text: string, streaming: boolean) => `${streaming ? 1 : 0}:${text}`;
+
+export function renderMarkdown(text: string, streaming = false): Promise<string> {
+  const key = cacheKey(text, streaming);
+  const cached = cache.get(key);
   if (cached !== undefined) {
-    cache.delete(text);
-    cache.set(text, cached);
+    cache.delete(key);
+    cache.set(key, cached);
     return Promise.resolve(cached);
   }
   if (text.length > MARKDOWN_LIMIT) return Promise.resolve(`<pre>${escapeHtml(text)}</pre>`);
   const id = nextId++;
   return new Promise((resolve) => {
     waiting.set(id, (html) => {
-      cache.set(text, html);
+      cache.set(key, html);
       if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value!);
       resolve(html);
     });
-    getWorker().postMessage({ id, text, streaming: false });
+    getWorker().postMessage({ id, text, streaming });
   });
 }
 
-/** The rendered HTML once ready; `null` until then. */
-export function useMarkdown(text: string): string | null {
-  const [html, setHtml] = useState<string | null>(() => cache.get(text) ?? null);
+/** Keep the previous live frame while rendering a delta, but never carry a repair into completion. */
+export function useMarkdown(text: string, streaming = false): string | null {
+  const [rendered, setRendered] = useState(() => ({ html: cache.get(cacheKey(text, streaming)) ?? null, streaming }));
   useEffect(() => {
     let current = true;
-    void renderMarkdown(text).then((h) => current && setHtml(h));
+    void renderMarkdown(text, streaming).then((html) => current && setRendered({ html, streaming }));
     return () => {
       current = false;
     };
-  }, [text]);
-  return html;
+  }, [text, streaming]);
+  return rendered.streaming === streaming ? rendered.html : cache.get(cacheKey(text, streaming)) ?? null;
 }

@@ -16,6 +16,7 @@ use crate::host::Host;
 /// (data-model.md §10). Cross-project state is in the [`Host`] it refers to.
 pub struct Project {
     pub data_dir: PathBuf,
+    pub trials: crate::trial::Trials,
     pub db: Arc<Db>,
     pub blobs: BlobStore,
     /// The private store of results (harness-adapter.md §4).
@@ -47,7 +48,20 @@ pub struct Project {
     /// An exclusive lock on `<data_dir>/lock`, held while the instance lives: two backends on one
     /// data directory would run two schedulers on one database (#16). The OS releases it when
     /// the process ends, however it ends.
-    _lock: std::fs::File,
+    _lock: ProjectLock,
+}
+
+/// Closing our descriptor alone may leave the lock held by a forked child until it execs.
+/// Release it explicitly when the last project owner is gone. This is the project's last
+/// field so the database and store fields are dropped before the lock is released.
+struct ProjectLock(std::fs::File);
+
+impl Drop for ProjectLock {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            tracing::warn!(%error, "could not release the project lock");
+        }
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -95,6 +109,7 @@ impl Project {
         let store = Store::open_or_init(&data_dir.join("store")).context("opening the private store")?;
         Ok(Self {
             data_dir: data_dir.to_path_buf(),
+            trials: crate::trial::Trials::default(),
             db: Arc::new(db),
             blobs: BlobStore::new(data_dir.join("blobs")),
             store: Arc::new(store),
@@ -109,7 +124,7 @@ impl Project {
             wake: Notify::new(),
             shutdown_requested: Notify::new(),
             gui_push: tokio::sync::broadcast::channel(crate::gui::PUSH_BUFFER).0,
-            _lock: lock,
+            _lock: ProjectLock(lock),
         })
     }
 
@@ -143,6 +158,12 @@ impl Project {
         self.data_dir.join("quarantine")
     }
 
+    /// Candidate copies of user-started trials, one directory per trial. A trial deletes its copy
+    /// when it ends; startup deletes what is left.
+    pub fn trials_dir(&self) -> PathBuf {
+        self.data_dir.join("trials")
+    }
+
     /// Raw CLI output of a turn, kept only when the turn did not end cleanly (data-model.md §7.4).
     pub fn raw_output_path(&self, turn_id: &str, ext: &str) -> PathBuf {
         self.data_dir.join("turns").join(format!("{turn_id}.{ext}"))
@@ -156,5 +177,27 @@ impl Project {
 
     pub fn mcp_url(&self, token: &str) -> String {
         format!("{}/mcp/{token}", self.mcp_base.lock().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn releasing_the_project_lock_does_not_wait_for_an_inherited_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lock");
+        let file = std::fs::File::create(&path).unwrap();
+        file.try_lock().unwrap();
+        // A clone shares the file description, as a forked child's descriptor does on Unix.
+        // No child needs to execute code or reach exec before the owner can release its lock.
+        let inherited = file.try_clone().unwrap();
+        let lock = ProjectLock(file);
+        let next = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        assert!(matches!(next.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+        drop(lock);
+        next.try_lock().unwrap();
+        drop(inherited);
     }
 }

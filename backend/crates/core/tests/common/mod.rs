@@ -7,6 +7,7 @@ use lobotomy_core::project::Onboard;
 use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
 use lobotomy_core::task::{AttemptStarted, CreateTask, SendMessage, StartAttempt};
 use lobotomy_core::turn::{EndTurn, Outcome, RegisterTurn, SessionIdentified, TurnRegistered};
+use lobotomy_core::verify::{CheckOutcome, FinishVerification, StartVerification};
 use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceReady, WorkspaceState, current_workspace};
 use lobotomy_core::{Caller, Db};
 
@@ -93,6 +94,7 @@ pub fn report(
         body: "加了 new.txt".into(),
         status,
         blocked_on: blocked_on.map(Into::into),
+        trial: None,
     };
     db.execute(&Caller::Role { role: ROLE.into(), turn_id: turn_id.into() }, &report)
 }
@@ -130,4 +132,24 @@ pub fn pin_captures(db: &Db) -> Vec<String> {
         commits.push(commit);
     }
     commits
+}
+
+/// A task whose executor reported done; its capture is pinned as the candidate.
+pub fn candidate(db: &Db) -> (String, String) {
+    let task = create(db, "c1");
+    start(db, &task);
+    let t = register(db);
+    report(db, &t.turn_id, ReportStatus::Done, None).unwrap();
+    end_turn(db, &t.turn_id);
+    let commit = pin_captures(db).pop().unwrap();
+    (task, commit)
+}
+
+/// Verifies the task's candidate and returns the verification id.
+pub fn verify(db: &Db, task: &str, commit: &str, conflicts: Vec<String>, checks: Vec<CheckOutcome>) -> String {
+    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.into() }).unwrap();
+    let finish =
+        FinishVerification { verification_id: v.clone(), commit: commit.into(), conflicts, checks, blobs: vec![] };
+    db.execute(&Caller::Runtime, &finish).unwrap();
+    v
 }

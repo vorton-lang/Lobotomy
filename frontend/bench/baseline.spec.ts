@@ -42,7 +42,7 @@ test('opening a thread of 2000+ items', async ({ page, browser }) => {
   const again = await whenText(p, '.thread .row', NEWEST);
   results.reload = { newest_visible_ms: round(again), long_tasks: await longTasks(p) };
 
-  // The unclosed Markdown renders as Markdown, not as plain text.
+  // This completed fixture preserves its closed bold prefix; streaming repair has separate e2e coverage.
   await expect(page.locator('.markdown strong', { hasText: 'An unclosed reply' })).toBeVisible();
 });
 

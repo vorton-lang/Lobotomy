@@ -133,12 +133,7 @@ export async function run<T = unknown>(
   args: Record<string, unknown> = {},
   requestId: string = crypto.randomUUID(),
 ): Promise<T | undefined> {
-  try {
-    return await call<T>('command', { name, args: { request_id: requestId, ...args } });
-  } catch (e) {
-    toast(e instanceof RequestFailed ? `${e.remote.message}` : String(e));
-    return undefined;
-  }
+  return act<T>(name, { request_id: requestId, ...args });
 }
 
 /**
