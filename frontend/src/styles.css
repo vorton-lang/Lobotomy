@@ -267,6 +267,12 @@ button.project-item:hover:not(:disabled) {
   align-self: flex-start;
   margin: 10px 0 0 8px;
 }
+/* A narrow window keeps its width for the project it shows. */
+@media (max-width: 760px) {
+  .projects {
+    display: none;
+  }
+}
 
 /* 「全部」: what waits for the user in every project. */
 .overview {

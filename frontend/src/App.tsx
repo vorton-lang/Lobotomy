@@ -19,14 +19,18 @@ export function App() {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
   // Why the backend could not be reached at start, such as a backend that did not start (#16).
   const [failed, setFailed] = useState<string | null>(null);
-  const host = useStore((s) => s.host);
+  // Every project's events refresh the host snapshot; the window takes only what it shows from
+  // it, so a refresh does not render the thread again.
+  const connected = useStore((s) => s.host !== null);
+  // No project yet, or only one being connected, which shows once it runs.
+  const empty = useStore((s) => s.host !== null && s.host.projects.every((p) => p.state === 'onboarding'));
   const project = useStore((s) => s.project);
   const opened = useStore((s) => s.snapshot?.project != null);
   const selectedTask = useStore((s) => s.selectedTask);
   const toasts = useStore((s) => s.toasts);
   const searching = useStore((s) => s.search !== null);
   // The title and the tray count every project's items (data-model.md §10.5).
-  const attention = totalAttention(host);
+  const attention = useStore((s) => totalAttention(s.host));
 
   const find = () => {
     setFailed(null);
@@ -73,10 +77,7 @@ export function App() {
     );
   }
   if (url === undefined) return <div className="splash">正在连接…</div>;
-  // No project yet: connect the first repository. One being connected shows once it runs.
-  if (url === null || host === null || host.projects.every((p) => p.state === 'onboarding')) {
-    return <Onboarding connected={host !== null} />;
-  }
+  if (url === null || !connected || empty) return <Onboarding connected={connected} />;
   return (
     <div className="app">
       <TopBar />
