@@ -410,7 +410,7 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
 
   await update('pending');
   await expect(delivery).toContainText('成果尚未固定');
-  await expect(delivery.getByRole('link', { name: '示例页面' })).toHaveAttribute('href', 'https://example.com');
+  await expect(delivery.getByRole('link', { name: '示例页面' })).toHaveAttribute('href', 'https://example.com/');
   await expect(delivery.locator('code', { hasText: 'npm run dev' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('delivery-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 });
