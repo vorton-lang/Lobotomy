@@ -67,13 +67,13 @@ impl Running {
     /// Stops this project while the backend runs on, for archiving (data-model.md §10.4): as
     /// [`Running::stop`], then the CLIs still running end with their process trees, and the
     /// store jobs in progress finish. Returns the instance, still open; the caller lets it go.
-    async fn close(self, grace: Duration) -> Arc<Project> {
+    async fn close(self, grace: Duration) -> anyhow::Result<Arc<Project>> {
         let project = self.project.clone();
         self.stop(Instant::now() + grace).await;
-        project.end_turns();
+        project.end_turns().await?;
         project.tasks.close();
         project.tasks.wait().await;
-        project
+        Ok(project)
     }
 }
 
@@ -206,7 +206,7 @@ impl Projects {
         self.host.changed();
         let running = self.runtimes.lock().unwrap().remove(id);
         if let Some(running) = running {
-            let project = Arc::downgrade(&running.close(grace).await);
+            let project = Arc::downgrade(&running.close(grace).await?);
             self.open.lock().unwrap().remove(id);
             let deadline = Instant::now() + RELEASE_WAIT;
             while project.strong_count() > 0 && Instant::now() < deadline {
