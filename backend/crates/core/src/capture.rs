@@ -208,13 +208,6 @@ pub fn capture_in_progress(conn: &Connection, role: &str) -> Result<Option<Captu
     Ok(latest_capture(conn, role)?.filter(|c| c.state == CaptureState::Intent))
 }
 
-pub fn require_no_pending_capture(conn: &Connection, role: &str) -> Result<()> {
-    match capture_in_progress(conn, role)? {
-        Some(c) => Err(Error::rejected("capture_pending", format!("capture {} of {role} is pending", c.id))),
-        None => Ok(()),
-    }
-}
-
 /// Changes a turn outside any task left in the role's slot, while the user has not decided about
 /// them: no task starts in the slot until then (harness-adapter.md §3, #14). A later turn outside
 /// a task captures the slot again, changes included, so only the latest capture counts.
