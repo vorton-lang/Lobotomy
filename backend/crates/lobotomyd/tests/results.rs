@@ -26,7 +26,8 @@ async fn make_candidate(project: &Arc<Project>, text: &str) -> String {
     let identified = SessionIdentified { turn_id: t.turn_id.clone(), native_id: format!("native-{text}") };
     db.execute(&Caller::Runtime, &identified).unwrap();
     std::fs::write(project.slot_dir("worker").join("work.txt"), text).unwrap();
-    let report = OrgReport { title: text.into(), body: text.into(), status: ReportStatus::Done, blocked_on: None };
+    let report =
+        OrgReport { title: text.into(), body: text.into(), status: ReportStatus::Done, blocked_on: None, trial: None };
     db.execute(&Caller::Role { role: "Malkuth".into(), turn_id: t.turn_id.clone() }, &report).unwrap();
     db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id, outcome: Outcome::Completed, failure: None }).unwrap();
     for capture in db.read(pending_captures).unwrap() {

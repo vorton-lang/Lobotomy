@@ -674,7 +674,8 @@ impl Command for Continue {
             // The executor deals with the list, so the stopped done no longer counts.
             if let Some(attempt_id) = &attempt_id {
                 cx.tx.execute(
-                    "UPDATE attempt SET done_turn_id = NULL, done_summary = NULL WHERE id = ?1 AND done_turn_id = ?2",
+                    "UPDATE attempt SET done_turn_id = NULL, done_summary = NULL, trial = NULL
+                     WHERE id = ?1 AND done_turn_id = ?2",
                     params![attempt_id, stopped.turn_id],
                 )?;
             }

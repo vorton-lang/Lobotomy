@@ -446,3 +446,13 @@ export function deliveryReport(attempts: Attempt[]) {
     pending: !report.candidate_id,
   };
 }
+
+/** Only the current round's explicitly pinned candidate can be launched. */
+export function trialCandidate(detail: TaskDetail): string | null {
+  const latest = detail.attempts.at(-1);
+  if (!latest?.candidate_id) return null;
+  return detail.captures.find((capture) =>
+    capture.id === latest.candidate_id && capture.task_id === detail.task.id &&
+    capture.attempt_id === latest.id && capture.kind === 'candidate' && capture.state === 'pinned',
+  )?.commit_id ?? null;
+}

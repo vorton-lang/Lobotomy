@@ -108,6 +108,13 @@ sql_enum! {
     }
 }
 
+/// An executor's suggested way to try a candidate. Recording it never runs the command.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Trial {
+    pub command: String,
+    pub purpose: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Attempt {
     pub id: String,
@@ -121,6 +128,8 @@ pub struct Attempt {
     pub done_turn_id: Option<String>,
     /// The title and body of that turn's done, for the candidate's commit message.
     pub done_summary: Option<String>,
+    /// Optional trial from the same first accepted done; the user chooses whether to run it.
+    pub trial: Option<Trial>,
     pub candidate_id: Option<String>,
     /// Files its code start left with conflict markers.
     pub conflicts: Vec<String>,
@@ -129,7 +138,7 @@ pub struct Attempt {
 fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attempt>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, task_id, seq, started_at, ended_at, end_reason, code_start, done_turn_id, candidate_id, conflicts,
-                done_summary
+                done_summary, trial
          FROM attempt WHERE task_id = ?1 {filter}"
     ))?;
     let rows = stmt.query_map([task_id], |r| {
@@ -143,14 +152,16 @@ fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attemp
             code_start: r.get(6)?,
             done_turn_id: r.get(7)?,
             done_summary: r.get(10)?,
+            trial: None,
             candidate_id: r.get(8)?,
             conflicts: vec![],
         };
-        Ok((attempt, r.get::<_, Option<String>>(9)?))
+        Ok((attempt, r.get::<_, Option<String>>(9)?, r.get::<_, Option<String>>(11)?))
     })?;
     rows.map(|row| {
-        let (mut attempt, conflicts) = row?;
+        let (mut attempt, conflicts, trial) = row?;
         attempt.conflicts = conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
+        attempt.trial = trial.as_deref().map(serde_json::from_str).transpose()?;
         Ok(attempt)
     })
     .collect()

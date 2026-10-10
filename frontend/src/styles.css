@@ -779,3 +779,16 @@ label.choice input {
 .delivery {
   overflow-wrap: anywhere;
 }
+.trial-controls {
+  overflow-wrap: anywhere;
+}
+.trial-command {
+  background: var(--sunken);
+  padding: 10px;
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.trial-list {
+  margin-top: 12px;
+}

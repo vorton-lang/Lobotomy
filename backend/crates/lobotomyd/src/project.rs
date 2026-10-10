@@ -16,6 +16,7 @@ use crate::host::Host;
 /// (data-model.md §10). Cross-project state is in the [`Host`] it refers to.
 pub struct Project {
     pub data_dir: PathBuf,
+    pub trials: crate::trial::Trials,
     pub db: Arc<Db>,
     pub blobs: BlobStore,
     /// The private store of results (harness-adapter.md §4).
@@ -110,6 +111,7 @@ impl Project {
         let store = Store::open_or_init(&data_dir.join("store")).context("opening the private store")?;
         Ok(Self {
             data_dir: data_dir.to_path_buf(),
+            trials: crate::trial::Trials::default(),
             db: Arc::new(db),
             blobs: BlobStore::new(data_dir.join("blobs")),
             store: Arc::new(store),

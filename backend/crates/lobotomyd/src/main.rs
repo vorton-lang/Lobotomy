@@ -22,6 +22,15 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [mode, title, command, control] = args.as_slice()
+        && mode == "trial-terminal"
+    {
+        std::process::exit(lobotomy_harness::process::run_terminal_helper(
+            command,
+            title,
+            std::path::Path::new(control),
+        )?);
+    }
     if let [command, pid] = args.as_slice()
         && command == "ctrl-c"
     {
