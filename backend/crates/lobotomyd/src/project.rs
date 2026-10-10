@@ -12,9 +12,11 @@ use tokio::sync::Notify;
 use crate::host::Host;
 
 /// One project instance. Everything project-scoped hangs off this value and is passed explicitly;
-/// there are no global singletons, so several instances can share one process later
-/// (data-model.md §10). Cross-project state is in the [`Host`] it refers to.
+/// there are no global singletons, so one process runs several instances (data-model.md §10).
+/// Cross-project state is in the [`Host`] it refers to.
 pub struct Project {
+    /// The id it is registered under, the same as its project row's (data-model.md §10.3).
+    pub id: String,
     pub data_dir: PathBuf,
     pub trials: crate::trial::Trials,
     pub db: Arc<Db>,
@@ -22,8 +24,6 @@ pub struct Project {
     /// The private store of results (harness-adapter.md §4).
     pub store: Arc<Store>,
     pub host: Arc<Host>,
-    /// The MCP service's base URL, such as `http://127.0.0.1:4100`. Set once the server listens.
-    pub mcp_base: Mutex<String>,
     /// Turns this backend runs right now, with the pids to interrupt them.
     pub running: Mutex<HashMap<String, RunningTurn>>,
     /// Store work in progress (materializing, capturing, verifying, previewing), by key, so the
@@ -41,10 +41,6 @@ pub struct Project {
     pub live_version: AtomicU64,
     /// Wakes the scheduler after a change.
     pub wake: Notify,
-    /// The GUI asked the backend to stop (frontend.md §1).
-    pub shutdown_requested: Notify,
-    /// What connected GUIs are told (see `gui`), as JSON text.
-    pub gui_push: tokio::sync::broadcast::Sender<Arc<str>>,
     /// An exclusive lock on `<data_dir>/lock`, held while the instance lives: two backends on one
     /// data directory would run two schedulers on one database (#16). The OS releases it when
     /// the process ends, however it ends.
@@ -86,35 +82,42 @@ pub struct RunningTurn {
     pub interrupt_requested: bool,
 }
 
+/// Takes an exclusive lock on `path`, created if missing. `what` names the holder in the refusal.
+pub fn lock_file(path: &Path, what: &str) -> anyhow::Result<std::fs::File> {
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!("another backend is already running on {what}"),
+        Err(std::fs::TryLockError::Error(e)) => Err(e).with_context(|| format!("locking {}", path.display())),
+    }
+}
+
 impl Project {
-    pub fn open(data_dir: &Path, host: Arc<Host>) -> anyhow::Result<Self> {
+    /// Opens the project `id` in `data_dir`, created if missing. A data directory that belongs to
+    /// another project is refused.
+    pub fn open(id: &str, data_dir: &Path, host: Arc<Host>) -> anyhow::Result<Self> {
         std::fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
-        let lock_path = data_dir.join("lock");
-        let lock = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .with_context(|| format!("opening {}", lock_path.display()))?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(std::fs::TryLockError::WouldBlock) => {
-                anyhow::bail!("another backend is already running on {}", data_dir.display())
-            }
-            Err(std::fs::TryLockError::Error(e)) => {
-                return Err(e).with_context(|| format!("locking {}", lock_path.display()));
-            }
-        }
+        let lock = lock_file(&data_dir.join("lock"), &data_dir.display().to_string())?;
         let db = Db::open(&data_dir.join("lobotomy.db")).context("opening the project database")?;
+        if let Some(found) = db.read(lobotomy_core::project::load_project)?
+            && found.id != id
+        {
+            anyhow::bail!("{} holds project {}, not {id}", data_dir.display(), found.id);
+        }
         let store = Store::open_or_init(&data_dir.join("store")).context("opening the private store")?;
         Ok(Self {
+            id: id.to_owned(),
             data_dir: data_dir.to_path_buf(),
             trials: crate::trial::Trials::default(),
             db: Arc::new(db),
             blobs: BlobStore::new(data_dir.join("blobs")),
             store: Arc::new(store),
             host,
-            mcp_base: Mutex::new(String::new()),
             running: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashSet::new()),
             failed: Mutex::new(HashMap::new()),
@@ -122,10 +125,15 @@ impl Project {
             live: Mutex::new(HashMap::new()),
             live_version: AtomicU64::new(0),
             wake: Notify::new(),
-            shutdown_requested: Notify::new(),
-            gui_push: tokio::sync::broadcast::channel(crate::gui::PUSH_BUFFER).0,
             _lock: ProjectLock(lock),
         })
+    }
+
+    /// Tells the GUIs about a change in this project: `push` is a JSON object, sent with the
+    /// project's id added (frontend.md §3 rule 8).
+    pub fn push(&self, mut push: serde_json::Value) {
+        push["project"] = self.id.clone().into();
+        let _ = self.host.gui_push.send(push.to_string().into());
     }
 
     /// Changes the live view of running turns.
@@ -175,8 +183,9 @@ impl Project {
         self.data_dir.join("gh-empty")
     }
 
+    /// The MCP URL of one turn: the project, then the turn's token (harness-adapter.md §2).
     pub fn mcp_url(&self, token: &str) -> String {
-        format!("{}/mcp/{token}", self.mcp_base.lock().unwrap())
+        format!("{}/mcp/{}/{token}", self.host.mcp_base.lock().unwrap(), self.id)
     }
 }
 

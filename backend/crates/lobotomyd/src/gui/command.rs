@@ -1,7 +1,8 @@
 //! The commands the GUI sends: the user's commands (data-model.md §9.2), which go through the
-//! command layer with the GUI's request id as idempotency key, and the runtime actions the user
-//! may trigger.
+//! command layer with the GUI's request id as idempotency key, the runtime actions the user
+//! may trigger, and the host's commands, which concern no single project (frontend.md §3 rule 8).
 
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -16,7 +17,9 @@ use lobotomy_core::{Caller, Command, Db, Error};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::host::Host;
 use crate::project::Project;
+use crate::projects::Projects;
 use crate::results;
 use crate::runner::db;
 
@@ -25,6 +28,9 @@ pub struct CommandParams {
     name: String,
     #[serde(default)]
     args: Value,
+    /// The project a project command is for; the host's commands ignore it.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 async fn user<C>(project: &Arc<Project>, args: Value) -> anyhow::Result<Value>
@@ -43,7 +49,7 @@ struct TurnParams {
 }
 
 #[derive(Deserialize)]
-struct OnboardParams {
+struct CreateProjectParams {
     repo_path: String,
 }
 
@@ -58,7 +64,47 @@ struct PermissionParams {
     permission: String,
 }
 
-pub async fn run(project: &Arc<Project>, CommandParams { name, args }: CommandParams) -> anyhow::Result<Value> {
+/// Runs a host command; `None` when `name` is a project command.
+pub async fn host(host: &Arc<Host>, projects: &Projects, params: &CommandParams) -> Option<anyhow::Result<Value>> {
+    let args = params.args.clone();
+    let result = match params.name.as_str() {
+        // A new project, connected while the backend runs (data-model.md §10.4).
+        "create_project" => {
+            async {
+                let CreateProjectParams { repo_path } = serde_json::from_value(args)?;
+                Ok(serde_json::to_value(projects.create(Path::new(&repo_path)).await?)?)
+            }
+            .await
+        }
+        // A domain that opens lets the roles of every project go on.
+        "quota_retry" => {
+            async {
+                let HarnessParams { harness } = serde_json::from_value(args)?;
+                let domain = host.retry(&harness).await?;
+                projects.wake_all();
+                Ok(serde_json::to_value(domain)?)
+            }
+            .await
+        }
+        // A host setting, not a project command: it has no event, so the windows are told to
+        // take a new snapshot (harness-adapter.md §1.9).
+        "set_permission" => (|| {
+            let PermissionParams { harness, permission } = serde_json::from_value(args)?;
+            let set = host.set_permission(&harness, &permission)?;
+            host.changed();
+            Ok(json!({ "harness": harness, "permission": set.as_str() }))
+        })(),
+        "shutdown" => {
+            host.shutdown_requested.notify_one();
+            Ok(Value::Null)
+        }
+        _ => return None,
+    };
+    Some(result)
+}
+
+/// Runs a command of one project.
+pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: CommandParams) -> anyhow::Result<Value> {
     macro_rules! user_commands {
         ($($ty:ty),* $(,)?) => {
             $(if name == <$ty as Command>::NAME { return user::<$ty>(project, args).await; })*
@@ -95,11 +141,6 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args }: CommandPa
             project.trials.stop(&trial_id).await?;
             Ok(Value::Null)
         }
-        "onboard" => {
-            let OnboardParams { repo_path } = serde_json::from_value(args)?;
-            crate::onboard::onboard(project, std::path::Path::new(&repo_path)).await?;
-            Ok(Value::Null)
-        }
         "interrupt" => {
             let TurnParams { turn_id } = serde_json::from_value(args)?;
             crate::runner::interrupt(project, &turn_id).await?;
@@ -119,23 +160,7 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args }: CommandPa
             };
             Ok(json!({ "terminated": lobotomy_harness::process::terminate(pid as u32, start)? }))
         }
-        "quota_retry" => {
-            let HarnessParams { harness } = serde_json::from_value(args)?;
-            Ok(serde_json::to_value(project.host.retry(&harness).await?)?)
-        }
-        // A host setting, not a project command: it has no event, so the windows are told to
-        // take a new snapshot (harness-adapter.md §1.9).
-        "set_permission" => {
-            let PermissionParams { harness, permission } = serde_json::from_value(args)?;
-            let set = project.host.set_permission(&harness, &permission)?;
-            let _ = project.gui_push.send(json!({ "type": "host" }).to_string().into());
-            Ok(json!({ "harness": harness, "permission": set.as_str() }))
-        }
         "retry_failed" => Ok(json!({ "retried": results::retry_failed(project) })),
-        "shutdown" => {
-            project.shutdown_requested.notify_one();
-            Ok(Value::Null)
-        }
         other => Err(Error::rejected("bad_request", format!("unknown command {other}")).into()),
     }
 }

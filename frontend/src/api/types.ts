@@ -411,10 +411,34 @@ export interface LogEvent {
   payload: { task_id?: string | null } & Record<string, unknown>;
 }
 
+/** A registered project and how it is (data-model.md §10.3; frontend.md §3 rule 8). */
+export interface ProjectStatus {
+  id: string;
+  name: string;
+  data_dir: string;
+  repo_path: string;
+  state: 'onboarding' | 'running' | 'archived';
+  registered_at: number;
+  /** Why a running project could not be opened; it does not run. */
+  error: string | null;
+  /** Its "等你决定", without the quota domains the host lists. */
+  attention: Attention[];
+  /** A turn of it is running. */
+  busy: boolean;
+}
+
+export interface HostSnapshot {
+  projects: ProjectStatus[];
+  /** What waits for the user outside any project: blocked quota domains (data-model.md §10.5). */
+  attention: Attention[];
+  harnesses: HarnessView[];
+}
+
+/** Pushes about a project name it in `project`. */
 export type Push =
-  | { type: 'events'; events: LogEvent[] }
-  | { type: 'live'; live: Record<string, LiveTurn> }
-  | { type: 'thread'; role: string; seq: number }
+  | { type: 'events'; project: string; events: LogEvent[] }
+  | { type: 'live'; project: string; live: Record<string, LiveTurn> }
+  | { type: 'thread'; project: string; role: string; seq: number }
   | { type: 'host' }
   | { type: 'tick' }
   | { type: 'resync' };

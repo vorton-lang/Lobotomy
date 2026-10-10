@@ -250,8 +250,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 **实现**（2026-10-04）：
 
-- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{token}`；路由先取出 token，放进 HTTP 请求的扩展中，工具处理函数从请求上下文读取。
-- M3 起 URL 改为 `/mcp/{project}/{token}`：后端先按项目 ID 找到项目实例，再在其中按 token 找到 turn（data-model.md §10.3）。
+- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{project}/{token}`（M3 起）：路由先按项目 ID 找到打开的项目实例，没有时返回 404；再把项目实例和 token 放进 HTTP 请求的扩展中。工具处理函数从请求上下文读取它们，在这个项目中按 token 找到 turn（data-model.md §10.3）。
 - 服务不保存 MCP 会话（rmcp 的 stateless 模式），工具调用以单个 JSON 响应返回，不用 SSE 流，不提供 GET 流（返回 405）。调用者已由 URL 中的 token 识别，会话没有额外作用。
 - `Host` 只接受 loopback 名称，防止 DNS 重绑定。
 - 两家 CLI 协商的协议版本不同（§1.4）：Claude 已使用 2026-07-28 的无状态协议，Codex 仍使用 2025-06-18 的 `initialize` 握手。stateless 模式对两者逐个请求应答，两者都能工作。
@@ -442,7 +441,7 @@ cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-thre
 
 **实现**（2026-10-04）：
 
-- 用户在 GUI 中接入仓库；测试与脚本用 `lobotomyd --data-dir <目录> --repo <仓库>`。M3 起，接入是新建项目的一步（data-model.md §10.4）。
+- 接入是新建项目的一步（data-model.md §10.4）。用户在 GUI 中新建项目；测试与脚本用 `lobotomyd --host-dir <目录> --repo <仓库>`，这个仓库还没有未归档的项目时，后端为它新建一个。
 - 接入时，运行时把用户分支 fetch 进私有存储，并记下用户在该仓库的 git 身份（`user.name`、`user.email`）。没有配置身份时，运行时拒绝接入。
 - 物化预览时，运行时把集成版本提交导出为私有存储中的一个 ref；主仓库从私有存储 fetch 这个 ref，再执行 `git merge --ff-only`。主仓库已经在目标版本上时，运行时视为已写入：上一次写入的回执丢失了（data-model.md §5）。
 - 集成版本的提交是普通的 git 提交，不带 jj 的 change-id 头。提交信息依次为任务标题、`done` 汇报的标题与正文、两个 trailer。

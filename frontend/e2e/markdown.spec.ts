@@ -1,6 +1,7 @@
 // Exercise live pushes through the store, transcript components and the real Markdown worker.
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
 import type { LiveTurn, Snapshot, ThreadPage } from '../src/api/types';
+import { PROJECT, hostSnapshot } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
 
@@ -18,7 +19,7 @@ async function openStream(page: Page) {
         config: null, tasks: [], attention: [], quota: [], harnesses: [], live,
         roles: [{ name: 'Malkuth', kind: 'worker', harness: 'claude', model: null, slot: null, task_id: null, unfinished: null, last_turn: null, hold: null, stalled: null, outside: null, workspace: null, queued_messages: 0 }],
       };
-      route.send(JSON.stringify({ id, result: method === 'snapshot' ? snapshot : thread }));
+      route.send(JSON.stringify({ id, result: method === 'host' ? hostSnapshot() : method === 'snapshot' ? snapshot : thread }));
     });
   });
   await page.goto(`${origin}/?backend=ws://127.0.0.1:9999/gui&token=markdown-test`);
@@ -27,15 +28,15 @@ async function openStream(page: Page) {
     update(text: string, second?: string) {
       const message = (text: string) => ({ kind: 'agent_message' as const, content: { text }, started_at: 1 });
       live = { turn: { role: 'Malkuth', started_at: 1, items: { reply: message(text), ...(second === undefined ? {} : { second: message(second) }) } } };
-      socket.send(JSON.stringify({ type: 'live', live }));
+      socket.send(JSON.stringify({ type: 'live', project: PROJECT, live }));
     },
     complete(text?: string) {
       if (text !== undefined) {
         thread.items = [{ id: 'reply', turn_id: 'turn', seq: 1, command_id: null, created_at: 1, kind: 'agent_message', content: { text } }];
-        socket.send(JSON.stringify({ type: 'thread', role: 'Malkuth' }));
+        socket.send(JSON.stringify({ type: 'thread', project: PROJECT, role: 'Malkuth' }));
       }
       live = {};
-      socket.send(JSON.stringify({ type: 'live', live }));
+      socket.send(JSON.stringify({ type: 'live', project: PROJECT, live }));
     },
   };
 }

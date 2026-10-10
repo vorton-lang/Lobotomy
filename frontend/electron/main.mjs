@@ -1,6 +1,6 @@
-// Electron's main process (frontend.md §1): starts the project's backend when it is not running,
-// keeps the app in the tray when the window closes, and stops the organization when the user
-// quits from the tray. It carries no business data.
+// Electron's main process (frontend.md §1): starts the backend, one for all projects, when it is
+// not running, keeps the app in the tray when the window closes, and stops the organization when
+// the user quits from the tray. It carries no business data.
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import { spawn } from 'node:child_process';
@@ -22,7 +22,8 @@ const hostDir =
 const backendExe =
   process.env.LOBOTOMYD ??
   path.join(here, '..', '..', 'backend', 'target', 'debug', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
-const guiConfigPath = path.join(hostDir, 'gui.json');
+// Where the running backend says it listens (frontend.md §1).
+const infoPath = path.join(hostDir, 'backend.json');
 
 let window = null;
 let tray = null;
@@ -34,11 +35,6 @@ function readJson(file) {
   } catch {
     return null;
   }
-}
-
-function projectDir() {
-  const dir = readJson(guiConfigPath)?.project;
-  return dir && fs.existsSync(dir) ? dir : null;
 }
 
 function reachable(port) {
@@ -57,22 +53,23 @@ function reachable(port) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Starts in progress, by project directory: callers at the same time share one (#16). */
-const starting = new Map();
+/** A start in progress: callers at the same time share it (#16). */
+let starting = null;
 
-/** The project's running backend, started if needed. It outlives this process. */
-function ensureBackend(dir) {
-  if (!starting.has(dir)) starting.set(dir, startBackend(dir).finally(() => starting.delete(dir)));
-  return starting.get(dir);
+/** The running backend, started if needed. It outlives this process. */
+function ensureBackend() {
+  starting ??= startBackend().finally(() => (starting = null));
+  return starting;
 }
 
-async function startBackend(dir) {
-  const infoPath = path.join(dir, 'backend.json');
+async function startBackend() {
   const info = readJson(infoPath);
   if (info && (await reachable(info.port))) return info;
   fs.rmSync(infoPath, { force: true });
-  const log = fs.openSync(path.join(dir, 'backend.log'), 'a');
-  const child = spawn(backendExe, ['--data-dir', dir, '--host-dir', hostDir], {
+  fs.mkdirSync(hostDir, { recursive: true });
+  const logPath = path.join(hostDir, 'backend.log');
+  const log = fs.openSync(logPath, 'a');
+  const child = spawn(backendExe, ['--host-dir', hostDir], {
     detached: true,
     stdio: ['ignore', log, log],
     windowsHide: true,
@@ -83,7 +80,7 @@ async function startBackend(dir) {
     const started = readJson(infoPath);
     if (started && (await reachable(started.port))) return started;
   }
-  throw new Error(`后端没有启动，见 ${path.join(dir, 'backend.log')}`);
+  throw new Error(`后端没有启动，见 ${logPath}`);
 }
 
 function token() {
@@ -91,17 +88,14 @@ function token() {
 }
 
 ipcMain.handle('lobotomy:connection', async () => {
-  const dir = projectDir();
-  if (!dir) return null;
-  const { port } = await ensureBackend(dir);
+  const { port } = await ensureBackend();
   return { url: `ws://127.0.0.1:${port}/gui`, token: token() };
 });
 
 // While the window reconnects: a backend that restarted listens on another port. One that is not
 // running is not started here; the user decides that by restarting the app.
 ipcMain.handle('lobotomy:find', async () => {
-  const dir = projectDir();
-  const info = dir && readJson(path.join(dir, 'backend.json'));
+  const info = readJson(infoPath);
   if (!info || !(await reachable(info.port))) return null;
   return { url: `ws://127.0.0.1:${info.port}/gui`, token: token() };
 });
@@ -109,17 +103,7 @@ ipcMain.handle('lobotomy:find', async () => {
 ipcMain.handle('lobotomy:chooseRepo', async () => {
   const result = await dialog.showOpenDialog(window, { title: '选择仓库', properties: ['openDirectory'] });
   if (result.canceled || result.filePaths.length === 0) return null;
-  const repo = result.filePaths[0];
-  let dir = projectDir();
-  if (!dir) {
-    const name = path.basename(repo).replace(/[^\w.-]/g, '_');
-    dir = path.join(hostDir, 'projects', `${name}-${Date.now().toString(36)}`);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.mkdirSync(hostDir, { recursive: true });
-    fs.writeFileSync(guiConfigPath, JSON.stringify({ project: dir }, null, 2));
-  }
-  await ensureBackend(dir);
-  return repo;
+  return result.filePaths[0];
 });
 
 ipcMain.on('lobotomy:attention', (_event, count) => {
@@ -137,8 +121,7 @@ ipcMain.on('lobotomy:openExternal', (_event, url) => {
 async function quit() {
   quitting = true;
   window?.setTitle('Lobotomy · 正在停止…');
-  const dir = projectDir();
-  const info = dir && readJson(path.join(dir, 'backend.json'));
+  const info = readJson(infoPath);
   if (info && (await reachable(info.port))) {
     try {
       await new Promise((resolve, reject) => {

@@ -13,8 +13,8 @@ Electron 渲染进程 ──WebSocket /gui──→ lobotomyd
 role 的 CLI（每个 turn 一个进程）──MCP /mcp/{project}/{token}──→ lobotomyd
 ```
 
-- 这是 M3 的结构：一个后端进程管理所有项目（data-model.md §10，frontend.md §1）。
-- M2 时的现状：一个后端进程只开一个项目，Electron 按 host 目录中 `gui.json` 记下的项目启动后端；MCP 地址是 `/mcp/{token}`。
+- 一个后端进程管理所有项目（data-model.md §10，frontend.md §1）。M3 第 1 步已实现这个结构；项目列表、归档等见 roadmap.md M3。
+- lobotomyd 中，`host.rs` 是跨项目的状态，`project.rs` 是一个项目实例，`projects.rs` 负责从登记中打开项目、新建项目、记下打不开的项目，以及停止时逐个停下项目。
 - role 的 CLI 每个 turn 启动一次，结束即退出（harness-adapter.md §1.1）。
 
 ## 2. 代码布局

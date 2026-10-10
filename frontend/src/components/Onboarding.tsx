@@ -1,22 +1,24 @@
-// First run: connect a repository (harness-adapter.md §4.3 "接入"). The repository must be clean
-// and on a branch; the backend lists what is wrong otherwise.
+// No open project: connect a repository as a new project (harness-adapter.md §4.3 "接入";
+// data-model.md §10.4). The repository must be clean and on a branch; the backend lists what is
+// wrong otherwise. Registered projects that could not be opened say why (data-model.md §10.3).
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { RequestFailed } from '../api/connection';
-import { backendUrl, inElectron } from '../bridge';
-import { call } from '../store';
+import type { ProjectStatus } from '../api/types';
+import { inElectron } from '../bridge';
+import { call, refreshHost } from '../store';
 
-export function Onboarding({ connected, onBackend }: { connected: boolean; onBackend: (url: string) => void }) {
+export function Onboarding({ connected, failed }: { connected: boolean; failed: ProjectStatus[] }) {
   const [path, setPath] = useState('');
-  const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const onboard = async (repo: string) => {
+  const create = async (repo: string) => {
     setBusy(true);
     setError(null);
     try {
-      await call('command', { name: 'onboard', args: { repo_path: repo } });
+      await call('command', { name: 'create_project', args: { repo_path: repo } });
+      await refreshHost();
     } catch (e) {
       setError(e instanceof RequestFailed ? e.remote.message : String(e));
     } finally {
@@ -24,36 +26,31 @@ export function Onboarding({ connected, onBackend }: { connected: boolean; onBac
     }
   };
 
-  // In Electron the backend of a new project starts after the folder is chosen; connect first.
-  useEffect(() => {
-    if (connected && pending) {
-      setPending(null);
-      void onboard(pending);
-    }
-  }, [connected, pending]);
-
   const choose = async () => {
     const repo = await window.lobotomy!.chooseRepo();
     if (!repo) return;
     setPath(repo);
-    setPending(repo);
-    const url = await backendUrl();
-    if (url) onBackend(url);
+    await create(repo);
   };
 
   return (
     <div className="onboarding">
       <h1>Lobotomy</h1>
       <p>选择一个本地 git 仓库。它需要检出在某个分支上，工作区干净。接入后，这个仓库成为集成版本的只读预览，Lobotomy 只会快进它的分支。</p>
+      {failed.map((p) => (
+        <p key={p.id} className="error">
+          项目「{p.name}」打不开：{p.error}
+        </p>
+      ))}
       {inElectron() ? (
-        <button className="primary" onClick={choose} disabled={busy || pending !== null}>
+        <button className="primary" onClick={choose} disabled={busy || !connected}>
           {path ? '重新选择仓库' : '选择仓库文件夹'}
         </button>
       ) : (
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            void onboard(path.trim());
+            void create(path.trim());
           }}
         >
           <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="仓库路径，例如 C:\code\project" aria-label="仓库路径" />
@@ -63,8 +60,8 @@ export function Onboarding({ connected, onBackend }: { connected: boolean; onBac
         </form>
       )}
       {path && inElectron() && <p className="muted">{path}</p>}
-      {(busy || pending) && <p className="muted">正在接入…</p>}
-      {!connected && !inElectron() && <p className="muted">正在连接后端…</p>}
+      {busy && <p className="muted">正在接入…</p>}
+      {!connected && <p className="muted">正在连接后端…</p>}
       {error && <p className="error">{error}</p>}
     </div>
   );

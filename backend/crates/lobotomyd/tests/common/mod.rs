@@ -1,6 +1,7 @@
 //! Helpers for the backend tests with a fake Codex (tests/fixtures/fake-codex.mjs, run by Node).
 #![allow(dead_code)]
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -8,9 +9,8 @@ use std::time::{Duration, Instant};
 
 use lobotomy_core::task::{CreateTask, Phase, StartAttempt, load_task};
 use lobotomy_core::turn::{Turn, TurnState, last_turn};
-use lobotomy_core::workspace::materializing;
+use lobotomy_core::workspace::{AlignIdleSlot, materializing};
 use lobotomy_core::{Caller, Db};
-use lobotomyd::Backend;
 use lobotomyd::host::{Cli, HarnessConfig, Host};
 use lobotomyd::project::Project;
 
@@ -77,29 +77,66 @@ pub fn user_repo(dir: &Path) -> PathBuf {
     repo
 }
 
-/// A project connected to the user's repository in `dir`; the same directory opens the same
-/// project again.
+/// The project connected to the user's repository in `dir`, with its data in `dir/project`,
+/// registered with the host in `dir/host` as the GUI's new project does. The same directory
+/// opens the same project again.
 pub async fn open_project(dir: &Path, harness: HarnessConfig) -> Arc<Project> {
     let host = Arc::new(Host::open(&host_dir(dir), harness).unwrap());
-    let project = Arc::new(Project::open(&dir.join("project"), host).unwrap());
-    if project.db.read(lobotomy_core::project::load_project).unwrap().is_none() {
-        lobotomyd::onboard::onboard(&project, &user_repo(dir)).await.unwrap();
+    let data = dir.join("project");
+    match project_id(&host, &data) {
+        Some(id) => Arc::new(Project::open(&id, &data, host).unwrap()),
+        None => lobotomyd::projects::create(&host, &user_repo(dir), Some(data)).await.unwrap(),
     }
-    project
+}
+
+/// The project of [`open_project`] with its idle slot written, so a backend started on it has
+/// nothing to do. Returns its host and id; the instance is closed.
+pub async fn idle_project(dir: &Path, harness: HarnessConfig) -> (Arc<Host>, String) {
+    let project = open_project(dir, harness).await;
+    project.db.execute(&Caller::Runtime, &AlignIdleSlot { role: "Malkuth".into() }).unwrap();
+    for ws in project.db.read(materializing).unwrap() {
+        lobotomyd::results::materialize(project.clone(), ws).await.unwrap();
+    }
+    (project.host.clone(), project.id.clone())
+}
+
+/// The id `data` is registered under.
+pub fn project_id(host: &Host, data: &Path) -> Option<String> {
+    let data = data.to_string_lossy();
+    host.db.projects().unwrap().into_iter().find(|p| p.data_dir == data).map(|p| p.id)
 }
 
 pub fn host_dir(dir: &Path) -> PathBuf {
     dir.join("host")
 }
 
-pub async fn start(dir: &Path) -> Backend {
+/// A backend running the project of [`open_project`].
+pub struct Started {
+    pub backend: lobotomyd::Backend,
+    pub project: Arc<Project>,
+    pub addr: SocketAddr,
+}
+
+impl Started {
+    pub async fn shutdown(self, grace: Duration) {
+        let Started { backend, project, .. } = self;
+        drop(project);
+        backend.shutdown(grace).await;
+    }
+}
+
+pub async fn start(dir: &Path) -> Started {
     start_with(dir, fake_codex()).await
 }
 
-pub async fn start_with(dir: &Path, harness: HarnessConfig) -> Backend {
+pub async fn start_with(dir: &Path, harness: HarnessConfig) -> Started {
     // Keep runtime errors in the failing test's captured output.
     let _ = tracing_subscriber::fmt().with_env_filter("lobotomyd=info").with_test_writer().with_ansi(false).try_init();
-    Backend::start(open_project(dir, harness).await, 0).await.unwrap()
+    let host = open_project(dir, harness).await.host.clone();
+    let backend = lobotomyd::Backend::start(host, 0).await.unwrap();
+    let id = project_id(&backend.host, &dir.join("project")).unwrap();
+    let project = backend.project(&id).expect("the project opened");
+    Started { addr: backend.addr, backend, project }
 }
 
 pub fn create_task(db: &Db, body: &str) -> String {
@@ -227,7 +264,7 @@ pub fn diag(dir: &Path) -> PathBuf {
 }
 
 /// Lets the scheduler run a few rounds.
-pub async fn settle(backend: &Backend) {
+pub async fn settle(backend: &Started) {
     backend.project.wake.notify_one();
     tokio::time::sleep(Duration::from_millis(1500)).await;
 }

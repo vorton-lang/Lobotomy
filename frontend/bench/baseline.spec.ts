@@ -177,7 +177,7 @@ test('the backend restarts and the GUI catches up', async ({ page }) => {
   const p = await open(page);
   await whenText(p, '.thread .row', NEWEST);
   const bench = info();
-  const backendFile = path.join(bench.root, 'project', 'backend.json');
+  const backendFile = path.join(bench.root, 'host', 'backend.json');
   const { pid } = JSON.parse(fs.readFileSync(backendFile, 'utf8')) as { pid: number };
   process.kill(pid);
   await expect(page.locator('.status.closed, .status.connecting')).toBeVisible();

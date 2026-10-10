@@ -27,6 +27,7 @@ pub fn onboard(db: Db) -> Db {
         &Caller::User,
         &Onboard {
             request_id: "onboard".into(),
+            project_id: "prj_test".into(),
             repo_path: "C:/repo".into(),
             branch: "main".into(),
             head: BASE.into(),

@@ -1,5 +1,6 @@
-//! The host: what all projects of this user share, outside any project (data-model.md §10).
-//! v1 keeps the quota domains and the harness configuration here.
+//! The host: what all projects of this user share, outside any project (data-model.md §10):
+//! the project registry, the quota domains, the harness configuration, the listening address and
+//! the GUI connections.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use lobotomy_core::quota::{CheckOutcome, Domain};
 use lobotomy_harness::event::Event;
 use lobotomy_harness::{Harness, Output, Permission, claude, codex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
+use tokio::sync::{Notify, broadcast};
 
 use crate::launch;
 
@@ -23,6 +25,12 @@ pub struct Host {
     /// What a GUI connection must present (frontend.md §1). Generated once, kept in
     /// `<dir>/gui-token`; never put into the environment of roles or checks.
     pub gui_token: String,
+    /// The MCP service's base URL, such as `http://127.0.0.1:4100`. Set once the server listens.
+    pub mcp_base: Mutex<String>,
+    /// What connected GUIs are told (see `gui`), as JSON text. Pushes about a project name it.
+    pub gui_push: broadcast::Sender<Arc<str>>,
+    /// The GUI asked the backend to stop (frontend.md §1).
+    pub shutdown_requested: Notify,
     /// Domains with a check in progress: at most one check per domain (data-model.md §8.4).
     checking: Mutex<HashSet<String>>,
 }
@@ -112,7 +120,27 @@ impl Host {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let db = HostDb::open(&dir.join("host.db")).context("opening the host database")?;
         let gui_token = gui_token(&dir.join("gui-token"))?;
-        Ok(Self { dir: dir.to_path_buf(), db, harness, gui_token, checking: Mutex::new(HashSet::new()) })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            db,
+            harness,
+            gui_token,
+            mcp_base: Mutex::new(String::new()),
+            gui_push: broadcast::channel(crate::gui::PUSH_BUFFER).0,
+            shutdown_requested: Notify::new(),
+            checking: Mutex::new(HashSet::new()),
+        })
+    }
+
+    /// Where new projects keep their data, one directory per project id (data-model.md §10.3).
+    pub fn projects_dir(&self) -> PathBuf {
+        self.dir.join("projects")
+    }
+
+    /// Tells the GUIs to take a new host snapshot: a host setting or the project list changed.
+    /// Neither has an event of its own.
+    pub fn changed(&self) {
+        let _ = self.gui_push.send(serde_json::json!({ "type": "host" }).to_string().into());
     }
 
     /// `%LOCALAPPDATA%\Lobotomy` on Windows; `$XDG_STATE_HOME/lobotomy` or

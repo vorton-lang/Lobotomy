@@ -151,10 +151,10 @@ async fn serve() -> Service {
     let shutdown = CancellationToken::new();
 
     let probe = Probe { ack: ack.clone(), calls: calls.clone(), tool_router: Probe::tool_router() };
-    let app =
-        mcp::router(move || probe.clone(), shutdown.clone()).layer(middleware::from_fn_with_state(log.clone(), record));
+    let app = mcp::router(move || probe.clone(), |_| Some(()), shutdown.clone())
+        .layer(middleware::from_fn_with_state(log.clone(), record));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/mcp/{token}", listener.local_addr().unwrap());
+    let url = format!("http://{}/mcp/contract/{token}", listener.local_addr().unwrap());
     let stop = shutdown.clone();
     tokio::spawn(async move {
         axum::serve(listener, app).with_graceful_shutdown(stop.cancelled_owned()).await.unwrap();

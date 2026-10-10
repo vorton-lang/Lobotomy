@@ -1,13 +1,16 @@
-//! The GUI's connection: one WebSocket per window (frontend.md §1, §3).
+//! The GUI's connection: one WebSocket per window, for all projects (frontend.md §1, §3).
 //!
 //! - The client sends requests `{id, method, params}` and gets `{id, result}` or
 //!   `{id, error: {code, message}}`. Commands carry the GUI's request id as their idempotency
 //!   key, so a repeated request does nothing twice.
-//! - The server pushes what changed, not the content: `{type: "events", events}` with the global
-//!   event log, `{type: "thread", role, seq}` when a thread has a new item, `{type: "live", live}`
-//!   with items of running turns, `{type: "host"}` when a host setting changed, `{type: "tick"}`
-//!   every 15 seconds, and `{type: "resync"}` when the client fell behind and must take a new
-//!   snapshot.
+//! - A request about a project names it: `params.project` for reads, and for `command`, whose
+//!   params are `{name, args, project}`. `host` reads the host snapshot; the host's commands
+//!   (`create_project`, `set_permission`, `quota_retry`, `shutdown`) need no project.
+//! - The server pushes what changed, not the content. About a project, with its id in `project`:
+//!   `{type: "events", events}` with its event log, `{type: "thread", role, seq}` when a thread
+//!   has a new item, `{type: "live", live}` with items of running turns. About the host:
+//!   `{type: "host"}` when a host setting or the project list changed, `{type: "tick"}` every 15
+//!   seconds, and `{type: "resync"}` when the client fell behind and must take new snapshots.
 //! - Error codes: a refusal's own code; `bad_request` for parameters that do not parse;
 //!   `internal` for anything else.
 //! - A connection needs the host's GUI token, and `Host` and `Origin` must be local.
@@ -39,7 +42,9 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::host::Host;
 use crate::project::Project;
+use crate::projects::Projects;
 use crate::runner::db;
 
 /// How often the event log and the live view are looked at for changes.
@@ -50,13 +55,29 @@ pub const PUSH_BUFFER: usize = 512;
 
 #[derive(Clone)]
 struct Service {
-    project: Arc<Project>,
+    host: Arc<Host>,
+    projects: Arc<Projects>,
     shutdown: CancellationToken,
     sessions: TaskTracker,
 }
 
-pub fn gui_router(project: Arc<Project>, shutdown: CancellationToken, sessions: TaskTracker) -> Router {
-    Router::new().route("/gui", get(upgrade)).with_state(Service { project, shutdown, sessions })
+impl Service {
+    /// The open project a request names.
+    fn project(&self, id: Option<&str>) -> anyhow::Result<Arc<Project>> {
+        let Some(id) = id else {
+            return Err(Error::rejected("bad_request", "the request names no project").into());
+        };
+        self.projects.get(id).ok_or_else(|| Error::rejected("unknown_project", format!("项目 {id} 没有打开")).into())
+    }
+}
+
+pub fn gui_router(
+    host: Arc<Host>,
+    projects: Arc<Projects>,
+    shutdown: CancellationToken,
+    sessions: TaskTracker,
+) -> Router {
+    Router::new().route("/gui", get(upgrade)).with_state(Service { host, projects, shutdown, sessions })
 }
 
 #[derive(Deserialize)]
@@ -70,20 +91,19 @@ async fn upgrade(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let Service { project, shutdown, sessions } = service;
-    if shutdown.is_cancelled() {
+    if service.shutdown.is_cancelled() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     if !local_host(&headers) || !local_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if !connect.token.as_deref().is_some_and(|t| same(t, &project.host.gui_token)) {
+    if !connect.token.as_deref().is_some_and(|t| same(t, &service.host.gui_token)) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     // Register before the upgrade callback runs: shutdown can race with the handshake.
-    let owner = sessions.token();
+    let owner = service.sessions.token();
     ws.on_upgrade(move |socket| async move {
-        session(socket, project, shutdown).await;
+        session(socket, service).await;
         drop(owner);
     })
 }
@@ -120,7 +140,8 @@ fn local_origin(headers: &HeaderMap) -> bool {
     origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")).is_some_and(is_local)
 }
 
-async fn session(socket: WebSocket, project: Arc<Project>, shutdown: CancellationToken) {
+async fn session(socket: WebSocket, service: Service) {
+    let shutdown = service.shutdown.clone();
     let (mut sink, mut stream) = socket.split();
     let (out, mut outbox) = mpsc::channel::<String>(256);
     let writer = tokio::spawn(async move {
@@ -131,7 +152,7 @@ async fn session(socket: WebSocket, project: Arc<Project>, shutdown: Cancellatio
         }
     });
     let mut requests = JoinSet::new();
-    let mut pushes = project.gui_push.subscribe();
+    let mut pushes = service.host.gui_push.subscribe();
     let mut tick = tokio::time::interval(TICK);
     let read = async {
         loop {
@@ -139,10 +160,10 @@ async fn session(socket: WebSocket, project: Arc<Project>, shutdown: Cancellatio
                 _ = requests.join_next(), if !requests.is_empty() => {}
                 incoming = stream.next() => match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        let (project, out) = (project.clone(), out.clone());
+                        let (service, out) = (service.clone(), out.clone());
                         // A request may take long (a quota check); others go on meanwhile.
                         requests.spawn(async move {
-                            let reply = respond(&project, text.as_str()).await;
+                            let reply = respond(&service, text.as_str()).await;
                             let _ = out.send(reply).await;
                         });
                     }
@@ -181,9 +202,9 @@ async fn session(socket: WebSocket, project: Arc<Project>, shutdown: Cancellatio
     while requests.join_next().await.is_some() {}
 }
 
-/// Pushes changes to every connected GUI: new entries of the event log and the live view of
-/// running turns. Stops with `shutdown`. It reads on the read connection, so polling never waits
-/// for a command, nor holds one up.
+/// Pushes a project's changes to every connected GUI: new entries of its event log and the live
+/// view of its running turns. Stops with `shutdown`. It reads on the read connection, so polling
+/// never waits for a command, nor holds one up.
 pub async fn watch(project: Arc<Project>, shutdown: CancellationToken) {
     let mut last_seq = db(&project, |db| db.read(last_event)).await.unwrap_or(0);
     let mut last_live = project.live_version.load(Ordering::Relaxed);
@@ -197,7 +218,7 @@ pub async fn watch(project: Arc<Project>, shutdown: CancellationToken) {
         match db(&project, move |db| db.read(|c| events_after(c, after))).await {
             Ok(events) if !events.is_empty() => {
                 last_seq = events.last().map_or(last_seq, |e| e.seq);
-                let _ = project.gui_push.send(json!({ "type": "events", "events": events }).to_string().into());
+                project.push(json!({ "type": "events", "events": events }));
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = format!("{e:#}"), "could not read the event log"),
@@ -207,8 +228,7 @@ pub async fn watch(project: Arc<Project>, shutdown: CancellationToken) {
         if let Ok(heads) = db(&project, |db| db.read(thread_heads)).await {
             for (role, seq) in &heads {
                 if last_items.get(role) != Some(seq) {
-                    let _ =
-                        project.gui_push.send(json!({ "type": "thread", "role": role, "seq": seq }).to_string().into());
+                    project.push(json!({ "type": "thread", "role": role, "seq": seq }));
                 }
             }
             last_items = heads;
@@ -217,7 +237,7 @@ pub async fn watch(project: Arc<Project>, shutdown: CancellationToken) {
         if version != last_live {
             last_live = version;
             let live = project.live.lock().unwrap().clone();
-            let _ = project.gui_push.send(json!({ "type": "live", "live": live }).to_string().into());
+            project.push(json!({ "type": "live", "live": live }));
         }
     }
 }
@@ -230,14 +250,14 @@ struct Request {
     params: Value,
 }
 
-async fn respond(project: &Arc<Project>, text: &str) -> String {
+async fn respond(service: &Service, text: &str) -> String {
     let request: Request = match serde_json::from_str(text) {
         Ok(request) => request,
         Err(e) => {
             return json!({ "id": null, "error": { "code": "bad_request", "message": e.to_string() } }).to_string();
         }
     };
-    match call(project, &request.method, request.params).await {
+    match call(service, &request.method, request.params).await {
         Ok(result) => json!({ "id": request.id, "result": result }).to_string(),
         Err(e) => {
             json!({ "id": request.id, "error": { "code": error_code(&e), "message": format!("{e:#}") } }).to_string()
@@ -254,12 +274,24 @@ fn error_code(e: &anyhow::Error) -> &'static str {
     if e.downcast_ref::<serde_json::Error>().is_some() { "bad_request" } else { "internal" }
 }
 
-/// `command` changes something; every other method reads.
-async fn call(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Result<Value> {
-    if method != "command" {
-        return view::answer(project, method, params).await;
+/// `command` changes something; every other method reads. `host` and the host's commands need no
+/// project.
+async fn call(service: &Service, method: &str, params: Value) -> anyhow::Result<Value> {
+    match method {
+        "host" => view::host_snapshot(&service.host, &service.projects).await,
+        "command" => {
+            let params: command::CommandParams = serde_json::from_value(params)?;
+            if let Some(result) = command::host(&service.host, &service.projects, &params).await {
+                return result;
+            }
+            let project = service.project(params.project.as_deref())?;
+            let result = command::run(&project, params).await?;
+            project.wake.notify_one();
+            Ok(result)
+        }
+        _ => {
+            let project = service.project(params.get("project").and_then(Value::as_str))?;
+            view::answer(&project, method, params).await
+        }
     }
-    let result = command::run(project, serde_json::from_value(params)?).await?;
-    project.wake.notify_one();
-    Ok(result)
 }

@@ -3,6 +3,7 @@
 // Rust tests; these check only what the GUI makes of them (AGENTS.md "测试的目的").
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
 import type { CommandRecord, Item, LogEvent, Message, Push, RoleView, Snapshot, TaskDetail, TaskView, Turn } from '../src/api/types';
+import { PROJECT, hostSnapshot } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
 
@@ -85,6 +86,7 @@ async function openMocked(page: Page, state: State) {
       let result: unknown;
       let changed: string | undefined;
       switch (method) {
+        case 'host': result = hostSnapshot(); break;
         case 'snapshot': result = snapshot(); break;
         case 'thread': result = threadPage(params.after, params.before); break;
         case 'task': result = state.details?.[params.task_id]; break;
@@ -104,7 +106,7 @@ async function openMocked(page: Page, state: State) {
       route.send(JSON.stringify({ id, result }));
       if (changed) {
         const events: LogEvent[] = [{ seq: ++seq, kind: 'task.updated', entity: changed, payload: { task_id: changed } }];
-        route.send(JSON.stringify({ type: 'events', events } satisfies Push));
+        route.send(JSON.stringify({ type: 'events', project: PROJECT, events } satisfies Push));
       }
     });
   });
@@ -146,7 +148,7 @@ test('back to the latest after reading back', async ({ page }) => {
     { id: 'i61', seq: 61, turn_id: 't2', command_id: 'cmd1', created_at: 61, kind: 'mcp_call', content: { server: 'lobotomy', tool: 'org_report', arguments: {}, result_text: null, error_text: null } },
     message(62, 't2', 'finished'),
   );
-  backend.push({ type: 'thread', role: 'Malkuth', seq: 62 });
+  backend.push({ type: 'thread', project: PROJECT, role: 'Malkuth', seq: 62 });
   await expect(latest).toHaveText('有新内容 · 回到最新 ↓');
   await expect(page.locator('.report.done')).toHaveCount(0);
 

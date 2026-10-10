@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use lobotomy_core::Error;
+use lobotomy_core::host::ProjectEntry;
 use lobotomy_core::quota::Domain;
 use lobotomy_core::view::{self, Attention, Overview, SearchQuery, ThreadQuery};
 use lobotomy_harness::{Harness, MCP_SERVER};
@@ -14,7 +15,9 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::host::Host;
 use crate::project::{LiveTurn, Project};
+use crate::projects::Projects;
 use crate::results;
 use crate::runner::db;
 
@@ -106,18 +109,70 @@ pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
     let overview = db(project, |db| db.read(|c| view::overview(c, MCP_SERVER))).await?;
     let used: BTreeSet<&str> = overview.roles.iter().map(|r| r.role.harness.as_str()).collect();
     let quota = used.into_iter().map(|harness| project.host.db.domain(harness)).collect::<Result<Vec<_>, _>>()?;
-    let attention = view::attention(&overview, &quota, &results::failures(project), |turn| {
-        matches!((turn.pid, turn.process_start), (Some(pid), Some(start))
-            if lobotomy_harness::process::is_running(pid as u32, start))
-    });
-    let harnesses = Harness::ALL
-        .iter()
-        .map(|&harness| {
-            Ok(HarnessView { harness: harness.as_str(), permission: project.host.permission(harness)?.as_str() })
-        })
-        .collect::<anyhow::Result<_>>()?;
+    let attention = attention(project, &overview, &quota);
+    let harnesses = harnesses(&project.host)?;
     let live = project.live.lock().unwrap().clone();
     Ok(Snapshot { overview, attention, quota, harnesses, live })
+}
+
+fn attention(project: &Project, overview: &Overview, quota: &[Domain]) -> Vec<Attention> {
+    view::attention(overview, quota, &results::failures(project), |turn| {
+        matches!((turn.pid, turn.process_start), (Some(pid), Some(start))
+            if lobotomy_harness::process::is_running(pid as u32, start))
+    })
+}
+
+fn harnesses(host: &Host) -> anyhow::Result<Vec<HarnessView>> {
+    Harness::ALL
+        .iter()
+        .map(|&harness| Ok(HarnessView { harness: harness.as_str(), permission: host.permission(harness)?.as_str() }))
+        .collect()
+}
+
+/// What the host shows across projects (frontend.md §2 "M3 的布局", §3 rule 8).
+#[derive(Serialize)]
+pub struct HostSnapshot {
+    projects: Vec<ProjectStatus>,
+    /// What waits for the user outside any project: the blocked quota domains, each once
+    /// (data-model.md §10.5).
+    attention: Vec<Attention>,
+    harnesses: Vec<HarnessView>,
+}
+
+#[derive(Serialize)]
+struct ProjectStatus {
+    #[serde(flatten)]
+    entry: ProjectEntry,
+    /// Why a running project could not be opened; it does not run (data-model.md §10.3).
+    error: Option<String>,
+    /// Its "等你决定", without the quota domains the host lists.
+    attention: Vec<Attention>,
+    /// A turn of it is running.
+    busy: bool,
+}
+
+pub async fn host_snapshot(host: &Arc<Host>, projects: &Projects) -> anyhow::Result<Value> {
+    let mut statuses = Vec::new();
+    for entry in host.db.projects()? {
+        let (mut attention, mut busy, mut error) = (Vec::new(), false, projects.failure(&entry.id));
+        if let Some(project) = projects.get(&entry.id) {
+            // One project's broken database does not hide the others.
+            match db(&project, |db| db.read(|c| view::overview(c, MCP_SERVER))).await {
+                Ok(overview) => attention = self::attention(&project, &overview, &[]),
+                Err(e) => error = Some(format!("{e:#}")),
+            }
+            busy = !project.running.lock().unwrap().is_empty();
+        }
+        statuses.push(ProjectStatus { error, entry, attention, busy });
+    }
+    let attention = Harness::ALL
+        .iter()
+        .map(|harness| host.db.domain(harness.as_str()))
+        .filter(|domain| domain.as_ref().map_or(true, Domain::is_blocked))
+        .map(|domain| Ok(Attention::Quota { domain: domain? }))
+        .collect::<anyhow::Result<_>>()?;
+    let snapshot = HostSnapshot { projects: statuses, attention, harnesses: harnesses(host)? };
+    Ok(serde_json::to_value(snapshot)?)
 }
 
 /// The files directly in `dir` and their total size; a directory that does not exist is empty.

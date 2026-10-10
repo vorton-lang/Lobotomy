@@ -1,16 +1,18 @@
 //! The MCP service that roles call (harness-adapter.md §2).
 //!
 //! rmcp types stay inside this module (architecture.md §3). Each turn gets its own URL,
-//! `/mcp/{token}`, so the URL identifies the caller (data-model.md §3.1) and the service keeps
-//! no MCP sessions. Stateless serving also covers clients that still use the `initialize`
-//! handshake of the protocol versions before 2026-07-28: rmcp answers each of their requests on
-//! its own.
+//! `/mcp/{project}/{token}`, so the URL identifies the caller (data-model.md §3.1, §10.3) and the
+//! service keeps no MCP sessions. Stateless serving also covers clients that still use the
+//! `initialize` handshake of the protocol versions before 2026-07-28: rmcp answers each of their
+//! requests on its own.
 
 use std::sync::Arc;
 
 use axum::{
     Router,
     extract::{Path, Request},
+    http::StatusCode,
+    response::IntoResponse,
     routing::any,
 };
 use lobotomy_core::Caller;
@@ -32,16 +34,24 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::project::Project;
+use crate::projects::Projects;
 
 /// The per-turn token from the request URL. The router puts it into the HTTP request extensions
 /// before rmcp parses the request.
 #[derive(Debug, Clone)]
 pub struct TurnToken(pub String);
 
-/// The HTTP routes of the MCP service. rmcp calls `make_handler` once per request.
-pub fn router<S>(make_handler: impl Fn() -> S + Send + Sync + 'static, shutdown: CancellationToken) -> Router
+/// The HTTP routes of the MCP service. `locate` finds what the URL's project segment names, which
+/// goes into the request extensions with the token; an unknown project gets 404. rmcp calls
+/// `make_handler` once per request.
+pub fn router<S, P>(
+    make_handler: impl Fn() -> S + Send + Sync + 'static,
+    locate: impl Fn(&str) -> Option<P> + Clone + Send + Sync + 'static,
+    shutdown: CancellationToken,
+) -> Router
 where
     S: ServerHandler + Send + 'static,
+    P: Clone + Send + Sync + 'static,
 {
     let service = StreamableHttpService::new(
         move || Ok(make_handler()),
@@ -49,12 +59,16 @@ where
         config(shutdown),
     );
     Router::new().route(
-        "/mcp/{token}",
-        any(move |Path(token): Path<String>, mut request: Request| {
-            let service = service.clone();
+        "/mcp/{project}/{token}",
+        any(move |Path((project, token)): Path<(String, String)>, mut request: Request| {
+            let (service, found) = (service.clone(), locate(&project));
             async move {
+                let Some(found) = found else {
+                    return StatusCode::NOT_FOUND.into_response();
+                };
                 request.extensions_mut().insert(TurnToken(token));
-                service.handle(request).await
+                request.extensions_mut().insert(found);
+                service.handle(request).await.into_response()
             }
         }),
     )
@@ -76,24 +90,36 @@ pub fn turn_token(context: &RequestContext<RoleServer>) -> Option<&str> {
     parts.extensions.get::<TurnToken>().map(|token| token.0.as_str())
 }
 
-/// The MCP routes with the tools roles call.
-pub fn org_router(project: Arc<Project>, shutdown: CancellationToken) -> Router {
-    router(move || OrgTools::new(project.clone()), shutdown)
+/// The project the request's URL names. `None` when the request did not come through
+/// [`org_router`].
+fn request_project(context: &RequestContext<RoleServer>) -> Option<Arc<Project>> {
+    let parts = context.extensions.get::<http::request::Parts>()?;
+    parts.extensions.get::<Arc<Project>>().cloned()
+}
+
+/// The MCP routes with the tools roles call, for every open project.
+pub fn org_router(projects: Arc<Projects>, shutdown: CancellationToken) -> Router {
+    router(OrgTools::new, move |id| projects.get(id), shutdown)
 }
 
 /// The tools of the executor (roles-and-tasks.md §4). Every call becomes a command of the turn
-/// that owns the token; the reply names the command record, so the transcript item can refer to
-/// it instead of repeating it (data-model.md §7.2).
+/// that owns the token, in the project the URL names; the reply names the command record, so the
+/// transcript item can refer to it instead of repeating it (data-model.md §7.2).
 #[derive(Clone)]
 pub struct OrgTools {
-    project: Arc<Project>,
     #[expect(dead_code, reason = "the tool_handler macro builds its own router")]
     tool_router: ToolRouter<Self>,
 }
 
 impl OrgTools {
-    pub fn new(project: Arc<Project>) -> Self {
-        Self { project, tool_router: Self::tool_router() }
+    pub fn new() -> Self {
+        Self { tool_router: Self::tool_router() }
+    }
+}
+
+impl Default for OrgTools {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -140,8 +166,12 @@ impl OrgTools {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let token = turn_token(&context).map(str::to_owned);
-        let project = self.project.clone();
+        let Some(project) = request_project(&context) else {
+            return Err(ErrorData::internal_error("the URL names no open project", None));
+        };
+        let db_project = project.clone();
         let outcome = tokio::task::spawn_blocking(move || {
+            let project = db_project;
             let token =
                 token.ok_or_else(|| lobotomy_core::Error::rejected("no_token", "the URL carries no turn token"))?;
             let turn = project
@@ -176,7 +206,7 @@ impl OrgTools {
             ),
             Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(format!("汇报被拒绝：{e}"))])),
         };
-        self.project.wake.notify_one();
+        project.wake.notify_one();
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
@@ -260,8 +290,9 @@ mod tests {
         }
     }
 
+    /// Serves project `p` only.
     fn echo_router() -> Router {
-        router(|| Echo { tool_router: Echo::tool_router() }, CancellationToken::new())
+        router(|| Echo { tool_router: Echo::tool_router() }, |id| (id == "p").then_some(()), CancellationToken::new())
     }
 
     struct Reply {
@@ -274,7 +305,7 @@ mod tests {
     async fn send(token: &str, method: &str, headers: &[(&str, &str)], body: Option<Value>) -> Reply {
         let mut request = http::Request::builder()
             .method(method)
-            .uri(format!("/mcp/{token}"))
+            .uri(format!("/mcp/p/{token}"))
             .header(header::HOST, "127.0.0.1:4000")
             .header(header::ACCEPT, "application/json, text/event-stream")
             .header(header::CONTENT_TYPE, "application/json");
@@ -350,11 +381,27 @@ mod tests {
         assert_eq!(reply.status, StatusCode::METHOD_NOT_ALLOWED);
     }
 
+    /// The URL names the project before the token; a project this backend does not run has no
+    /// tools (data-model.md §10.3).
+    #[tokio::test]
+    async fn an_unknown_project_is_not_found() {
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/mcp/other/tok-e")
+            .header(header::HOST, "127.0.0.1:4000")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let response = echo_router().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     #[tokio::test]
     async fn foreign_host_is_rejected() {
         let request = http::Request::builder()
             .method("POST")
-            .uri("/mcp/tok-d")
+            .uri("/mcp/p/tok-d")
             .header(header::HOST, "attacker.example")
             .header(header::ACCEPT, "application/json, text/event-stream")
             .header(header::CONTENT_TYPE, "application/json")

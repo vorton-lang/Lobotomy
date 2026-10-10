@@ -1,4 +1,4 @@
-// Each test gets a backend of its own (#16): a fresh host directory, a fresh project connected to a
+// Each test gets a backend of its own (#16): a fresh host directory with one project connected to a
 // fresh git repository, and the fake Codex. Starting one takes a fraction of a second, and no test
 // depends on what an earlier one left. The backend is built beforehand with
 // `cargo build -p lobotomyd`.
@@ -37,14 +37,13 @@ async function startBackend(): Promise<Backend & { stop: () => Promise<void> }> 
   git(repo, 'add', '.');
   git(repo, 'commit', '--quiet', '-m', 'initial');
 
-  const data = path.join(root, 'project');
   const host = path.join(root, 'host');
   const log = fs.openSync(path.join(root, 'backend.log'), 'a');
-  const child = spawn(exe, ['--data-dir', data, '--host-dir', host, '--repo', repo], {
+  const child = spawn(exe, ['--host-dir', host, '--repo', repo], {
     env: { ...process.env, LOBOTOMY_TEST_CHECK_GATE: path.join(root, 'check-gate'), LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]), LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]) },
     stdio: ['ignore', log, log],
   });
-  const info = path.join(data, 'backend.json');
+  const info = path.join(host, 'backend.json');
   for (let i = 0; i < 200 && !fs.existsSync(info) && child.exitCode === null; i++) await new Promise((r) => setTimeout(r, 50));
   if (!fs.existsSync(info)) throw new Error(`the backend did not start: ${fs.readFileSync(path.join(root, 'backend.log'), 'utf8')}`);
   const { port } = JSON.parse(fs.readFileSync(info, 'utf8')) as { port: number };

@@ -37,16 +37,25 @@ struct Client {
     socket: Socket,
     next_id: u64,
     events: Events,
+    /// The project its requests are about, unless they name one.
+    project: String,
 }
 
 impl Client {
-    async fn connect(backend: &lobotomyd::Backend) -> Client {
-        let url = format!("ws://{}/gui?token={}", backend.addr, backend.project.host.gui_token);
-        let (socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-        Client { socket, next_id: 0, events: Events::default() }
+    async fn connect(backend: &Started) -> Client {
+        Client::open(backend.addr, &backend.project.host.gui_token, &backend.project.id).await
     }
 
-    async fn call(&mut self, method: &str, params: Value) -> Result<Value, Value> {
+    async fn open(addr: std::net::SocketAddr, token: &str, project: &str) -> Client {
+        let url = format!("ws://{addr}/gui?token={token}");
+        let (socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        Client { socket, next_id: 0, events: Events::default(), project: project.to_owned() }
+    }
+
+    async fn call(&mut self, method: &str, mut params: Value) -> Result<Value, Value> {
+        if method != "host" && params.get("project").is_none() {
+            params["project"] = self.project.clone().into();
+        }
         self.next_id += 1;
         let id = self.next_id;
         let request = json!({ "id": id, "method": method, "params": params });
@@ -243,8 +252,7 @@ async fn a_client_that_falls_behind_is_told_to_resync() {
     // The test's runtime has one thread: the session cannot forward any of these until the test
     // awaits, so it falls behind by more than the buffer holds.
     for seq in 0..lobotomyd::gui::PUSH_BUFFER + 100 {
-        let push = json!({ "type": "thread", "role": "Malkuth", "seq": seq }).to_string();
-        let _ = backend.project.gui_push.send(push.into());
+        backend.project.push(json!({ "type": "thread", "role": "Malkuth", "seq": seq }));
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
@@ -257,13 +265,52 @@ async fn a_client_that_falls_behind_is_told_to_resync() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// One backend runs every registered project. A project whose data directory is lost fails alone
+/// and says why; a new project joins while the backend runs, and a repository that has an
+/// unarchived project is refused (data-model.md §10.3, §10.4).
+#[tokio::test]
+async fn one_backend_runs_the_projects_and_a_lost_one_fails_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (host, first) = idle_project(dir.path(), fake_codex()).await;
+    let lost_data = dir.path().join("lost");
+    let lost = lobotomyd::projects::create(&host, &user_repo(&dir.path().join("b")), Some(lost_data.clone()))
+        .await
+        .unwrap()
+        .id
+        .clone();
+    std::fs::remove_dir_all(&lost_data).unwrap();
+
+    let backend = lobotomyd::Backend::start(host.clone(), 0).await.unwrap();
+    let mut gui = Client::open(backend.addr, &host.gui_token, &first).await;
+    let snapshot = gui.call("host", json!({})).await.unwrap();
+    let projects = snapshot["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 2, "{snapshot}");
+    assert_eq!((projects[0]["id"].as_str(), &projects[0]["error"]), (Some(first.as_str()), &Value::Null));
+    assert_eq!(projects[0]["name"], "repo");
+    assert_eq!(projects[1]["id"], lost.as_str());
+    assert!(projects[1]["error"].as_str().unwrap().contains("数据目录不存在"), "{snapshot}");
+    gui.call("snapshot", json!({})).await.unwrap();
+    let refused = gui.call("snapshot", json!({ "project": lost })).await.unwrap_err();
+    assert_eq!(refused["code"], "unknown_project");
+
+    let third = user_repo(&dir.path().join("c"));
+    let created = gui.command("create_project", json!({ "repo_path": third })).await.unwrap();
+    assert_eq!(created["state"], "running");
+    gui.call("snapshot", json!({ "project": created["id"] })).await.unwrap();
+    let again = gui.command("create_project", json!({ "repo_path": third })).await.unwrap_err();
+    assert_eq!(again["code"], "repo_in_use");
+    let snapshot = gui.call("host", json!({})).await.unwrap();
+    assert_eq!(snapshot["projects"].as_array().unwrap().len(), 3, "{snapshot}");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 #[tokio::test]
 async fn the_gui_can_stop_the_backend() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let mut gui = Client::connect(&backend).await;
-    let project = backend.project.clone();
-    let stopped = tokio::spawn(async move { project.shutdown_requested.notified().await });
+    let host = backend.project.host.clone();
+    let stopped = tokio::spawn(async move { host.shutdown_requested.notified().await });
     tokio::task::yield_now().await;
     gui.command("shutdown", json!({})).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), stopped).await.unwrap().unwrap();
@@ -274,23 +321,24 @@ async fn the_gui_can_stop_the_backend() {
 /// including clients that never send a close frame.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_releases_the_project_with_connected_gui_clients() {
-    use lobotomyd::{host::Host, project::Project};
+    use lobotomyd::project::Project;
     use std::sync::Arc;
 
     let dir = tempfile::tempdir().unwrap();
-    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
+    let (host, id) = idle_project(dir.path(), fake_codex()).await;
     let data = dir.path().join("project");
     for _ in 0..20 {
-        let backend =
-            lobotomyd::Backend::start(Arc::new(Project::open(&data, host.clone()).unwrap()), 0).await.unwrap();
-        let first = Client::connect(&backend).await;
-        let second = Client::connect(&backend).await;
-        let project = Arc::downgrade(&backend.project);
+        let backend = lobotomyd::Backend::start(host.clone(), 0).await.unwrap();
+        let mut first = Client::open(backend.addr, &host.gui_token, &id).await;
+        let second = Client::open(backend.addr, &host.gui_token, &id).await;
+        // A request about the project went through the connection.
+        first.call("snapshot", json!({})).await.unwrap();
+        let project = Arc::downgrade(&backend.project(&id).unwrap());
         backend.shutdown(Duration::from_secs(5)).await;
         // Keep both client sockets alive. Returning from shutdown, not closing a client or
         // retrying the lock, must establish that the backend released the project.
         assert_eq!(project.strong_count(), 0, "project owners remain after shutdown");
-        drop(Project::open(&data, host.clone()).unwrap());
+        drop(Project::open(&id, &data, host.clone()).unwrap());
         drop((first, second));
     }
 }
@@ -302,15 +350,13 @@ async fn shutdown_drains_an_admitted_gui_request_after_disconnect() {
     admitted_gui_request_shutdown(false).await;
 }
 
+/// Shutdown does not wait past its grace period for a request; the request still finishes.
 #[tokio::test]
-async fn shutdown_leaves_a_timed_out_gui_request_and_its_lock_alive() {
+async fn shutdown_leaves_a_timed_out_gui_request_running() {
     admitted_gui_request_shutdown(true).await;
 }
 
 async fn admitted_gui_request_shutdown(expires: bool) {
-    use lobotomyd::{host::Host, project::Project};
-    use std::sync::Arc;
-
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("gated-probe.mjs");
     std::fs::write(
@@ -326,39 +372,30 @@ async fn admitted_gui_request_shutdown(expires: bool) {
     .unwrap();
     let mut harness = fake_codex();
     harness.codex.command = vec!["node".into(), script.to_string_lossy().into_owned()];
-    let host = Arc::new(Host::open(&host_dir(dir.path()), harness).unwrap());
+    let (host, id) = idle_project(dir.path(), harness).await;
     host.db.block("codex", None, "test quota block", 1).unwrap();
-    let data = dir.path().join("project");
-    let backend = lobotomyd::Backend::start(Arc::new(Project::open(&data, host.clone()).unwrap()), 0).await.unwrap();
-    let mut client = Client::connect(&backend).await;
+    let backend = lobotomyd::Backend::start(host.clone(), 0).await.unwrap();
+    let mut client = Client::open(backend.addr, &host.gui_token, &id).await;
+    // A host command: the domain belongs to no project.
     let request =
         json!({"id": 1, "method": "command", "params": {"name": "quota_retry", "args": {"harness": "codex"}}});
     client.socket.send(Message::Text(request.to_string().into())).await.unwrap();
     let probe = host.dir.join("probe");
     wait_for("the admitted quota request", || probe.join("started").exists().then_some(())).await;
     drop(client);
-    let project = Arc::downgrade(&backend.project);
     let grace = if expires { Duration::from_millis(10) } else { Duration::from_secs(5) };
     let mut shutdown = tokio::spawn(backend.shutdown(grace));
-    let finishing = if expires {
+    if expires {
         tokio::time::timeout(Duration::from_secs(5), &mut shutdown).await.unwrap().unwrap();
-        assert!(Project::open(&data, host.clone()).is_err());
-        assert!(host.db.domain("codex").unwrap().is_blocked());
-        Some(project.upgrade().expect("the admitted request owns the project"))
+        assert!(host.db.domain("codex").unwrap().is_blocked(), "the check has not finished");
     } else {
         // A bounded negative assertion: the gate is the cause of waiting, not a slow process.
         assert!(tokio::time::timeout(Duration::from_millis(100), &mut shutdown).await.is_err());
-        None
-    };
+    }
     std::fs::write(probe.join("release"), "").unwrap();
-    if let Some(project) = finishing {
-        wait_for("the admitted request to release its project", || (Arc::strong_count(&project) == 1).then_some(()))
-            .await;
-        // Synchronize the final destructor rather than observing a zero weak count.
-        drop(project);
-    } else {
+    if !expires {
         tokio::time::timeout(Duration::from_secs(5), shutdown).await.unwrap().unwrap();
     }
-    drop(Project::open(&data, host.clone()).unwrap());
-    assert!(!host.db.domain("codex").unwrap().is_blocked());
+    // The request finishes and records the check, though its client left.
+    wait_for("the check to be recorded", || (!host.db.domain("codex").unwrap().is_blocked()).then_some(())).await;
 }

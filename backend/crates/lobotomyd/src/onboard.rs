@@ -22,8 +22,7 @@ pub async fn onboard(project: &Arc<Project>, repo_path: &Path) -> anyhow::Result
         )
         .into());
     }
-    let repo_path = std::fs::canonicalize(repo_path).with_context(|| format!("opening {}", repo_path.display()))?;
-    let repo_path = dunce(&repo_path);
+    let repo_path = self::repo_path(repo_path)?;
     let store = project.store.clone();
     let path = repo_path.clone();
     let (branch, head, author) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
@@ -56,6 +55,7 @@ pub async fn onboard(project: &Arc<Project>, repo_path: &Path) -> anyhow::Result
     .await??;
     let cmd = Onboard {
         request_id: new_id("req"),
+        project_id: project.id.clone(),
         repo_path: repo_path.to_string_lossy().into_owned(),
         branch,
         head,
@@ -65,6 +65,13 @@ pub async fn onboard(project: &Arc<Project>, repo_path: &Path) -> anyhow::Result
     db(project, move |db| db.execute(&Caller::User, &cmd)).await?;
     project.wake.notify_one();
     Ok(())
+}
+
+/// The repository's path as the project records it: canonical, so one repository has one path
+/// whichever way the user named it (data-model.md §10.3).
+pub fn repo_path(path: &Path) -> anyhow::Result<std::path::PathBuf> {
+    let canonical = std::fs::canonicalize(path).with_context(|| format!("opening {}", path.display()))?;
+    Ok(dunce(&canonical))
 }
 
 /// `canonicalize` on Windows gives a `\\?\` path, which git does not take everywhere.

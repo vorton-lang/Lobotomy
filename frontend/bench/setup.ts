@@ -58,7 +58,7 @@ export async function waitForFile(file: string, ms = 20_000) {
   throw new Error(`${file} did not appear`);
 }
 
-/** A minimal client of the GUI service, for building the data set. */
+/** A minimal client of the GUI service, for building the data set. Requests are about the host's one project. */
 async function client(url: string) {
   const socket = new WebSocket(url);
   await new Promise((resolve, reject) => {
@@ -72,19 +72,22 @@ async function client(url: string) {
     pending.get(message.id)?.(message);
     pending.delete(message.id);
   };
-  const call = <T>(method: string, params: unknown = {}) =>
+  const send = <T>(method: string, params: Record<string, unknown>) =>
     new Promise<T>((resolve, reject) => {
       const id = next++;
       pending.set(id, (m) => (m.error ? reject(new Error(m.error.message)) : resolve(m.result as T)));
       socket.send(JSON.stringify({ id, method, params }));
     });
+  const { projects } = await send<{ projects: { id: string }[] }>('host', {});
+  const project = projects[0].id;
+  const call = <T>(method: string, params: Record<string, unknown> = {}) => send<T>(method, { ...params, project });
   return { call, close: () => socket.close() };
 }
 
 type Snapshot = { attention: { kind: string; turn_id?: string }[] };
 
 /** Waits until the executor's turn after `previous` has ended and been captured. */
-async function turnDone(call: <T>(m: string, p?: unknown) => Promise<T>, previous: string | null): Promise<string> {
+async function turnDone(call: <T>(m: string, p?: Record<string, unknown>) => Promise<T>, previous: string | null): Promise<string> {
   for (const end = Date.now() + 120_000; Date.now() < end; ) {
     const snapshot = await call<Snapshot>('snapshot');
     const stalled = snapshot.attention.find((a) => a.kind === 'stalled');
@@ -107,16 +110,15 @@ export default async function setup() {
   git(repo, 'add', '.');
   git(repo, 'commit', '--quiet', '-m', 'initial');
 
-  const data = path.join(root, 'project');
   const host = path.join(root, 'host');
   const port = await freePort();
   const backend = {
     exe,
-    args: ['--data-dir', data, '--host-dir', host, '--repo', repo, '--port', String(port)],
+    args: ['--host-dir', host, '--repo', repo, '--port', String(port)],
     env: { LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]), LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]) },
   };
   startBackend({ backend, root });
-  await waitForFile(path.join(data, 'backend.json'));
+  await waitForFile(path.join(host, 'backend.json'));
   const token = fs.readFileSync(path.join(host, 'gui-token'), 'utf8').trim();
 
   const started = Date.now();
@@ -137,7 +139,7 @@ export default async function setup() {
   fs.writeFileSync(infoFile, JSON.stringify(info));
 
   return async () => {
-    const running = JSON.parse(fs.readFileSync(path.join(data, 'backend.json'), 'utf8')) as { pid: number };
+    const running = JSON.parse(fs.readFileSync(path.join(host, 'backend.json'), 'utf8')) as { pid: number };
     try {
       process.kill(running.pid);
     } catch {

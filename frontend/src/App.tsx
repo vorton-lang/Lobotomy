@@ -16,6 +16,8 @@ export function App() {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
   // Why the backend could not be reached at start, such as a backend that did not start (#16).
   const [failed, setFailed] = useState<string | null>(null);
+  const host = useStore((s) => s.host);
+  const project = useStore((s) => s.project);
   const snapshot = useStore((s) => s.snapshot);
   const selectedTask = useStore((s) => s.selectedTask);
   const toasts = useStore((s) => s.toasts);
@@ -67,9 +69,11 @@ export function App() {
     );
   }
   if (url === undefined) return <div className="splash">正在连接…</div>;
-  if (url === null || !snapshot?.project) {
-    return <Onboarding connected={url !== null && snapshot !== null} onBackend={setUrl} />;
+  // No open project yet: connect a repository. Projects that could not be opened say why.
+  if (url === null || host === null || project === null) {
+    return <Onboarding connected={host !== null} failed={host?.projects.filter((p) => p.error !== null) ?? []} />;
   }
+  if (!snapshot?.project) return <div className="splash">正在连接…</div>;
   return (
     <div className="app">
       <TopBar />

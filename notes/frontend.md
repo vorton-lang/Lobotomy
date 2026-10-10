@@ -26,7 +26,7 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
   3. 关闭窗口时，窗口退到托盘，所有项目照常运行。
   4. 托盘菜单"退出 Lobotomy"按正常停止进行（harness-adapter.md §1.8）：中断所有项目正在运行的 turn，等它们退出，然后后端退出。退出 GUI 就是停止组织。
 
-  **语义更新**（M3，用户确认，2026-10-10）：原来每个项目一个后端，`backend.json` 在项目的数据目录中。现在一个后端管理所有项目（data-model.md §10）。M2 时的实现仍是原来的方式（§7.10）。
+  **语义更新**（M3，用户确认，2026-10-10）：原来每个项目一个后端，`backend.json` 在项目的数据目录中。现在一个后端管理所有项目（data-model.md §10），M3 第 1 步已按此实现（§7.10）。
 - **GUI 接口的访问控制**（用户确认，2026-10-04）：
   - 后端只监听 `127.0.0.1`。每个 GUI 连接都要带 token。token 在第一次启动时生成，存放在 host 目录（`%LOCALAPPDATA%\Lobotomy\gui-token`），Electron 从那里读取；它不进入 role 与检查命令的环境。
   - 后端校验 `Host` 与 `Origin`，挡住网页的连接。允许的 Origin：没有 Origin、`file://`、本机地址（开发时的 Vite）。
@@ -154,15 +154,19 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
 - 节流间隔、缓冲上限、分页大小、头尾预览行数等参数，待基线测量后确定。
 - 布局细节待原型验证。
 
-## 7. 现在的实现（M1–M2）
+## 7. 现在的实现（M1–M2，M3 第 1 步）
 
-本节写现在的样子。按时间的修改记录在 git 历史和相关 issue 中。M3 的多项目还没有实现：现在一个后端进程只开一个项目。
+本节写现在的样子。按时间的修改记录在 git 历史和相关 issue 中。M3 第 1 步已完成：一个后端进程打开 host 中登记的所有项目，协议带项目 ID。界面仍只显示一个项目：第一个能打开的项目（roadmap.md M3）。
 
 ### 7.1 接口
 
 后端在 `/gui` 提供 WebSocket，与 MCP 共用一个本机端口。`backend/crates/lobotomyd/src/gui/` 分三部分：连接与推送（`mod.rs`）、读（`view.rs`）、命令（`command.rs`）。读到的内容由 `lobotomy_core::view` 中带类型的结构体给出，前端的 `api/types.ts` 与之对应。读走单独的只读连接（data-model.md §1）。
 
-- 请求 `{id, method, params}`，方法有：
+- 请求 `{id, method, params}`。关于项目的请求在 `params.project` 中写明项目 ID；`command` 的参数是 `{name, args, project}`。前端的 `call` 自动带上窗口正在显示的项目。
+- host 范围的方法不需要项目：
+  - `host`：host 的快照：各项目的登记、打不开的原因、"等你决定"（不含额度受阻）、是否有 turn 在运行；额度受阻的条目；各 harness 的权限模式；
+  - `command` 中的 `create_project`（新建项目，data-model.md §10.4）、`quota_retry`、`set_permission`、`shutdown`。额度重试后，所有项目的调度器都被唤醒。
+- 项目范围的方法：
   - `snapshot`：快照，含"等你决定"的条目；
   - `thread`：对话分页，`before` 往前翻，`after` 补上新内容；
   - `search`：搜索一个 role 的整条 Thread（§7.11）；
@@ -170,12 +174,11 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
   - `diff`：两个提交之间的文件改动；
   - `blob`：取文件库中的全文；
   - `disk_usage`：保留的原始输出占用的空间（§7.8）；
-  - `command`：用户命令（data-model.md §9.2），以及接入、中断、终止残留进程、额度重试、重试出错的工作、修改 harness 的权限模式、停止后端。
+  - `command`：用户命令（data-model.md §9.2），以及中断、终止残留进程、重试出错的工作、试用。
+- 请求写的项目没有打开时，后端以 `unknown_project` 拒绝。
 - 推送：
-  - 事件日志的新条目；
-  - Thread 有新 item 时的序号；
-  - 运行中 turn 的 item；
-  - 本机设置改变时的 `host`，客户端重新取快照；
+  - 关于项目的推送带 `project`：事件日志的新条目、Thread 有新 item 时的序号、运行中 turn 的 item。窗口只处理正在显示的项目的推送；
+  - 本机设置或项目列表改变时的 `host`，客户端重新取 host 的快照和项目的快照；
   - 每 15 秒一次心跳；
   - 客户端落后时的 `resync`。
 - 错误带代码：命令被拒时是拒绝的代码；参数无法解析时是 `bad_request`；其他是 `internal`（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
@@ -255,9 +258,9 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
 
 ### 7.10 Electron
 
-`frontend/electron/`。现在一个后端只开一个项目：项目目录记在 host 目录的 `gui.json` 中，`backend.json` 在项目的数据目录中。M3 改为 §1 的方式。
+`frontend/electron/`。按 §1 的方式：主进程启动 `lobotomyd --host-dir <host 目录>`，一个后端管理所有项目；`backend.json` 和 `backend.log` 在 host 目录中。没有项目时，窗口显示接入页：在 Electron 中选择仓库文件夹，在浏览器中输入路径，然后发 `create_project`。登记了、但打不开的项目，接入页列出名称和原因。
 
-- 同一项目同时只启动一次后端。后端没能启动时，窗口显示原因和「重试」，不一直停在"正在连接…"（#16）。
+- 后端同时只启动一次。后端没能启动时，窗口显示原因和「重试」，不一直停在"正在连接…"（#16）。
 - 后端每次启动都换一个端口。窗口断线后，每次重连前都向主进程询问后端当前的地址：主进程读取 `backend.json` 并确认能连上。如果后端没有在运行，主进程不会启动它；要重新启动，由用户重开应用。
 - 退出时，主进程向后端发停止请求，只认这个请求自己的回复。
 
@@ -308,7 +311,8 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
     - 流式 Markdown 的补齐、完成后的切换与中断；
     - 试用的启动、停止和旧轮标记。
   - 只在后端测试中覆盖、e2e 不再重测的：turn 失败后继续、受管 Codex 改用自动审批、切到 Claude 走到验收、任务外的改动建成任务、回答后问题离开"等你决定"。
-- 后端的 GUI 接口测试（`lobotomyd/tests/gui.rs`）覆盖 e2e 不便检查的协议细节：连接要求 token 与本机 Origin、turn 的 MCP token 不出现在 GUI 收到的数据中、被拒命令的错误码、搜索的范围与顺序、权限模式的设置、没有报告的 turn 把任务交给用户、落后的客户端收到 `resync`、停止后端。
+- 后端的 GUI 接口测试（`lobotomyd/tests/gui.rs`）覆盖 e2e 不便检查的协议细节：连接要求 token 与本机 Origin、turn 的 MCP token 不出现在 GUI 收到的数据中、被拒命令的错误码、搜索的范围与顺序、权限模式的设置、没有报告的 turn 把任务交给用户、落后的客户端收到 `resync`、停止后端；以及多项目：一个后端打开所有项目，数据目录丢失的项目单独出错并说明原因，运行中新建项目，已有未归档项目的仓库被拒。
+- 模拟后端的 e2e 共用 `e2e/mocked.ts`：它回答 `host`，给出一个打开的项目。
 - Electron 外壳测试共用 Electron 的单实例锁，在同一个 worker 中按顺序运行。覆盖：没有项目时的接入、启动后端、退出时停止组织、后端换端口重启后窗口自动重连。
 - Electron 被强制结束后后端仍在运行：手动验证过（Windows）。
 - 性能基线测量后端重启后 GUI 恢复的时间（perf-baseline.md）。

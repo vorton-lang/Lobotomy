@@ -374,12 +374,43 @@ async fn a_cli_that_exits_with_only_stderr_fails_with_its_error() {
 async fn a_second_backend_cannot_open_the_same_data_directory() {
     let dir = tempfile::tempdir().unwrap();
     let first = open_project(dir.path(), fake_codex()).await;
+    let id = first.id.clone();
     let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
     let data = dir.path().join("project");
-    let refused = Project::open(&data, host.clone()).err().expect("the second open fails");
+    let refused = Project::open(&id, &data, host.clone()).err().expect("the second open fails");
     assert!(refused.to_string().contains("another backend is already running"), "{refused:#}");
     drop(first);
-    Project::open(&data, host).unwrap();
+    Project::open(&id, &data, host).unwrap();
+}
+
+/// Before multi-project, `gui.json` in the host directory named the one project. The first start
+/// after the upgrade registers it where it is and opens it (data-model.md §10.7).
+#[tokio::test]
+async fn a_project_from_before_multi_project_is_registered_and_opened() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
+    let data = dir.path().join("old-project");
+    let id = {
+        let project = Arc::new(Project::open("prj_old", &data, host.clone()).unwrap());
+        lobotomyd::onboard::onboard(&project, &user_repo(dir.path())).await.unwrap();
+        create_task(&project.db, "上次的任务");
+        project.id.clone()
+    };
+    let config = serde_json::json!({ "project": data });
+    std::fs::write(host.dir.join("gui.json"), config.to_string()).unwrap();
+
+    let backend = lobotomyd::Backend::start(host.clone(), 0).await.unwrap();
+    let project = backend.project(&id).expect("the old project is open");
+    assert_eq!(project.data_dir, data, "its data directory stays where it was");
+    let entry = host.db.project(&id).unwrap().unwrap();
+    assert_eq!(
+        (entry.name.as_str(), entry.repo_path.as_str()),
+        ("repo", project.db.read(load_project).unwrap().unwrap().repo_path.as_str())
+    );
+    let tasks: i64 = project.db.read(|c| Ok(c.query_row("SELECT COUNT(*) FROM task", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(tasks, 1, "its data is kept");
+    drop(project);
+    backend.shutdown(Duration::from_secs(5)).await;
 }
 
 /// An idle backend with no GUI clients, turns or store jobs releases its project on shutdown,
@@ -387,14 +418,14 @@ async fn a_second_backend_cannot_open_the_same_data_directory() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_idle_backend_releases_its_project_lock_on_shutdown() {
     let dir = tempfile::tempdir().unwrap();
-    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
+    let (host, id) = idle_project(dir.path(), fake_codex()).await;
     let data = dir.path().join("project");
     for _ in 0..20 {
-        let project = Arc::new(Project::open(&data, host.clone()).unwrap());
-        let backend = lobotomyd::Backend::start(project, 0).await.unwrap();
+        let backend = lobotomyd::Backend::start(host.clone(), 0).await.unwrap();
+        assert!(backend.project(&id).is_some(), "the project opened");
         backend.shutdown(Duration::from_secs(5)).await;
         // No sleep or lock retry: shutdown returning is the synchronization point.
-        drop(Project::open(&data, host.clone()).unwrap());
+        drop(Project::open(&id, &data, host.clone()).unwrap());
     }
 }
 
@@ -954,9 +985,8 @@ async fn a_session_limit_on_claude_blocks_its_domain_only() {
 #[tokio::test]
 async fn shutdown_leaves_a_running_store_job_and_its_lock_alive() {
     let dir = tempfile::tempdir().unwrap();
-    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
-    let data = dir.path().join("project");
-    let backend = lobotomyd::Backend::start(Arc::new(Project::open(&data, host.clone()).unwrap()), 0).await.unwrap();
+    let backend = start(dir.path()).await;
+    let (host, id, data) = (backend.project.host.clone(), backend.project.id.clone(), dir.path().join("project"));
     let project = Arc::downgrade(&backend.project);
     let (release, gate) = tokio::sync::oneshot::channel();
     let (finished, done) = tokio::sync::oneshot::channel();
@@ -967,14 +997,14 @@ async fn shutdown_leaves_a_running_store_job_and_its_lock_alive() {
     });
     // A grace longer than the timeout: returning in time shows shutdown did not wait for the job.
     tokio::time::timeout(Duration::from_secs(5), backend.shutdown(Duration::from_secs(30))).await.unwrap();
-    assert!(Project::open(&data, host.clone()).is_err());
+    assert!(Project::open(&id, &data, host.clone()).is_err());
     let project = project.upgrade().expect("unfinished store work owns the project");
     release.send(()).unwrap();
     done.await.unwrap();
     wait_for("the store job to release its project", || (Arc::strong_count(&project) == 1).then_some(())).await;
     // Drop the last owner here: observing a zero weak count alone can race its destructor.
     drop(project);
-    drop(Project::open(&data, host).unwrap());
+    drop(Project::open(&id, &data, host).unwrap());
 }
 
 /// A trial runs the executor's command in a copy of the candidate, in a terminal of its own. Stop

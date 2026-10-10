@@ -7,6 +7,7 @@ import { Connection, RequestFailed, type Status } from './api/connection';
 import { findBackend } from './bridge';
 import type {
   CommandRecord,
+  HostSnapshot,
   Item,
   LiveTurn,
   Message,
@@ -52,6 +53,10 @@ export interface SearchState {
 
 interface State {
   status: Status;
+  /** The projects and what the host shows across them (frontend.md §3 rule 8). */
+  host: HostSnapshot | null;
+  /** The project the window shows; requests about a project name it. */
+  project: string | null;
   snapshot: Snapshot | null;
   live: Record<string, LiveTurn>;
   thread: ThreadState;
@@ -86,6 +91,8 @@ const emptyThread = (role: string): ThreadState => ({
 
 export const useStore = create<State>(() => ({
   status: 'connecting',
+  host: null,
+  project: null,
   snapshot: null,
   live: {},
   thread: emptyThread(''),
@@ -112,9 +119,15 @@ export function connect(url: string) {
   connection.start();
 }
 
-export function call<T = unknown>(method: string, params: unknown = {}): Promise<T> {
+/**
+ * A request to the backend. Requests about the project name the one the window shows, unless they
+ * name one themselves; `host` and the host's commands need none (frontend.md §3 rule 8).
+ */
+export function call<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   if (!connection) return Promise.reject(new Error('not connected'));
-  return connection.call<T>(method, params);
+  const project = useStore.getState().project;
+  const scoped = method === 'host' || project === null || 'project' in params ? params : { ...params, project };
+  return connection.call<T>(method, scoped);
 }
 
 let nextToast = 1;
@@ -182,12 +195,52 @@ export function setPermission(harness: string, permission: Permission) {
   return act('set_permission', { harness, permission });
 }
 
-/** The snapshot names the main role, whose thread loads next. */
+/** The host snapshot says which project to show; its snapshot names the main role. */
 async function reloadAll() {
+  await loadHost();
+  await reloadProject();
+}
+
+async function reloadProject() {
+  if (!useStore.getState().project) return;
   await loadSnapshot();
   await loadNewestThread();
   const selected = useStore.getState().selectedTask;
   if (selected) await loadTaskDetail(selected);
+}
+
+/**
+ * The project the window shows: the current one while it stays open, else the first open one.
+ * The window shows one project until the project list comes (roadmap M3 step 2).
+ */
+export function chooseProject(host: HostSnapshot, current: string | null): string | null {
+  const open = host.projects.filter((p) => p.state === 'running' && p.error === null);
+  return open.find((p) => p.id === current)?.id ?? open[0]?.id ?? null;
+}
+
+let hostRequest = 0;
+let appliedHost = 0;
+
+/** Takes a new host snapshot. Returns whether the window now shows another project. */
+async function loadHost(): Promise<boolean> {
+  const request = ++hostRequest;
+  const host = await call<HostSnapshot>('host');
+  if (request < appliedHost) return false;
+  appliedHost = request;
+  const current = useStore.getState().project;
+  const project = chooseProject(host, current);
+  if (project === current) {
+    useStore.setState({ host });
+    return false;
+  }
+  useStore.setState({ host, project, snapshot: null, live: {}, thread: emptyThread(''), selectedTask: null, taskDetail: null, search: null });
+  return true;
+}
+
+/** After the project list or a host setting changed. Host settings show in the project snapshot. */
+export async function refreshHost() {
+  if (await loadHost()) await reloadProject();
+  else if (useStore.getState().project) await loadSnapshot();
 }
 
 // Refreshes can overlap: a host setting has no event sequence to order its snapshots.
@@ -346,6 +399,7 @@ function debounced(f: () => Promise<void>, ms: number) {
 }
 
 const refreshSnapshot = debounced(loadSnapshot, 120);
+const refreshHostSoon = debounced(refreshHost, 120);
 const refreshThread = debounced(catchUp, 80);
 const refreshTurnStates = debounced(refreshTurns, 120);
 const refreshDetail = debounced(async () => {
@@ -354,6 +408,8 @@ const refreshDetail = debounced(async () => {
 }, 150);
 
 function onPush(push: Push) {
+  // Another project's changes do not show in this window yet (roadmap M3 step 2).
+  if ('project' in push && push.project !== useStore.getState().project) return;
   switch (push.type) {
     case 'events': {
       refreshSnapshot();
@@ -370,9 +426,9 @@ function onPush(push: Push) {
     case 'live':
       useStore.setState({ live: push.live });
       break;
-    // A host setting changed; it has no event of its own.
+    // A host setting or the project list changed; neither has an event of its own.
     case 'host':
-      refreshSnapshot();
+      refreshHostSoon();
       break;
     case 'resync':
       void reloadAll();

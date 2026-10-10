@@ -3,11 +3,11 @@
 // `?backend=ws://127.0.0.1:PORT/gui&token=…`.
 
 export interface LobotomyBridge {
-  /** The running backend of the current project, or `null` when there is no project yet. */
+  /** The running backend, started if it is not running (frontend.md §1). */
   connection(): Promise<{ url: string; token: string } | null>;
-  /** The project's backend if one is running now; never starts one. */
+  /** The backend if it is running now; never starts one. */
   find(): Promise<{ url: string; token: string } | null>;
-  /** Lets the user pick a repository, then starts a backend for a new project. */
+  /** Lets the user pick a repository folder. */
   chooseRepo(): Promise<string | null>;
   setAttention(count: number): void;
   openExternal(url: string): void;

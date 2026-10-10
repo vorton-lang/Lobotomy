@@ -2,6 +2,7 @@
 // terminal in the test runner. Backend process/candidate isolation has its own Rust tests.
 import { expect, test, type Page } from '@playwright/test';
 import type { Attempt, Capture, Snapshot, TaskDetail, TrialView } from '../src/api/types';
+import { hostSnapshot } from './mocked';
 
 const candidate1 = '11111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const candidate2 = '22222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -65,6 +66,7 @@ async function openTrial(page: Page, initial = detail()) {
       try {
         let result: unknown;
         switch (request.method) {
+          case 'host': result = hostSnapshot(); break;
           case 'snapshot': result = {
             seq: 1,
             project: { id: 'project1', repo_path: '/project', branch: 'main', author_name: 'Test', author_email: 'test@example.com', integration: 'base0000', integration_rev: 1, previewed: 'base0000' },

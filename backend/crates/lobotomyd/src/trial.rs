@@ -131,18 +131,8 @@ fn copy_root(project: &Project, trial_id: &str) -> PathBuf {
 /// Deletes a trial's copy. Processes just killed may hold it for a moment, so this tries for a few
 /// seconds; a copy still in use after that goes at the next startup (results::sweep).
 async fn discard(root: PathBuf) {
-    const TRIES: u32 = 20;
-    for tried in 1..=TRIES {
-        let dir = root.clone();
-        match tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await {
-            Ok(Err(e)) if e.kind() != std::io::ErrorKind::NotFound && tried == TRIES => {
-                tracing::warn!(path = %root.display(), error = %e, "could not delete a trial copy; startup deletes it");
-            }
-            Ok(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            }
-            _ => return,
-        }
+    if let Err(e) = crate::projects::remove_dir(root.clone()).await {
+        tracing::warn!(path = %root.display(), error = %e, "could not delete a trial copy; startup deletes it");
     }
 }
 
@@ -275,7 +265,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let project = Arc::new(Project::open(&temp.path().join("project"), host).unwrap());
+        let project = Arc::new(Project::open("prj_trial", &temp.path().join("project"), host).unwrap());
         crate::onboard::onboard(&project, &repo).await.unwrap();
         let task = project
             .db

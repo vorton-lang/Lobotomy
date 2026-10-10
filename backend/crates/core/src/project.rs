@@ -7,7 +7,6 @@ use serde_json::json;
 
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
-use crate::id::new_id;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Project {
@@ -47,6 +46,14 @@ pub fn load_project(conn: &Connection) -> Result<Option<Project>> {
 
 pub fn require_project(conn: &Connection) -> Result<Project> {
     load_project(conn)?.ok_or_else(|| Error::rejected("not_onboarded", "no repository has been connected yet"))
+}
+
+/// The project a database file belongs to, read without migrating or locking it. The backend
+/// registers a project from before multi-project with it (data-model.md §10.7); another backend
+/// may still have it open.
+pub fn peek_project(path: &std::path::Path) -> Result<Option<Project>> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    load_project(&conn)
 }
 
 /// A check command, run in order in the verification site; it passes with exit code 0
@@ -104,10 +111,11 @@ pub fn config_version(conn: &Connection, version: i64) -> Result<ProjectConfig> 
 
 /// Connects the user's repository (harness-adapter.md §4.3 "接入"). The runtime has already
 /// checked the repository and copied `head` into the private store; this records it as the first
-/// integration version.
+/// integration version. The project's id comes from its registration (data-model.md §10.3).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Onboard {
     pub request_id: String,
+    pub project_id: String,
     pub repo_path: String,
     pub branch: String,
     pub head: String,
@@ -128,7 +136,7 @@ impl Command for Onboard {
         if let Some(project) = load_project(cx.tx)? {
             return Err(Error::rejected("already_onboarded", format!("connected to {}", project.repo_path)));
         }
-        let id = new_id("prj");
+        let id = &self.project_id;
         cx.tx.execute(
             "INSERT INTO project (id, repo_path, branch, author_name, author_email, integration, integration_rev,
                                   previewed, created_at)
@@ -141,7 +149,7 @@ impl Command for Onboard {
         )?;
         cx.emit(
             "project.onboarded",
-            &id,
+            id,
             json!({ "repo_path": self.repo_path, "branch": self.branch, "head": self.head }),
         )?;
         Ok(())
