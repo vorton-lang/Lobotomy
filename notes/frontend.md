@@ -117,8 +117,8 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
 | 用途 | 选型 | 说明 |
 |---|---|---|
 | 对话列表虚拟化 | virtua | LobeHub 从 Virtuoso 迁到 virtua，Cherry Studio、Kilo 也在用。备选 TanStack Virtual ≥3.17.6 的 chat 模式 |
-| Markdown（含流式文本） | 当前实现把每次更新的完整文本交给 worker 中的 marked 解析，并缓存完成的结果；超过大小上限时显示纯文本 | 当前实现不保存逐块解析状态，也不补齐未闭合语法；逐块解析与补齐未闭合语法仍是待实现的设计目标 |
-| 代码高亮 | Shiki 放在 worker 中，用 JS 正则引擎，加 LRU 缓存与输入大小上限 | 流式中的代码块先显示纯文本，围栏闭合后再高亮。反例：Kilo 同步调用 Shiki 卡住主线程 2.3 秒 |
+| Markdown（含流式文本） | 当前实现把每次更新的完整文本交给 worker 中的 marked 解析；live item 先用 remend 临时补齐未闭合语法，完成的 item 按原文解析；超过大小上限时显示纯文本 | 缓存区分流式与完成状态，补齐内容不写回源文本。当前实现不保存逐块解析状态，逐块解析仍是待实现的设计目标 |
+| 代码高亮 | Shiki 放在 worker 中，用 JS 正则引擎，加 LRU 缓存与输入大小上限 | 当前实现也会高亮未闭合围栏内的代码；流式代码块先显示纯文本、围栏闭合后再高亮仍是设计目标。反例：Kilo 同步调用 Shiki 卡住主线程 2.3 秒 |
 | 超大单条输出 | 对话中只显示头尾若干行，加"在查看器中打开"；查看器是只读的 CodeMirror 6，ANSI 颜色在 worker 中转为装饰 | CodeMirror 官方演示可流畅加载数百万行 |
 | diff | @pierre/diffs | 自带 worker 池与虚拟化；opencode、t3code 在用 |
 | 搜索 | 自建 Ctrl+F：后端在 SQLite 中搜索整条 Thread，前端加载到匹配所在的分页，滚动过去，用 CSS Custom Highlight API 标出。原设计是在 worker 中搜索前端的数据模型；前端只有已加载的分页，所以改由后端搜索（**语义更新**，2026-10-04） | 虚拟化后浏览器查找搜不到未挂载的内容。Claude 桌面应用也自带查找窗口和对话搜索 worker |

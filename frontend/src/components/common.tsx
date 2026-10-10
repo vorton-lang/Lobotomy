@@ -8,8 +8,8 @@ import { useMarkdown } from '../markdown/render';
 import { call, toast } from '../store';
 
 /** Rendered Markdown; plain text until the worker has it ready. */
-export function Markdown({ text }: { text: string }) {
-  const html = useMarkdown(text);
+export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const html = useMarkdown(text, streaming);
   if (html === null) return <div className="markdown plain">{text}</div>;
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
