@@ -144,16 +144,16 @@ fn unstarted(kind: FailureKind, message: String) -> Option<Failure> {
 }
 
 async fn end(project: &Arc<Project>, turn_id: &str, outcome: Outcome, failure: Option<Failure>) -> anyhow::Result<()> {
-    let quota = failure.clone().filter(|f| f.kind == FailureKind::Quota);
-    runtime(project, EndTurn { turn_id: turn_id.to_owned(), outcome, failure }).await?;
-    // A quota rejection blocks the whole domain, not just this role (data-model.md §8.3).
-    if let Some(failure) = quota {
+    // A quota rejection blocks the whole domain, not just this role (data-model.md §8.3). Block it
+    // before the turn ends: whoever sees the ended turn, the scheduler included, sees the block.
+    if let Some(failure) = failure.as_ref().filter(|f| f.kind == FailureKind::Quota) {
         let id = turn_id.to_owned();
         let harness = db(project, move |db| db.read(|c| load_turn(c, &id))).await?.harness;
         if project.host.db.block(&harness, failure.resets_at, &failure.message, now_ms())? {
             tracing::warn!(harness, message = failure.message, "quota domain blocked");
         }
     }
+    runtime(project, EndTurn { turn_id: turn_id.to_owned(), outcome, failure }).await?;
     Ok(())
 }
 
