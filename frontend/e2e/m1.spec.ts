@@ -18,6 +18,8 @@ test('scrolling up on a slow machine loads every older page', async ({ page, bac
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
   await page.reload();
   await expect(page.getByText('已连接')).toBeVisible();
+  // The socket opens before the thread loads; scroll the list, not its loading placeholder.
+  await expect(page.locator('.thread-area .thread')).toBeVisible();
   const reached = await page.evaluate(
     (marker) =>
       new Promise<boolean>((resolve) => {
