@@ -113,10 +113,20 @@ Yesod    审查：实现 Codex adapter               进行中
 
 | 使用方 | 工具 |
 |---|---|
-| Manager | `assign(role, title, done_when, quote, context?, ledger?, interpretation, links?)`；`send_to_role(..., task_id?)` 追加说明；`accept(task_id)`；`send_back(task_id, items: [id], reason)`；`abandon(task_id, reason)` |
+| Manager | `assign(role, title, done_when, actions, stop_when, quote, context?, ledger?, interpretation, links?)`；`send_to_role(..., task_id?)` 追加说明；`accept(task_id)`；`send_back(task_id, items: [id], reason)`；`abandon(task_id, reason)` |
 | 执行者 | `org_report(title, body, status: progress \| blocked \| done, blocked_on?, trial?)`；`trial` 是 done 时可选的试用建议，只保存，不执行（frontend.md §8） |
 | Reviewer | `org_report(..., verdict: approve \| changes_requested, items)` |
 | 用户（GUI） | Manager 的全部控制流命令（建任务、验收、退回、放弃），以及调整队列、重开、暂停某个 role；立即生效，Manager 只收到通知 |
+
+**`assign` 必须写明允许的动作和停止条件**（用户确认，2026-10-11）：
+
+- `actions`：执行者可以做哪些事，从"只读调查""改文档""改代码"中选，可以多选。
+- `stop_when`：这项工作的范围或预算，例如"得到第一个可用结果就汇报""最多测量一次"。它与 `done_when` 分开：完成条件说成果要满足什么；停止条件说什么时候停下来汇报，不再扩大。
+- 这一条约束 Manager 派的任务。用户在 GUI 中直接建任务不受影响。
+- 依据：Manager 的面试中，候选把对用户意图的推断当成授权，并把插进来的小事扩大成没有边界的调查（[Ember manager-interviews 第二轮](https://github.com/vorton-lang/Ember/tree/main/manager-interviews/2026-10-11-official-cli-round2)）。写在 Manager 的指令里只能提高概率；做成必填字段，每次派活都必须先写清这两项。
+- 待决问题：
+  - 运行时怎样检查 `actions`，例如只读调查的任务产生了文件改动时怎么处理；
+  - `stop_when` 由运行时执行到什么程度：只展示给执行者和用户，还是按时间或 turn 数计量。
 
 ## 5. 未决
 

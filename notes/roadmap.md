@@ -58,7 +58,9 @@
 
 - 全局只有一个 Angela，放在 host（data-model.md §10.6）。她能看到所有未归档的项目，工具都带项目 ID。
 - 主区是与 Angela 的对话。各项目中 Malkuth 的对话、任务面板和"等你决定"保留为直接入口。Angela 引用的成果，点开就是任务面板中同一个 diff 与试用视图（见"原则"）。
-- 工具就是 GUI 已有的命令（建任务、发消息、读任务与成果、`ask_user`），加上原话转发与附件引用（[manager-actions.md](manager-actions.md) §1、§2）。
+- 工具就是 GUI 已有的命令（建任务、发消息、读任务与成果、`ask_user`），加上原话转发与附件引用（[manager-actions.md](manager-actions.md) §1、§2）。派活的 `assign` 必须写明允许的动作和停止条件（[roles-and-tasks.md](roles-and-tasks.md) §4）。
+- Angela 的指令（Manager 的思维方式、决定下一步的程序、派活与上行过滤的规则、难例）在 [Ember](https://github.com/vorton-lang/Ember/tree/main/manager-interviews) 中按面试迭代，成熟后作为 Lobotomy 的角色指令。
+- 先不定 Angela 用哪个模型（用户判断，2026-10-11）。依据：两轮面试中，候选之间没有本质差距，起作用的主要是指令、环境、记忆和约束；这些搭完整后，不同模型的操作空间会收束。以后再找默认取向正好对齐这个岗位的模型。
 - 记录（ledger）只做最小的一版：目标、决定、约束带用户原话作依据，推测单独存放；开新会话时投影进首轮输入，也可经 MCP 查询（manager-actions.md §3）。
 - 用户直接操作项目后，Angela 从事件中得知变化，不要求用户重述，也不重复旧操作（#23 §3）。
 - 收到模糊反馈时，Angela 不把理解的负担推回给用户，先在已授权范围内调查或做小实验，再带结果回来（#21）。这是对她行为的检查项，不是要统计的指标。
