@@ -71,14 +71,18 @@ pub fn thread_page(conn: &Connection, q: &ThreadQuery) -> Result<ThreadPage> {
          WHERE t.role = ?1 AND (?2 IS NULL OR i.seq < ?2) AND (?3 IS NULL OR i.seq > ?3)
          ORDER BY i.seq {order} LIMIT ?4"
     ))?;
-    let rows = stmt.query_map(params![q.role, q.before, q.after, limit], |r| {
-        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, String>(4)?, r.get(5)?, r.get(6)?))
+    let rows = stmt.query_and_then(params![q.role, q.before, q.after, limit], |r| {
+        Ok(Item {
+            id: r.get(0)?,
+            seq: r.get(1)?,
+            turn_id: r.get(2)?,
+            kind: r.get(3)?,
+            content: serde_json::from_str(&r.get::<_, String>(4)?)?,
+            command_id: r.get(5)?,
+            created_at: r.get(6)?,
+        })
     })?;
-    let mut items = Vec::new();
-    for row in rows {
-        let (id, seq, turn_id, kind, content, command_id, created_at) = row?;
-        items.push(Item { id, seq, turn_id, kind, content: serde_json::from_str(&content)?, command_id, created_at });
-    }
+    let mut items = rows.collect::<Result<Vec<_>>>()?;
     if q.after.is_none() {
         items.reverse();
     }

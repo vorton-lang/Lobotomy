@@ -96,9 +96,8 @@ const TURN_SELECT: &str = "SELECT t.id, t.role, s.harness, t.native_session_id, 
        t.registered_at, t.started_at, t.ended_at, t.workspace_id
      FROM turn t JOIN native_session s ON s.id = t.native_session_id";
 
-/// A turn and its failure, still JSON text: parsing it needs the crate's error.
-fn turn_from_row(r: &Row<'_>) -> rusqlite::Result<(Turn, Option<String>)> {
-    let turn = Turn {
+fn turn_from_row(r: &Row<'_>) -> Result<Turn> {
+    Ok(Turn {
         id: r.get(0)?,
         role: r.get(1)?,
         harness: r.get(2)?,
@@ -110,7 +109,7 @@ fn turn_from_row(r: &Row<'_>) -> rusqlite::Result<(Turn, Option<String>)> {
         input: r.get(8)?,
         state: r.get(9)?,
         outcome: r.get(10)?,
-        failure: None,
+        failure: r.get::<_, Option<String>>(11)?.as_deref().map(serde_json::from_str).transpose()?,
         pid: r.get(12)?,
         process_start: r.get(13)?,
         done_at: r.get(14)?,
@@ -118,19 +117,12 @@ fn turn_from_row(r: &Row<'_>) -> rusqlite::Result<(Turn, Option<String>)> {
         started_at: r.get(16)?,
         ended_at: r.get(17)?,
         workspace_id: r.get(18)?,
-    };
-    Ok((turn, r.get(11)?))
+    })
 }
 
 fn query_turns(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Turn>> {
     let mut stmt = conn.prepare(&format!("{TURN_SELECT} {filter}"))?;
-    let rows = stmt.query_map(args, turn_from_row)?;
-    rows.map(|row| {
-        let (mut turn, failure) = row?;
-        turn.failure = failure.as_deref().map(serde_json::from_str).transpose()?;
-        Ok(turn)
-    })
-    .collect()
+    stmt.query_and_then(args, turn_from_row)?.collect()
 }
 
 pub fn load_turn(conn: &Connection, id: &str) -> Result<Turn> {
