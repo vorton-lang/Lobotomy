@@ -177,7 +177,7 @@ Lobotomy 不恢复被中断的执行现场。
 
 后端退出时，操作系统默认不保证后端启动的 harness 进程一起退出。#7 建议加一层很薄的平台启动适配，把后端与它启动的 harness 进程树绑定。
 
-**语义更新**（用户确认，2026-10-10，[#46](https://github.com/vorton-lang/Lobotomy/issues/46)）：Lobotomy 负责自己启动的进程树。Windows 用 Job Object；Linux 用独立进程组，覆盖 CLI 和仍在这个进程组中的普通子进程。主动脱离进程组或另建 session 的进程不在 Linux 的保证范围内。harness 仍先走自己的中断与清理路径。
+**语义更新**（用户确认，2026-10-11；问题见 [#46](https://github.com/vorton-lang/Lobotomy/issues/46)）：原来是"harness 负责自己的子进程，Lobotomy 不扩展成自建的进程树监管器"。现在 Lobotomy 负责自己启动的进程树。依据：两个平台行为一致，Windows 的 Job Object 本来就结束整个进程树；归档超时时结束 CLI 的进程树（data-model.md §10.4）也需要这一点。Windows 用 Job Object；Linux 用独立进程组，覆盖 CLI 和仍在这个进程组中的普通子进程。主动脱离进程组或另建 session 的进程不在 Linux 的保证范围内。harness 仍先走自己的中断与清理路径。
 
 | 平台 | 做法 | 效果 | 实现时注意 |
 |---|---|---|---|
