@@ -120,26 +120,26 @@ impl Workspace {
     /// captured are removed; ignored files, such as build caches, stay. Creates the directory on
     /// first use.
     ///
-    /// The caller makes sure the old content was captured first. On [`Error::Blocked`] or an
-    /// interruption the directory does not equal the target; the caller moves it aside and
-    /// materializes a fresh generation.
+    /// The caller makes sure the old content was captured first. On [`Error::Blocked`] the
+    /// directory does not equal the target; the caller moves it aside and materializes a fresh
+    /// generation. Interrupted git setup and checkouts can be retried in place.
     pub fn materialize(&self, store: &Store, target: &str, head: &str, branch: &str, scope: &Scope) -> Result<()> {
-        let fresh = !self.path.join(".git").exists();
-        if fresh {
+        let git = Git::at(&self.path);
+        if !self.path.join(".git").exists() {
             fs::create_dir_all(&self.path).map_err(Error::io(&self.path))?;
-            let git = Git::at(&self.path);
             git.run(&["init", "--quiet", "--initial-branch", branch])?;
-            // Line endings follow the repository (see `eol`). git in the slot must apply the
-            // repository's `.gitattributes` and nothing from the machine, or the agent's `git
-            // diff` and `git checkout` would disagree with what is captured.
-            git.run(&["config", "core.autocrlf", "false"])?;
-            git.run(&["config", "core.eol", "lf"])?;
-            let no_attributes = self.path.join(".git").join("info").join("no-global-attributes");
-            git.run(&["config", "core.attributesFile", &path_arg(&no_attributes)])?;
-            let alternates = self.path.join(".git").join("objects").join("info").join("alternates");
-            let objects = store.git_dir().join("objects");
-            fs::write(&alternates, format!("{}\n", path_arg(&objects))).map_err(Error::io(&alternates))?;
         }
+        // Repeat setup: .git may exist after an interruption before these writes finished.
+        // Line endings follow the repository (see `eol`). git in the slot must apply the
+        // repository's `.gitattributes` and nothing from the machine, or the agent's `git
+        // diff` and `git checkout` would disagree with what is captured.
+        git.run(&["config", "core.autocrlf", "false"])?;
+        git.run(&["config", "core.eol", "lf"])?;
+        let no_attributes = self.path.join(".git").join("info").join("no-global-attributes");
+        git.run(&["config", "core.attributesFile", &path_arg(&no_attributes)])?;
+        let alternates = self.path.join(".git").join("objects").join("info").join("alternates");
+        let objects = store.git_dir().join("objects");
+        fs::write(&alternates, format!("{}\n", path_arg(&objects))).map_err(Error::io(&alternates))?;
         let matchers = Matchers::new(scope)?;
         let mut tree_state = self.load(store)?;
         // Learn what changed on disk, without tracking anything new, so that checking out
@@ -166,7 +166,6 @@ impl Workspace {
         }
         eol::apply_to_worktree(store, &self.path, &before, &target.tree())?;
 
-        let git = Git::at(&self.path);
         let reference = format!("refs/heads/{branch}");
         git.run(&["symbolic-ref", "HEAD", &reference])?;
         git.run(&["update-ref", &reference, head])?;

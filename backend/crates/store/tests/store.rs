@@ -80,6 +80,45 @@ fn a_slot_is_a_git_clone_at_the_baseline() {
 }
 
 #[test]
+fn materializing_recovers_an_interrupted_git_setup() {
+    let f = fixture();
+    // Stop after git init or any configuration write, before alternates is usable.
+    for (configured, empty_alternates) in [(0, false), (1, false), (2, false), (3, false), (3, true)] {
+        let slot = f.workspace(&format!("setup-{configured}-{empty_alternates}"));
+        fs::create_dir_all(&slot.path).unwrap();
+        git(&slot.path, &["init", "--quiet", "--initial-branch", "main"]);
+        let no_attributes = slot.path.join(".git/info/no-global-attributes").to_string_lossy().replace('\\', "/");
+        let settings =
+            [("core.autocrlf", "false"), ("core.eol", "lf"), ("core.attributesFile", no_attributes.as_str())];
+        for (key, value) in &settings[..configured] {
+            git(&slot.path, &["config", key, value]);
+        }
+        let alternates = slot.path.join(".git/objects/info/alternates");
+        assert!(!alternates.exists());
+        if empty_alternates {
+            // A write interrupted after truncating/creating alternates must also recover.
+            fs::write(&alternates, "").unwrap();
+        }
+
+        for _ in 0..2 {
+            slot.materialize(&f.store, &f.head, &f.head, "main", &scope()).unwrap();
+            for (key, value) in settings {
+                assert_eq!(git(&slot.path, &["config", "--local", key]), value);
+            }
+            assert_eq!(
+                fs::read_to_string(&alternates).unwrap(),
+                format!("{}\n", f.store.git_dir().join("objects").to_string_lossy().replace('\\', "/"))
+            );
+            assert_eq!(fs::read(slot.path.join("a.txt")).unwrap(), b"one\ntwo\nthree\n");
+            assert_eq!(fs::read(slot.path.join("win.txt")).unwrap(), b"one\r\ntwo\r\n");
+            assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]), f.head);
+            assert_eq!(git(&slot.path, &["symbolic-ref", "--short", "HEAD"]), "main");
+            assert_eq!(git(&slot.path, &["status", "--porcelain"]), "");
+        }
+    }
+}
+
+#[test]
 fn a_capture_is_the_working_tree_on_the_baseline() {
     let f = fixture();
     let slot = f.workspace("worker");
