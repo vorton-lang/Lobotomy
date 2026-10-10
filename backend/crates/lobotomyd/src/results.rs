@@ -245,7 +245,7 @@ async fn still_verifying(project: &Arc<Project>, verification_id: &str) -> anyho
 /// started.
 async fn run_check(project: &Arc<Project>, check: &Check, cwd: &Path) -> anyhow::Result<CheckOutcome> {
     let started = Instant::now();
-    let mut spawned = launch::spawn(launch::What::Shell(&check.command), cwd, &project.empty_gh_config_dir())?;
+    let mut spawned = launch::spawn(launch::What::Shell(&check.command), cwd, &project.empty_gh_config_dir()).await?;
     let io = launch::run(&mut spawned, b"", read_capped).await?;
     let stdout = tokio::spawn(read_capped(io.stdout));
     let stderr = io.stderr;

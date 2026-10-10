@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 type Request = { id: number; text: string; streaming: boolean };
-type Response = { id: number; html: string; error?: string };
+type Response = { id: number; html: string; repaired?: boolean; error?: string };
 
 const postMessage = vi.fn<(response: Response) => void>();
 const workerScope = {
@@ -17,7 +17,7 @@ beforeAll(async () => {
 
 afterAll(() => vi.unstubAllGlobals());
 
-async function render(text: string, streaming: boolean): Promise<string> {
+async function respond(text: string, streaming: boolean): Promise<Response> {
   postMessage.mockClear();
   const id = ++nextId;
   await workerScope.onmessage!({ data: { id, text, streaming } } as MessageEvent<Request>);
@@ -25,7 +25,11 @@ async function render(text: string, streaming: boolean): Promise<string> {
   const response = postMessage.mock.calls[0][0];
   expect(response.id).toBe(id);
   expect(response.error).toBeUndefined();
-  return response.html;
+  return response;
+}
+
+async function render(text: string, streaming: boolean): Promise<string> {
+  return (await respond(text, streaming)).html;
 }
 
 describe('Markdown worker', () => {
@@ -36,6 +40,25 @@ describe('Markdown worker', () => {
   ])('repairs %s only while streaming', async (text, live, complete) => {
     expect(await render(text, true)).toBe(`<p>${live}</p>\n`);
     expect(await render(text, false)).toBe(`<p>${complete}</p>\n`);
+  });
+
+  it('says whether live text needed a repair', async () => {
+    expect((await respond('**open', true)).repaired).toBe(true);
+    expect((await respond('done **ok**', true)).repaired).toBe(false);
+  });
+
+  it.each([
+    ['an unclosed mark in an earlier paragraph', '*note: run the tests first\n\nsecond\n\nthird'],
+    ['a backtick after a blank line inside an open fence', '```\na\n\n`b'],
+    ['a $$ that is not math', 'The PID is $$ here'],
+    ['single tildes', '20~25 and 30~40'],
+    ['a list item starting with >', '- > 30'],
+  ])('leaves %s as the completed text reads', async (_, text) => {
+    expect(await render(text, true)).toBe(await render(text, false));
+  });
+
+  it('repairs the last paragraph only', async () => {
+    expect(await render('*a\n\n**b', true)).toBe('<p>*a</p>\n<p><strong>b</strong></p>\n');
   });
 
   it('hides an unfinished link destination only while streaming', async () => {

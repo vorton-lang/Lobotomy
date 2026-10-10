@@ -28,6 +28,7 @@ pub fn fake_codex_with(flags: &[&str]) -> HarnessConfig {
         claude: fake("fake-claude.mjs", &[]),
         codex: fake("fake-codex.mjs", flags),
         interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
+        terminal_helper: env!("CARGO_BIN_EXE_lobotomyd").into(),
         probe_timeout: Duration::from_secs(60),
     }
 }
@@ -48,6 +49,7 @@ pub fn real_clis() -> HarnessConfig {
             reasoning_effort: Some("low".into()),
         },
         interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
+        terminal_helper: env!("CARGO_BIN_EXE_lobotomyd").into(),
         probe_timeout: Duration::from_secs(120),
     }
 }

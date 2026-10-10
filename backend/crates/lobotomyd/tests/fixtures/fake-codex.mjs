@@ -3,7 +3,8 @@
 //
 // The input decides what happens:
 //   FAKE:done   writes work.txt, reports done, completes the turn; with FAKE:text=<word> the
-//               file holds that word instead of "hi"; with FAKE:nowrite it writes nothing
+//               file holds that word instead of "hi"; with FAKE:nowrite it writes nothing; with
+//               FAKE:trial the report suggests a trial (frontend.md §8)
 //   FAKE:wait=<ms>  waits that long before anything else, so a message can arrive meanwhile
 //   FAKE:newthread  reports a new session id even when resuming, which the runtime cannot record
 //   FAKE:managed  acts as a Codex whose administrator does not allow full access: given
@@ -116,9 +117,16 @@ if (input.includes('FAKE:blocked')) {
   await report({ title: '需要你决定', body: '有两种做法。', status: 'blocked', blocked_on: '空值怎么处理？' });
 }
 
+// The same command line for PowerShell and sh: it marks its working directory and keeps running.
+const TRIAL = {
+  command: `node -e "require('fs').writeFileSync('started.txt', 'started'); setInterval(() => {}, 1000)"`,
+  purpose: '看候选成果',
+};
+
 if (input.includes('FAKE:done')) {
   if (!input.includes('FAKE:nowrite')) fs.writeFileSync('work.txt', /FAKE:text=(\S+)/.exec(input)?.[1] ?? 'hi');
-  await report({ title: '完成', body: '写了 work.txt', status: 'done' });
+  const trial = input.includes('FAKE:trial') ? { trial: TRIAL } : {};
+  await report({ title: '完成', body: '写了 work.txt', status: 'done', ...trial });
 }
 
 emit({ type: 'item.completed', item: { id: 'item_9', type: 'agent_message', text: 'finished' } });

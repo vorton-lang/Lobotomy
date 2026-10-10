@@ -976,3 +976,57 @@ async fn shutdown_leaves_a_running_store_job_and_its_lock_alive() {
     drop(project);
     drop(Project::open(&data, host).unwrap());
 }
+
+/// A trial runs the executor's command in a copy of the candidate, in a terminal of its own. Stop
+/// ends it and deletes the copy; shutdown stops a trial still open; startup deletes leftovers
+/// (frontend.md §8). Linux needs a desktop, which CI does not have.
+#[tokio::test]
+async fn a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown() {
+    use lobotomyd::trial::{self, StartTrial};
+    if cfg!(unix) && std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let project = backend.project.clone();
+    let db = project.db.clone();
+    let task = create_task(&db, "FAKE:done FAKE:trial");
+    phase(&db, &task, Phase::Accepting).await;
+    let request = || {
+        let detail = db.read(|c| lobotomy_core::view::task_detail(c, &task)).unwrap();
+        let attempt = detail.attempts.last().unwrap();
+        let candidate = detail.captures.iter().find(|c| Some(&c.id) == attempt.candidate_id.as_ref()).unwrap();
+        StartTrial {
+            task_id: task.clone(),
+            attempt_id: attempt.id.clone(),
+            expected_candidate: candidate.commit_id.clone().unwrap(),
+        }
+    };
+    let copy = |view: &trial::TrialView| std::path::PathBuf::from(&view.directory);
+    let gone = |view: &trial::TrialView| {
+        let root = copy(view).parent().unwrap().to_path_buf();
+        move || (!root.exists()).then_some(())
+    };
+
+    let first = trial::start(&project, request()).await.unwrap();
+    let started = copy(&first).join("started.txt");
+    wait_for("the trial command to start in the copy", || started.exists().then_some(())).await;
+    assert_eq!(std::fs::read_to_string(copy(&first).join("work.txt")).unwrap(), "hi");
+    assert_eq!(trial::start(&project, request()).await.unwrap().id, first.id, "one open trial per round");
+    project.trials.stop(&first.id).await.unwrap();
+    assert_eq!(project.trials.list(&task)[0].state, "closed");
+    wait_for("the stopped trial's copy to go", gone(&first)).await;
+
+    let second = trial::start(&project, request()).await.unwrap();
+    assert_ne!(second.directory, first.directory, "a closed trial starts again in a new copy");
+    let started = copy(&second).join("started.txt");
+    wait_for("the second trial to start", || started.exists().then_some(())).await;
+    backend.shutdown(Duration::from_secs(5)).await;
+    assert!(project.trials.list(&task).iter().all(|t| t.state == "closed"), "shutdown stops open trials");
+    wait_for("the second copy to go", gone(&second)).await;
+
+    let leftover = project.trials_dir().join("trial_left").join("candidate");
+    std::fs::create_dir_all(&leftover).unwrap();
+    lobotomyd::results::sweep(&project).await.unwrap();
+    assert!(!project.trials_dir().join("trial_left").exists(), "startup deletes leftover copies");
+}

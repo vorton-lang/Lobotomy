@@ -162,7 +162,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 )}
             </details>
           )}
-          <Changes detail={loaded} />
+          <Changes key={`changes:${loaded.task.id}`} detail={loaded} />
           <History detail={loaded} />
         </div>
       )}
@@ -185,16 +185,19 @@ function CheckView({ check, earlier }: { check: CheckRun; earlier: boolean }) {
   );
 }
 
+// The diff is computed only once the section is opened.
 function Changes({ detail }: { detail: TaskDetail }) {
+  const [open, setOpen] = useState(false);
   const range = workRange(detail);
   if (!range) return null;
   return (
-    <details className={`changes-details${range.earlier ? ' earlier' : ''}`}>
+    <details className={`changes-details${range.earlier ? ' earlier' : ''}`} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>改动 · {range.label}</summary>
-      <p className="muted">{range.label}</p>
-      <DiffPool>
-        <DiffView from={range.from} to={range.to} />
-      </DiffPool>
+      {open && (
+        <DiffPool>
+          <DiffView from={range.from} to={range.to} />
+        </DiffPool>
+      )}
     </details>
   );
 }
