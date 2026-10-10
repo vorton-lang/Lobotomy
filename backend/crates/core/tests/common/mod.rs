@@ -93,6 +93,7 @@ pub fn report(
         body: "加了 new.txt".into(),
         status,
         blocked_on: blocked_on.map(Into::into),
+        trial: None,
     };
     db.execute(&Caller::Role { role: ROLE.into(), turn_id: turn_id.into() }, &report)
 }

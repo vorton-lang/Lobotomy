@@ -8,6 +8,7 @@ import { checkPassed, checkSummary, clock, deliveryReport, PHASE_LABEL, shortSha
 import { run, selectTask, useStore } from '../store';
 import { Markdown, Modal, Output } from './common';
 import { DiffPool, DiffView } from './DiffView';
+import { TrialControls } from './TrialControls';
 
 export function TaskPanel({ taskId }: { taskId: string }) {
   const detail = useStore((s) => s.taskDetail);
@@ -117,6 +118,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               </>
             ) : <p className="muted">本轮还没有交付说明。</p>}
           </section>
+          <TrialControls key={task.id} detail={loaded} />
           <section>
             <h3>你的原话</h3>
             <Markdown text={loaded.task.body || '（无）'} />

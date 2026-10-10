@@ -516,12 +516,12 @@ fn only_the_turns_own_role_can_report() {
     let other = Caller::Role { role: "Yesod".into(), turn_id: t.turn_id.clone() };
     let r = db.execute(
         &other,
-        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None },
+        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None, trial: None },
     );
     assert_eq!(rejection(r), "forbidden");
     let r = db.execute(
         &Caller::User,
-        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None },
+        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None, trial: None },
     );
     assert_eq!(rejection(r), "forbidden");
 }

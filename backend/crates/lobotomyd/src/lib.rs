@@ -11,6 +11,7 @@ pub mod project;
 pub mod results;
 pub mod runner;
 pub mod scheduler;
+pub mod trial;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -68,6 +69,7 @@ impl Backend {
     /// store jobs get the unused part of the same grace period to finish. Timed-out work is not
     /// aborted: it still owns its project lock until it finishes or the process exits.
     pub async fn shutdown(self, grace: Duration) {
+        self.project.trials.stop_all();
         self.scheduling.cancel();
         let _ = self.scheduler.await;
         let running: Vec<String> = self.project.running.lock().unwrap().keys().cloned().collect();

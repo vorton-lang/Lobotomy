@@ -32,6 +32,7 @@ import {
   stoppedPaths,
   textOf,
   timeline,
+  trialCandidate,
   toolSubject,
   turnOutcome,
   voidReport,
@@ -434,5 +435,30 @@ describe('deliveryReport', () => {
     expect(deliveryReport([second])?.text).toBe('Second delivery');
     expect(deliveryReport([{ ...second, done_summary: null }])).toBeNull();
     expect(deliveryReport([first, { ...second, done_summary: null }])?.earlier).toBe(true);
+  });
+});
+
+describe('trialCandidate', () => {
+  const first = { ...attempt(1, 10, 20), candidate_id: 'capture1' };
+  const capture: Capture = {
+    id: 'capture1', turn_id: 'turn1', role: 'Malkuth', task_id: 't', attempt_id: first.id,
+    kind: 'candidate', base: 'base0000', state: 'pinned', commit_id: 'candidate-commit',
+    detail: null, created_at: 20, outside: null,
+  };
+
+  it('uses the named candidate commit, never its rebased verification commit', () => {
+    expect(trialCandidate(detail({ attempts: [first], captures: [capture], verifications: [verification(1, 25, 'passed')] })))
+      .toBe('candidate-commit');
+  });
+
+  it('does not use an earlier candidate or an unpinned/current work capture', () => {
+    expect(trialCandidate(detail({ attempts: [first, attempt(2, 30, null)], captures: [capture] }))).toBeNull();
+    for (const patch of [
+      { state: 'intent' as const }, { commit_id: null }, { kind: 'turn' as const },
+      { attempt_id: 'att2' }, { task_id: 'another-task' }, { id: 'another-capture' },
+    ]) {
+      expect(trialCandidate(detail({ attempts: [first], captures: [{ ...capture, ...patch }] }))).toBeNull();
+    }
+    expect(trialCandidate(detail({}))).toBeNull();
   });
 });

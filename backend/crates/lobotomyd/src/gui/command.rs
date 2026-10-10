@@ -85,6 +85,16 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args }: CommandPa
         EditProjectConfig,
     );
     match name.as_str() {
+        "start_trial" => Ok(serde_json::to_value(crate::trial::start(project, serde_json::from_value(args)?).await?)?),
+        "stop_trial" => {
+            #[derive(Deserialize)]
+            struct StopTrial {
+                trial_id: String,
+            }
+            let StopTrial { trial_id } = serde_json::from_value(args)?;
+            project.trials.stop(&trial_id).await?;
+            Ok(Value::Null)
+        }
         "onboard" => {
             let OnboardParams { repo_path } = serde_json::from_value(args)?;
             crate::onboard::onboard(project, std::path::Path::new(&repo_path)).await?;

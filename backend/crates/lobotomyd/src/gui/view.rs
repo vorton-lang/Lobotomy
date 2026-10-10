@@ -21,6 +21,10 @@ use crate::runner::db;
 /// Answers a read method.
 pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Result<Value> {
     Ok(match method {
+        "trials" => {
+            let TaskParams { task_id } = serde_json::from_value(params)?;
+            serde_json::to_value(project.trials.list(&task_id))?
+        }
         "snapshot" => serde_json::to_value(snapshot(project).await?)?,
         "thread" => {
             let q: ThreadQuery = serde_json::from_value(params)?;
