@@ -427,6 +427,6 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
   await expect(delivery).not.toContainText('第二轮成果');
   await expect(delivery).toContainText('上一轮交付说明');
   await update('failed');
-  await expect(panel.locator('.verification-details')).not.toHaveAttribute('open');
+  await expect(panel.locator('.verification-details')).toHaveAttribute('open', '');
   await expect(panel.locator('.verification-details > summary .badge')).toHaveText('未通过');
 });

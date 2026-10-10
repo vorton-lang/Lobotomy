@@ -1,6 +1,7 @@
 //! User-started trials: a fresh copy of one fixed candidate and a separate native terminal.
 //! Reporting a command never starts it. Only the authenticated GUI's explicit command does.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -57,10 +58,21 @@ impl Trials {
         Ok(())
     }
 
-    pub fn stop_all(&self) {
+    /// Stops every trial and waits until their terminals have exited.
+    pub async fn stop_all(&self) {
         self.closing.store(true, Ordering::SeqCst);
-        for trial in self.entries.lock().unwrap().iter() {
-            trial.stop.cancel();
+        let finished: Vec<_> = self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|trial| {
+                trial.stop.cancel();
+                trial.finished.clone()
+            })
+            .collect();
+        for finished in finished {
+            finished.cancelled().await;
         }
     }
 }
@@ -113,10 +125,25 @@ async fn plan(project: &Arc<Project>, request: StartTrial) -> anyhow::Result<Tri
     .await
 }
 
+fn copy_root(project: &Project, trial_id: &str) -> PathBuf {
+    project.trials_dir().join(trial_id)
+}
+
+/// Deletes a trial's copy. A copy that cannot be deleted now, for example while a file is still
+/// in use, goes at the next startup (results::sweep).
+async fn discard(root: PathBuf) {
+    let path = root.clone();
+    if let Ok(Err(e)) = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(root)).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %path.display(), error = %e, "could not delete a trial copy; startup deletes it");
+    }
+}
+
 /// Materialize once in a new directory. Neither the worker slot nor the reusable verification
 /// site is involved, and later candidates never overwrite this directory.
 async fn materialize(project: &Arc<Project>, view: &mut TrialView) -> anyhow::Result<()> {
-    let root = project.data_dir.join("trials").join(&view.id);
+    let root = copy_root(project, &view.id);
     let directory = root.join("candidate");
     let state = root.join("state");
     let store = project.store.clone();
@@ -146,7 +173,17 @@ pub async fn start(project: &Arc<Project>, request: StartTrial) -> anyhow::Resul
     if project.trials.closing.load(Ordering::SeqCst) {
         anyhow::bail!("项目正在关闭");
     }
-    materialize(project, &mut view).await?;
+    if let Err(error) = launch(project, &mut view).await {
+        discard(copy_root(project, &view.id)).await;
+        return Err(error);
+    }
+    Ok(view)
+}
+
+/// Copies the candidate and opens its terminal. Once the terminal is open, the trial's owner
+/// task deletes the copy when the terminal exits.
+async fn launch(project: &Arc<Project>, view: &mut TrialView) -> anyhow::Result<()> {
+    materialize(project, view).await?;
     if project.trials.closing.load(Ordering::SeqCst) {
         anyhow::bail!("项目正在关闭");
     }
@@ -179,10 +216,8 @@ pub async fn start(project: &Arc<Project>, request: StartTrial) -> anyhow::Resul
         }
         entries.push(Trial { view: view.clone(), stop: stop.clone(), finished: finished.clone() });
     }
-    let project = project.clone();
-    let id = view.id.clone();
-    let owner = project.store_tasks.clone();
-    owner.spawn(async move {
+    let (project, id, root) = (project.clone(), view.id.clone(), copy_root(project, &view.id));
+    tokio::spawn(async move {
         let result = tokio::select! {
             result = spawned.child.wait() => result,
             _ = stop.cancelled() => {
@@ -196,8 +231,10 @@ pub async fn start(project: &Arc<Project>, request: StartTrial) -> anyhow::Resul
             trial.view.error = result.err().map(|e| e.to_string());
         }
         finished.cancel();
+        // After `finished`: neither Stop nor shutdown waits for the deletion.
+        discard(root).await;
     });
-    Ok(view)
+    Ok(())
 }
 
 #[cfg(test)]

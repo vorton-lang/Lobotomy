@@ -45,9 +45,8 @@ where
     if project.failed.lock().unwrap().contains_key(&key) || !project.jobs.lock().unwrap().insert(key.clone()) {
         return;
     }
-    let tasks = project.store_tasks.clone();
     let project = project.clone();
-    tasks.spawn(async move {
+    tokio::spawn(async move {
         if let Err(e) = crate::runner::catch_panic(job).await {
             let reason = format!("{e:#}");
             tracing::error!(key, error = reason, "store job failed; waiting for the user to retry");
@@ -339,13 +338,14 @@ pub async fn code_start(project: &Arc<Project>, task_id: &str) -> anyhow::Result
     Ok(Some(CodeStart { commit: composed.commit, base: integration, conflicts: composed.conflicts }))
 }
 
-/// At startup, deletes what nothing owns any more: directories moved aside, and the jj state of
-/// slot generations that were replaced (data-model.md §6).
+/// At startup, deletes what nothing owns any more: directories moved aside, trial copies, and
+/// the jj state of slot generations that were replaced (data-model.md §6).
 pub async fn sweep(project: &Arc<Project>) -> anyhow::Result<()> {
-    if let Ok(entries) = std::fs::read_dir(project.quarantine_dir()) {
+    for dir in [project.quarantine_dir(), project.trials_dir()] {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
         for entry in entries.flatten() {
             if let Err(e) = std::fs::remove_dir_all(entry.path()) {
-                tracing::warn!(path = %entry.path().display(), error = %e, "could not delete a quarantined directory");
+                tracing::warn!(path = %entry.path().display(), error = %e, "could not delete a leftover directory");
             }
         }
     }

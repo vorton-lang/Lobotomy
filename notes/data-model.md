@@ -422,7 +422,7 @@ Codex 被拒时的形式未知，暂不处理。
 |---|---|---|---|---|
 | `org_report(progress)` | turn 未结束 | 命令记录 | — | — |
 | `org_report(blocked)` | turn 未结束；任务在执行阶段 | 阻塞原因 | 同一原因重复报告不再写入 | 卡在等用户时进入"等你决定"；用户的回复绑定到下一个 turn 时清除（见下） |
-| `org_report(done)` | turn 未结束；任务在执行阶段 | 把本 turn 的采集标为候选成果；保持占用 | 同一 turn 重复报告不再写入 | CLI 退出后采集 |
+| `org_report(done)` | turn 未结束；任务在执行阶段 | 把本 turn 的采集标为候选成果；保持占用；保存交付说明与可选的试用建议（frontend.md §8） | 同一 turn 重复报告不再写入 | CLI 退出后采集 |
 
 `blocked` 与 `done` 不满足前置条件时，命令记录下来但不生效，结果分两种：
 - `late`：turn 已结束，或它所属的 attempt 已经结束；

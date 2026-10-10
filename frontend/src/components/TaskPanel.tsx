@@ -135,7 +135,12 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             <Markdown text={criteria?.text || '（无）'} />
           </section>
           {verification && (
-            <details className={`verification-details${earlier ? ' earlier' : ''}`}>
+            // A failure of this round opens: sending back starts from its reasons.
+            <details
+              key={verification.id}
+              className={`verification-details${earlier ? ' earlier' : ''}`}
+              open={!earlier && verification.state === 'failed'}
+            >
               <summary>
                 {earlier ? `上一轮的验证（第 ${verifiedRound} 轮）` : `验证（第 ${verifiedRound} 轮）`}{' '}
                 <span className={`badge ${verification.state}`}>{VERIFICATION_LABEL[verification.state]}</span>

@@ -110,7 +110,7 @@ pub enum ReportStatusArg {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TrialArg {
-    /// 适用于当前平台 shell、从候选成果根目录运行的具体命令
+    /// 从候选成果根目录运行的具体命令。Windows 上由 Windows PowerShell 执行，Linux 上由 sh 执行
     pub command: String,
     /// 用户运行此命令可以体验或验证什么
     pub purpose: String,

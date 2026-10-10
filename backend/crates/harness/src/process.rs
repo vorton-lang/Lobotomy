@@ -105,7 +105,8 @@ pub async fn spawn_terminal(command: &str, title: &str, spec: &Spec<'_>) -> io::
 }
 
 /// Entry point for the private terminal helper. It must run in a fresh process, before a
-/// Tokio runtime or any backend state is opened. The command is shell code; the title and
+/// Tokio runtime or any backend state is opened. The command is shell code, for Windows
+/// PowerShell on Windows and `sh` elsewhere (check commands use `cmd.exe`); the title and
 /// control path are literal arguments. The caller should exit with the returned status.
 pub fn run_terminal_helper(command: &str, title: &str, control: &Path) -> io::Result<i32> {
     imp::run_terminal_helper(command, title, control)
@@ -173,7 +174,6 @@ pub fn isolate_std_handles() {
 mod imp {
     use std::io;
     use std::mem::{size_of, zeroed};
-    use std::os::windows::process::CommandExt;
     use std::path::Path;
     use std::process::Stdio;
     use std::ptr::null;
@@ -259,7 +259,7 @@ mod imp {
     pub fn run_terminal_helper(command: &str, title: &str, _control: &Path) -> io::Result<i32> {
         let title: Vec<u16> = title.encode_utf16().chain([0]).collect();
         check(unsafe { SetConsoleTitleW(title.as_ptr()) })?;
-        // Keep the supervisor alive when Ctrl+C interrupts the command in cmd /k. A custom
+        // Keep the supervisor alive when Ctrl+C interrupts the command in the shell. A custom
         // handler, unlike SetConsoleCtrlHandler(NULL, TRUE), is not inherited by the shell.
         check(unsafe { SetConsoleCtrlHandler(Some(terminal_ctrl_handler), 1) })?;
         // A backend launched by Electron normally has pipes or NUL for its standard handles.
@@ -277,13 +277,30 @@ mod imp {
         i32::from(event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
     }
 
+    /// Windows PowerShell, which every Windows has. `-EncodedCommand` carries the command as one
+    /// opaque argument: no quoting layer, and every line runs. `Bypass` applies to this process
+    /// only; under the default policy, script shims such as npm.ps1 would not load. `-NoExit`
+    /// keeps output visible and leaves a working prompt after the trial exits.
     fn terminal_shell(command: &str) -> std::process::Command {
-        let mut shell = std::process::Command::new("cmd.exe");
-        // There is exactly one shell parse. Do not embed the command in another cmd wrapper
-        // (which would expand %variables%, carets and metacharacters twice). /k keeps output
-        // visible and leaves a working prompt after the trial exits.
-        shell.args(["/d", "/v:off", "/s", "/k"]).raw_arg(format!("\"{command}\""));
+        let mut shell = std::process::Command::new("powershell.exe");
         shell
+            .args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-EncodedCommand"])
+            .arg(encode_command(command));
+        shell
+    }
+
+    /// Base64 of the UTF-16LE text, as `-EncodedCommand` expects.
+    fn encode_command(command: &str) -> String {
+        const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let bytes: Vec<u8> = command.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+            for i in 0..4 {
+                out.push(if i <= chunk.len() { ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+            }
+        }
+        out
     }
 
     pub fn adopt(child: &Child, _pid: u32, _own_group: bool) -> io::Result<(Guard, i64)> {
@@ -398,11 +415,14 @@ mod imp {
         use std::time::{Duration, Instant};
 
         #[test]
-        fn terminal_shell_parses_the_original_command_only_once() {
-            let command = "echo %PATH% & echo ^& !literal! & \"program with spaces.exe\"";
-            let shell = terminal_shell(command);
+        fn terminal_shell_passes_the_command_as_one_encoded_argument() {
+            // The example from PowerShell's own help, and each padding length.
+            assert_eq!(encode_command("dir"), "ZABpAHIA");
+            assert_eq!(encode_command("a"), "YQA=");
+            assert_eq!(encode_command("ab"), "YQBiAA==");
+            let shell = terminal_shell("dir");
             let args: Vec<_> = shell.get_args().map(|arg| arg.to_str().unwrap()).collect();
-            assert_eq!(args, ["/d", "/v:off", "/s", "/k", &format!("\"{command}\"")]);
+            assert_eq!(args.last(), Some(&"ZABpAHIA"));
         }
 
         #[test]
@@ -415,9 +435,10 @@ mod imp {
         #[tokio::test]
         async fn native_console_is_interactive_and_does_not_run_before_job_adoption() {
             let dir = tempfile::tempdir().unwrap();
-            let command = "powershell.exe -NoProfile -NonInteractive -Command \"\
-                $v = @([Console]::IsInputRedirected, [Console]::IsOutputRedirected, [Console]::IsErrorRedirected); \
-                Set-Content console.txt ($v -join ','); Start-Sleep 60\"";
+            // Several lines: the file appears only if lines after the first run too.
+            let command = "$v = @([Console]::IsInputRedirected, [Console]::IsOutputRedirected, [Console]::IsErrorRedirected)\n\
+                Set-Content console.txt ($v -join ',')\n\
+                Start-Sleep 60";
             let mut cmd = Command::new(std::env::current_exe().unwrap());
             cmd.args(["--exact", "process::imp::tests::terminal_helper_entry", "--nocapture"])
                 .env("LOBOTOMY_TEST_TERMINAL_COMMAND", command)

@@ -65,11 +65,12 @@ impl Backend {
 
     /// Normal shutdown (harness-adapter.md §1.8): stop scheduling, interrupt the running CLIs and
     /// wait for them to exit. The MCP service stays up meanwhile, so a CLI can still report. After
-    /// `grace`, the remaining CLIs end with their jobs when the process exits. GUI requests and
-    /// store jobs get the unused part of the same grace period to finish. Timed-out work is not
-    /// aborted: it still owns its project lock until it finishes or the process exits.
+    /// `grace`, the remaining CLIs end with their jobs when the process exits. Trials stop first.
+    /// GUI requests already admitted get the unused part of the grace period. Store jobs are not
+    /// waited for: one that has not finished runs again after a restart (data-model.md §5). Work
+    /// still running keeps the project lock until it finishes or the process exits.
     pub async fn shutdown(self, grace: Duration) {
-        self.project.trials.stop_all();
+        let _ = tokio::time::timeout(grace, self.project.trials.stop_all()).await;
         self.scheduling.cancel();
         let _ = self.scheduler.await;
         let running: Vec<String> = self.project.running.lock().unwrap().keys().cloned().collect();
@@ -86,15 +87,10 @@ impl Backend {
         let _ = self.server.await;
         // Cancellation only asks the watcher to stop; join it before releasing its project.
         let _ = self.watcher.await;
-        // No new upgrades after the server stopped, and no new store jobs after the scheduler.
+        // No new upgrades after the server stopped.
         self.gui_sessions.close();
-        self.project.store_tasks.close();
-        let drained = async {
-            self.gui_sessions.wait().await;
-            self.project.store_tasks.wait().await;
-        };
-        if tokio::time::timeout_at(deadline.into(), drained).await.is_err() {
-            tracing::warn!("shutdown grace elapsed with GUI requests or store jobs still running");
+        if tokio::time::timeout_at(deadline.into(), self.gui_sessions.wait()).await.is_err() {
+            tracing::warn!("shutdown grace elapsed with GUI requests still running");
         }
     }
 }

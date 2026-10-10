@@ -29,8 +29,6 @@ pub struct Project {
     /// Store work in progress (materializing, capturing, verifying, previewing), by key, so the
     /// scheduler starts each job once.
     pub jobs: Mutex<HashSet<String>>,
-    /// Owns store jobs through completion, including their final project references.
-    pub(crate) store_tasks: tokio_util::task::TaskTracker,
     /// Store work that failed, by key, with the reason. It waits for the user's retry.
     pub failed: Mutex<HashMap<String, String>>,
     /// The verification site is one directory: a verification holds this from writing it until
@@ -119,7 +117,6 @@ impl Project {
             mcp_base: Mutex::new(String::new()),
             running: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashSet::new()),
-            store_tasks: tokio_util::task::TaskTracker::new(),
             failed: Mutex::new(HashMap::new()),
             verify_site: tokio::sync::Mutex::new(()),
             live: Mutex::new(HashMap::new()),
@@ -159,6 +156,12 @@ impl Project {
     /// Directories moved aside, deleted once their replacement is ready (data-model.md §6).
     pub fn quarantine_dir(&self) -> PathBuf {
         self.data_dir.join("quarantine")
+    }
+
+    /// Candidate copies of user-started trials, one directory per trial. A trial deletes its copy
+    /// when it ends; startup deletes what is left.
+    pub fn trials_dir(&self) -> PathBuf {
+        self.data_dir.join("trials")
     }
 
     /// Raw CLI output of a turn, kept only when the turn did not end cleanly (data-model.md §7.4).

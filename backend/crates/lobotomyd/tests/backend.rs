@@ -949,30 +949,10 @@ async fn a_session_limit_on_claude_blocks_its_domain_only() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
-/// The job key can be empty just before a job drops its last project reference. Track the
-/// entire future rather than polling the keys when shutdown waits for store work.
+/// Shutdown does not wait for store jobs: an unfinished one runs again after a restart. It must
+/// not abort the job or release the project lock while the job's side effects are still running.
 #[tokio::test]
-async fn shutdown_drains_a_store_job_before_releasing_the_project() {
-    let dir = tempfile::tempdir().unwrap();
-    let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
-    let data = dir.path().join("project");
-    let backend = lobotomyd::Backend::start(Arc::new(Project::open(&data, host.clone()).unwrap()), 0).await.unwrap();
-    let (release, gate) = tokio::sync::oneshot::channel();
-    lobotomyd::results::spawn_job(&backend.project, "test:gate".into(), async move {
-        gate.await.unwrap();
-        Ok(())
-    });
-    let mut shutdown = tokio::spawn(backend.shutdown(Duration::from_secs(5)));
-    assert!(tokio::time::timeout(Duration::from_millis(100), &mut shutdown).await.is_err());
-    release.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), shutdown).await.unwrap().unwrap();
-    drop(Project::open(&data, host).unwrap());
-}
-
-/// Waiting for store work stays within the unused grace. Expiry must not abort a store job
-/// or release its project lock while its side effects are still running.
-#[tokio::test]
-async fn shutdown_leaves_a_timed_out_store_job_and_its_lock_alive() {
+async fn shutdown_leaves_a_running_store_job_and_its_lock_alive() {
     let dir = tempfile::tempdir().unwrap();
     let host = Arc::new(Host::open(&host_dir(dir.path()), fake_codex()).unwrap());
     let data = dir.path().join("project");
@@ -985,7 +965,8 @@ async fn shutdown_leaves_a_timed_out_store_job_and_its_lock_alive() {
         finished.send(()).unwrap();
         Ok(())
     });
-    tokio::time::timeout(Duration::from_secs(5), backend.shutdown(Duration::from_millis(10))).await.unwrap();
+    // A grace longer than the timeout: returning in time shows shutdown did not wait for the job.
+    tokio::time::timeout(Duration::from_secs(5), backend.shutdown(Duration::from_secs(30))).await.unwrap();
     assert!(Project::open(&data, host.clone()).is_err());
     let project = project.upgrade().expect("unfinished store work owns the project");
     release.send(()).unwrap();
