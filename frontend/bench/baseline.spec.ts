@@ -206,7 +206,7 @@ async function setHarness(page: Page, harness: 'claude' | 'codex') {
   // The controlled radio updates when the backend's settings snapshot arrives.
   await choice.click();
   await expect(choice).toBeChecked();
-  await settings.getByRole('button', { name: '← 返回' }).click();
+  await settings.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page.locator('.role-line .badge')).toHaveText(name);
 }
 
