@@ -26,12 +26,13 @@ test('screenshots of a managed Codex', async ({ page, backend }) => {
   const accept = page.locator('.attention .card').filter({ hasText: '等你验收' });
   await expect(accept).toBeVisible();
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '设置' });
-  await expect(settings.getByRole('radio', { name: /^自动审批/ })).toBeChecked();
+  const settings = page.getByRole('region', { name: '设置' });
+  const codex = settings.getByRole('radiogroup', { name: 'Codex 的权限' });
+  await expect(codex.getByRole('radio', { name: '自动审批' })).toBeChecked();
   await page.screenshot({ path: `${out}/10-settings.png` });
-  await settings.getByRole('radio', { name: /^完全放开/ }).click();
-  await expect(settings.getByRole('radio', { name: /^完全放开/ })).toBeChecked();
-  await settings.getByRole('button', { name: '关闭' }).click();
+  await codex.getByRole('radio', { name: '完全放开' }).click();
+  await expect(codex.getByRole('radio', { name: '完全放开' })).toBeChecked();
+  await settings.getByRole('button', { name: '← 返回' }).click();
   await accept.getByRole('button', { name: '查看并验收' }).click();
   const panel = taskPanel(page, '受管环境的任务');
   await panel.getByRole('button', { name: '验收', exact: true }).click();

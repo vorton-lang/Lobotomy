@@ -1,79 +1,210 @@
-// Settings: each harness's permission mode, a host setting that applies at once
-// (harness-adapter.md §1.9); the harness of each role, which also applies at once; then the project
-// configuration (data-model.md §9.1 project_config): check commands, capture scope and the size
-// guardrail. Each save of the project configuration is a new version; checks and captures name
-// the version they used. In 「全部」 the host's part shows, with Angela's harness while she is open:
-// the window then holds her snapshot (data-model.md §10.6).
+// The settings (frontend.md §7.8): a page of their own, in place of the window's body while open.
+// They choose their page in their own navigation, whatever project the window shows: the host's
+// permissions, Angela, and two pages per project. Following GitHub Primer's settings patterns, a
+// page either applies each choice at once (the segmented controls) or saves a form explicitly
+// (the project configuration), never both; archiving sits apart at the bottom.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { Check, HarnessView, Permission, ProjectConfig, RoleView } from '../api/types';
 import { bytes, harnessName, PERMISSION_LABEL } from '../format';
-import { act, call, run, setPermission, useStore } from '../store';
-import { Modal } from './common';
+import {
+  act,
+  angelaOpen,
+  call,
+  closeSettings,
+  runIn,
+  setPermission,
+  showSettingsPage,
+  toast,
+  useStore,
+  type SettingsPage,
+} from '../store';
+
+export function Settings() {
+  const settings = useStore((s) => s.settings);
+  const host = useStore((s) => s.host);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeSettings();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  if (!settings || !host) return null;
+  const open = host.projects.filter((p) => p.state === 'running' && p.error === null);
+  const page = settings.page;
+  const is = (other: SettingsPage) => JSON.stringify(other) === JSON.stringify(page);
+  const item = (target: SettingsPage, label: string) => (
+    <button className={`settings-item ${is(target) ? 'selected' : ''}`} aria-current={is(target) || undefined} onClick={() => showSettingsPage(target)}>
+      {label}
+    </button>
+  );
+  return (
+    <section className="settings-page" aria-label="设置">
+      <nav className="settings-nav" aria-label="设置分类">
+        <button className="ghost settings-back" onClick={closeSettings}>
+          ← 返回
+        </button>
+        <h3>本机</h3>
+        {item({ kind: 'permissions' }, '权限')}
+        {angelaOpen(host) && item({ kind: 'angela' }, 'Angela')}
+        {open.map((p) => (
+          <div key={p.id} className="settings-nav-group">
+            <h3 title={p.repo_path}>{p.name}</h3>
+            {item({ kind: 'project', project: p.id, tab: 'general' }, '常规')}
+            {item({ kind: 'project', project: p.id, tab: 'checks' }, '验证与采集')}
+          </div>
+        ))}
+      </nav>
+      <div className="settings-content">
+        {page.kind === 'permissions' && <Permissions harnesses={host.harnesses} />}
+        {page.kind === 'angela' && <AngelaPage />}
+        {page.kind === 'project' && page.tab === 'general' && <ProjectGeneral project={page.project} />}
+        {page.kind === 'project' && page.tab === 'checks' && <ProjectChecks project={page.project} />}
+      </div>
+    </section>
+  );
+}
+
+function Header({ title, children }: { title: string; children?: ReactNode }) {
+  return (
+    <header className="settings-header">
+      <h2>{title}</h2>
+      {children && <p className="muted">{children}</p>}
+    </header>
+  );
+}
+
+/** One setting: what it is on the left, its control on the right. */
+function Row({ label, description, children }: { label: ReactNode; description?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="setting-row">
+      <div className="setting-text">
+        <div className="setting-label">{label}</div>
+        {description && <div className="setting-description muted">{description}</div>}
+      </div>
+      {children && <div className="setting-control">{children}</div>}
+    </div>
+  );
+}
+
+/** Two or three choices that apply at once. */
+function Segmented<T extends string>({
+  name,
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  name: string;
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  disabled?: boolean;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="segmented" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <label key={o.value} className={o.value === value ? 'selected' : ''}>
+          <input type="radio" name={name} checked={o.value === value} disabled={disabled} onChange={() => onChange(o.value)} />
+          {o.label}
+        </label>
+      ))}
+    </div>
+  );
+}
 
 const permissionNote = (permission: Permission, harness: string) =>
-  permission === 'full'
-    ? '不审批，不用沙箱。默认。'
-    : `在沙箱里工作：默认不能联网，不能写工作目录以外的地方。超出沙箱的操作交给 ${harness} 的自动审核决定，多花一些 token 和时间。管理员不允许完全放开时用这一项。`;
+  permission === 'full' ? '不审批，不用沙箱。' : `在沙箱中工作，越界的操作由 ${harness} 自动审核。管理员不允许完全放开时用这一项。`;
 
+/** Each harness's permission mode, for every project (harness-adapter.md §1.9). */
 function Permissions({ harnesses }: { harnesses: HarnessView[] }) {
   return (
     <>
-      <h3>权限 · 本机所有项目共用</h3>
-      <p className="muted">
-        每个 harness 单独设置，下一个 turn 生效。没有人回答审批请求，所以没有"手动审批"这一项。
-      </p>
+      <Header title="权限">本机所有项目共用，下一个 turn 生效。</Header>
       {harnesses.map((h) => {
         const name = harnessName(h.harness);
         return (
-          <fieldset key={h.harness} className="choices">
-            <legend>{name}</legend>
-            {(['full', 'auto_review'] as const).map((p) => (
-              <label key={p} className="choice">
-                <input type="radio" name={`permission-${h.harness}`} checked={h.permission === p} onChange={() => setPermission(h.harness, p)} />
-                <span>
-                  <strong>{PERMISSION_LABEL[p]}</strong>
-                  <span className="muted"> · {permissionNote(p, name)}</span>
-                </span>
-              </label>
-            ))}
-          </fieldset>
+          <Row key={h.harness} label={name} description={permissionNote(h.permission, name)}>
+            <Segmented
+              name={`permission-${h.harness}`}
+              label={`${name} 的权限`}
+              value={h.permission}
+              options={(['full', 'auto_review'] as const).map((p) => ({ value: p, label: PERMISSION_LABEL[p] }))}
+              onChange={(p) => setPermission(h.harness, p)}
+            />
+          </Row>
         );
       })}
     </>
   );
 }
 
-/**
- * Which harness each role of the project runs on; no role is bound to one (harness-adapter.md §0).
- * A switch applies at once: the role's current session ends, and its next turn starts a new one.
- */
-function Roles({ title, roles, harnesses }: { title: string; roles: RoleView[]; harnesses: HarnessView[] }) {
+/** The snapshot of the page's project or of Angela, loaded by the settings themselves. */
+function usePageSnapshot() {
+  return useStore((s) => s.settings?.snapshot ?? null);
+}
+
+/** A role's harness; no role is bound to one (harness-adapter.md §0). */
+function RoleHarness({ target, role, harnesses }: { target: string; role: RoleView; harnesses: HarnessView[] }) {
+  const running = role.unfinished !== null;
+  return (
+    <Row label={role.name} description={running ? 'turn 运行中，结束后才能切换。' : '切换后，下一个 turn 在新会话中开始。'}>
+      <Segmented
+        name={`harness-${target}-${role.name}`}
+        label={`${role.name} 使用的 harness`}
+        value={role.harness}
+        options={harnesses.map((h) => ({ value: h.harness, label: harnessName(h.harness) }))}
+        disabled={running}
+        onChange={(harness) => runIn(target, 'set_role_harness', { role: role.name, harness })}
+      />
+    </Row>
+  );
+}
+
+function AngelaPage() {
+  const snapshot = usePageSnapshot();
+  const harnesses = useStore((s) => s.host?.harnesses) ?? [];
+  const role = snapshot?.roles[0];
   return (
     <>
-      <h3>{title}</h3>
-      <p className="muted">
-        切换后，角色当前的会话结束，下一个 turn 在新 harness 的新会话中开始；正在做的任务会重新发给它。turn 运行时不能切换。
-      </p>
-      {roles.map((role) => (
-        <div key={role.name} className="check-row">
-          <span className="role-name">{role.name}</span>
-          <select
-            value={role.harness}
-            disabled={role.unfinished !== null}
-            aria-label={`${role.name} 使用的 harness`}
-            onChange={(e) => run('set_role_harness', { role: role.name, harness: e.target.value })}
-          >
-            {harnesses.map((h) => (
-              <option key={h.harness} value={h.harness}>
-                {harnessName(h.harness)}
-              </option>
-            ))}
-          </select>
-          {role.unfinished && <span className="muted">turn 运行中</span>}
-        </div>
-      ))}
+      <Header title="Angela">全局协作者，所有项目共用。</Header>
+      {role && <RoleHarness target="angela" role={role} harnesses={harnesses} />}
     </>
+  );
+}
+
+function ProjectGeneral({ project }: { project: string }) {
+  const snapshot = usePageSnapshot();
+  const name = useStore((s) => s.host?.projects.find((p) => p.id === project)?.name ?? '');
+  const harnesses = useStore((s) => s.host?.harnesses) ?? [];
+  return (
+    <>
+      <Header title={name}>{snapshot?.project?.repo_path}</Header>
+      <h3 className="settings-section">角色</h3>
+      {snapshot?.roles.map((role) => (
+        <RoleHarness key={role.name} target={project} role={role} harnesses={harnesses} />
+      ))}
+      <h3 className="settings-section">存储</h3>
+      <Storage project={project} />
+      <Archive project={project} name={name} />
+    </>
+  );
+}
+
+/** What the raw output of turns takes on disk (data-model.md §7.4); read when the page opens. */
+function Storage({ project }: { project: string }) {
+  const [usage, setUsage] = useState<{ files: number; bytes: number } | null>(null);
+  useEffect(() => {
+    call<{ raw_output: { files: number; bytes: number } }>('disk_usage', { project }).then(
+      (u) => setUsage(u.raw_output),
+      () => setUsage(null),
+    );
+  }, [project]);
+  return (
+    <Row label="保留的原始输出" description="turn 没有正常结束时保留，用于排查；不自动删除。">
+      <span className="muted">{usage ? `${usage.files} 个文件 · ${bytes(usage.bytes)}` : '…'}</span>
+    </Row>
   );
 }
 
@@ -81,56 +212,34 @@ function Roles({ title, roles, harnesses }: { title: string; roles: RoleView[]; 
  * Archiving stops the project as quitting does and keeps its data (data-model.md §10.4). It
  * interrupts running turns, so it asks once more.
  */
-function Archive({ onClose }: { onClose: () => void }) {
-  const project = useStore((s) => s.project);
-  const name = useStore((s) => s.host?.projects.find((p) => p.id === s.project)?.name);
+function Archive({ project, name }: { project: string; name: string }) {
   const [confirming, setConfirming] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const archive = async () => {
     setArchiving(true);
-    const done = await act('archive_project', { project_id: project });
+    await act('archive_project', { project_id: project });
     setArchiving(false);
-    if (done !== undefined) onClose();
+    setConfirming(false);
   };
   return (
-    <>
-      <h3>归档</h3>
-      <p className="muted">
-        归档后这个项目不再调度：正在运行的 turn 被中断，检查命令停止，最多等 30 秒。数据全部保留。取消归档后，被中断的角色等你选择继续，没有完成的验证重新运行。
-      </p>
-      {confirming ? (
-        <div className="actions">
-          <button onClick={() => setConfirming(false)} disabled={archiving}>
-            取消
+    <div className="danger-zone">
+      <Row label="归档这个项目" description="停止调度，中断正在运行的 turn。数据保留，可以取消归档。">
+        {confirming ? (
+          <>
+            <button onClick={() => setConfirming(false)} disabled={archiving}>
+              取消
+            </button>
+            <button className="danger" onClick={archive} disabled={archiving}>
+              {archiving ? '正在归档…' : `归档「${name}」`}
+            </button>
+          </>
+        ) : (
+          <button className="danger" onClick={() => setConfirming(true)}>
+            归档…
           </button>
-          <button className="primary" onClick={archive} disabled={archiving}>
-            {archiving ? '正在归档…' : `归档「${name ?? ''}」`}
-          </button>
-        </div>
-      ) : (
-        <button onClick={() => setConfirming(true)}>归档这个项目…</button>
-      )}
-    </>
-  );
-}
-
-/** What the raw output of turns takes on disk (data-model.md §7.4); read when the settings open. */
-function Storage() {
-  const [usage, setUsage] = useState<{ files: number; bytes: number } | null>(null);
-  useEffect(() => {
-    call<{ raw_output: { files: number; bytes: number } }>('disk_usage').then(
-      (u) => setUsage(u.raw_output),
-      () => setUsage(null),
-    );
-  }, []);
-  if (!usage) return null;
-  return (
-    <>
-      <h3>存储</h3>
-      <p className="muted">
-        保留的原始输出：{usage.files} 个文件，共 {bytes(usage.bytes)}。turn 没有正常结束、或出现无法识别的事件时保留，用于排查；目前不自动删除。
-      </p>
-    </>
+        )}
+      </Row>
+    </div>
   );
 }
 
@@ -140,99 +249,132 @@ const lines = (text: string) =>
     .map((l) => l.trim())
     .filter(Boolean);
 
-export function Settings({ onClose }: { onClose: () => void }) {
-  const current = useStore((s) => (s.project === null ? undefined : s.snapshot?.config));
-  // Keep selector results stable when 「全部」 or archiving leaves no project snapshot.
-  const harnesses = useStore((s) => s.host?.harnesses) ?? [];
-  const roles = useStore((s) => s.snapshot?.roles) ?? [];
-  // The version the form was filled from. A version saved meanwhile, in another window, makes the
-  // backend refuse this save instead of being written over (#16).
-  const [version] = useState(() => current?.version ?? 0);
-  const [checks, setChecks] = useState<Check[]>(current?.config.checks ?? []);
-  const [excluded, setExcluded] = useState((current?.config.excluded ?? []).join('\n'));
-  const [forced, setForced] = useState((current?.config.force_tracked ?? []).join('\n'));
-  const [maxFiles, setMaxFiles] = useState(current?.config.max_new_files ?? 1000);
-  const [maxMb, setMaxMb] = useState(Math.round((current?.config.max_new_bytes ?? 50 * 1024 * 1024) / 1024 / 1024));
-  if (!current) {
-    return (
-      <Modal title="设置" onClose={onClose} wide>
-        <Permissions harnesses={harnesses} />
-        {roles.length > 0 && <Roles title="Angela · 本机所有项目共用" roles={roles} harnesses={harnesses} />}
-      </Modal>
-    );
-  }
+/** The form's fields, as the configuration fills them. */
+interface Form {
+  checks: Check[];
+  excluded: string;
+  forced: string;
+  maxFiles: number;
+  maxMb: number;
+}
 
-  const save = async () => {
-    const config: ProjectConfig = {
-      checks: checks.filter((c) => c.command.trim()),
-      excluded: lines(excluded),
-      force_tracked: lines(forced),
-      max_new_files: maxFiles,
-      max_new_bytes: maxMb * 1024 * 1024,
-    };
-    const saved = await run('edit_project_config', { expected_version: version, config });
-    if (saved !== undefined) onClose();
+const formOf = (config: ProjectConfig): Form => ({
+  checks: config.checks,
+  excluded: config.excluded.join('\n'),
+  forced: config.force_tracked.join('\n'),
+  maxFiles: config.max_new_files,
+  maxMb: Math.round(config.max_new_bytes / 1024 / 1024),
+});
+
+const configOf = (form: Form): ProjectConfig => ({
+  checks: form.checks.filter((c) => c.command.trim()),
+  excluded: lines(form.excluded),
+  force_tracked: lines(form.forced),
+  max_new_files: form.maxFiles,
+  max_new_bytes: form.maxMb * 1024 * 1024,
+});
+
+/**
+ * The project configuration (data-model.md §9.1 project_config): each save is a new version, and
+ * checks and captures name the version they used. The form saves the version it was filled from;
+ * one saved meanwhile in another window makes the backend refuse, not overwrite (#16).
+ */
+function ProjectChecks({ project }: { project: string }) {
+  const current = useStore((s) => s.settings?.snapshot?.config ?? null);
+  if (!current) return <Header title="验证与采集" />;
+  return <ConfigForm key={project} project={project} version={current.version} config={current.config} />;
+}
+
+function ConfigForm({ project, version, config }: { project: string; version: number; config: ProjectConfig }) {
+  const [base, setBase] = useState({ version, config });
+  const [form, setForm] = useState(() => formOf(config));
+  const [saving, setSaving] = useState(false);
+  const dirty = JSON.stringify(configOf(form)) !== JSON.stringify(configOf(formOf(base.config)));
+  // A newer version saved elsewhere replaces an untouched form; an edited one keeps its edits. The
+  // snapshot may still name an older version for a moment after this form saved.
+  const newer = version > base.version;
+  useEffect(() => {
+    if (newer && !dirty) {
+      setBase({ version, config });
+      setForm(formOf(config));
+    }
+  }, [newer, version, config, dirty]);
+  const set = (patch: Partial<Form>) => setForm({ ...form, ...patch });
+  const setCheck = (i: number, patch: Partial<Check>) => set({ checks: form.checks.map((c, j) => (i === j ? { ...c, ...patch } : c)) });
+  const reset = () => {
+    setBase({ version, config });
+    setForm(formOf(config));
   };
-  const setCheck = (i: number, patch: Partial<Check>) => setChecks(checks.map((c, j) => (i === j ? { ...c, ...patch } : c)));
+  const save = async () => {
+    setSaving(true);
+    const saved = await runIn<{ version: number }>(project, 'edit_project_config', { expected_version: base.version, config: configOf(form) });
+    setSaving(false);
+    if (saved === undefined) return;
+    toast(`已保存为第 ${saved.version} 版`);
+    const next = configOf(form);
+    setBase({ version: saved.version, config: next });
+    setForm(formOf(next));
+  };
 
   return (
-    <Modal title="设置" onClose={onClose} wide>
-      <Permissions harnesses={harnesses} />
-      <Roles title="角色 · 本项目" roles={roles} harnesses={harnesses} />
-      <Storage />
-      <Archive onClose={onClose} />
-
-      <h2 className="settings-group">项目设置 · 第 {version} 版</h2>
-      {current.version !== version && (
-        <p className="error">另一个窗口已保存了第 {current.version} 版。关闭后重新打开，在新版本上修改。</p>
-      )}
-      <h3>检查命令</h3>
-      <p className="muted">在验证现场按顺序运行，退出码为 0 算通过。第一条失败后不再运行其余的。</p>
-      {checks.map((check, i) => (
+    <form
+      className="settings-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <Header title="验证与采集">候选成果在验证现场按顺序运行检查命令，全部退出码为 0 才算通过。</Header>
+      <h3 className="settings-section">检查命令</h3>
+      {form.checks.length === 0 && <p className="muted">没有检查命令：候选成果直接进入验收。</p>}
+      {form.checks.map((check, i) => (
         <div key={i} className="check-row">
           <input value={check.command} onChange={(e) => setCheck(i, { command: e.target.value })} placeholder="例如 cargo test" aria-label="检查命令" />
-          <input
-            type="number"
-            min={1}
-            value={check.timeout_secs}
-            onChange={(e) => setCheck(i, { timeout_secs: Number(e.target.value) })}
-            aria-label="超时（秒）"
-          />
+          <input type="number" min={1} value={check.timeout_secs} onChange={(e) => setCheck(i, { timeout_secs: Number(e.target.value) })} aria-label="超时（秒）" />
           <span className="muted">秒</span>
-          <button className="ghost" onClick={() => setChecks(checks.filter((_, j) => j !== i))} aria-label="删除">
+          <button type="button" className="ghost" onClick={() => set({ checks: form.checks.filter((_, j) => j !== i) })} aria-label="删除">
             ✕
           </button>
         </div>
       ))}
-      <button className="small" onClick={() => setChecks([...checks, { command: '', timeout_secs: 600 }])}>
+      <button type="button" className="small" onClick={() => set({ checks: [...form.checks, { command: '', timeout_secs: 600 }] })}>
         + 添加检查命令
       </button>
 
-      <h3>采集范围</h3>
+      <h3 className="settings-section">采集范围</h3>
       <label>
-        始终排除（gitignore 写法，每行一条；重新物化时作为缓存保留）
-        <textarea value={excluded} onChange={(e) => setExcluded(e.target.value)} rows={3} placeholder={'target/\nnode_modules/'} />
+        始终排除（gitignore 写法，每行一条）
+        <textarea value={form.excluded} onChange={(e) => set({ excluded: e.target.value })} rows={3} placeholder={'target/\nnode_modules/'} />
       </label>
       <label>
-        强制采集（路径前缀，每行一条；即使被 ignore 规则匹配也采集）
-        <textarea value={forced} onChange={(e) => setForced(e.target.value)} rows={2} />
+        强制采集（路径前缀，每行一条）
+        <textarea value={form.forced} onChange={(e) => set({ forced: e.target.value })} rows={2} />
       </label>
 
-      <h3>体积护栏</h3>
-      <p className="muted">一次采集新增的文件超过任一上限时，采集停下，等你决定。</p>
-      <div className="check-row">
-        <input type="number" min={0} value={maxFiles} onChange={(e) => setMaxFiles(Number(e.target.value))} aria-label="新增文件数上限" />
+      <h3 className="settings-section">体积护栏</h3>
+      <Row label="一次采集新增的上限" description="超过任一上限时采集停下，等你决定。">
+        <input type="number" min={0} value={form.maxFiles} onChange={(e) => set({ maxFiles: Number(e.target.value) })} aria-label="新增文件数上限" />
         <span className="muted">个文件</span>
-        <input type="number" min={0} value={maxMb} onChange={(e) => setMaxMb(Number(e.target.value))} aria-label="新增大小上限" />
+        <input type="number" min={0} value={form.maxMb} onChange={(e) => set({ maxMb: Number(e.target.value) })} aria-label="新增大小上限" />
         <span className="muted">MB</span>
-      </div>
+      </Row>
 
-      <div className="actions">
-        <button onClick={onClose}>取消</button>
-        <button className="primary" onClick={save}>
-          保存项目设置为第 {version + 1} 版
+      <footer className="settings-save">
+        {newer ? (
+          <span className="error">另一个窗口已保存第 {version} 版。放弃修改后在新版本上改。</span>
+        ) : (
+          <span className="muted">{dirty ? '有未保存的修改' : `第 ${base.version} 版`}</span>
+        )}
+        <span className="spacer" />
+        {(dirty || newer) && (
+          <button type="button" onClick={reset}>
+            放弃修改
+          </button>
+        )}
+        <button type="submit" className="primary" disabled={saving}>
+          {saving ? '正在保存…' : '保存'}
         </button>
-      </div>
-    </Modal>
+      </footer>
+    </form>
   );
 }

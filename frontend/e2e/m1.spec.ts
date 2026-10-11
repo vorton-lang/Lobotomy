@@ -80,13 +80,16 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   const gate = path.join(path.dirname(backend.repo), 'check-gate');
   fs.writeFileSync(gate, '');
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '设置' });
+  const settings = page.getByRole('region', { name: '设置' });
+  await settings.getByRole('button', { name: '验证与采集' }).click();
   await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
   await settings.getByLabel('检查命令').fill(
     'node -e "const fs=require(\'fs\');setTimeout(()=>process.exit(1),30000);setInterval(()=>{if(fs.existsSync(process.env.LOBOTOMY_TEST_CHECK_GATE))process.exit(0)},20)"',
   );
-  await settings.getByRole('button', { name: /保存项目设置为/ }).click();
-  await expect(settings).toBeHidden();
+  await settings.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(settings.locator('.settings-save')).toContainText('第 2 版');
+  await settings.getByRole('button', { name: '← 返回' }).click();
+  await expect(settings).toHaveCount(0);
 
   await createTask(page, '改 work.txt', 'FAKE:done FAKE:text=first');
   const card = page.locator('.attention .card').filter({ hasText: '等你验收' });

@@ -5,10 +5,10 @@ import { useStore } from '../store';
 import { AttentionCard } from './Attention';
 import { Workboard } from './Workboard';
 
-export function Sidebar() {
+export function Sidebar({ width }: { width: number }) {
   const attention = useStore((s) => s.snapshot?.attention ?? []);
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" style={{ width }}>
       <section className="attention" aria-label="等你决定">
         <h3>
           等你决定 {attention.length > 0 && <span className="count">{attention.length}</span>}

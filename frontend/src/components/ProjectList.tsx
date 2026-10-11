@@ -13,7 +13,7 @@ function Count({ n }: { n: number }) {
   return n > 0 ? <span className="count">{n}</span> : null;
 }
 
-export function ProjectList() {
+export function ProjectList({ width }: { width: number }) {
   const host = useStore((s) => s.host);
   const current = useStore((s) => s.project);
   const [creating, setCreating] = useState(false);
@@ -22,7 +22,7 @@ export function ProjectList() {
   const listed = host.projects.filter((p) => p.state === 'running');
   const archived = host.projects.filter((p) => p.state === 'archived');
   return (
-    <nav className="projects" aria-label="项目">
+    <nav className="projects" aria-label="项目" style={{ width }}>
       <button className={`project-item ${current === null ? 'selected' : ''}`} aria-current={current === null || undefined} onClick={() => selectProject(null)}>
         <span className="project-name">全部</span>
         <Count n={totalAttention(host)} />

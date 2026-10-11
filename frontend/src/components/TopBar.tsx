@@ -1,14 +1,12 @@
-import { useState } from 'react';
 import { shortSha } from '../format';
-import { useStore } from '../store';
-import { Settings } from './Settings';
+import { closeSettings, openSettings, useStore } from '../store';
 
 export function TopBar() {
   const status = useStore((s) => s.status);
   const all = useStore((s) => s.project === null);
   const project = useStore((s) => s.snapshot?.project);
   const stopped = useStore((s) => s.snapshot?.attention.some((a) => a.kind === 'preview_stopped'));
-  const [settings, setSettings] = useState(false);
+  const settings = useStore((s) => s.settings !== null);
   const repo = project?.repo_path.split(/[\\/]/).filter(Boolean).at(-1);
   const behind = project && project.previewed !== project.integration;
   return (
@@ -33,10 +31,9 @@ export function TopBar() {
       <span className={`status ${status}`} title={status === 'open' ? '已连接后端' : '正在重新连接后端'}>
         {status === 'open' ? '已连接' : '连接中断，正在重连'}
       </span>
-      <button className="ghost" onClick={() => setSettings(true)} aria-label="设置">
+      <button className="ghost" onClick={settings ? closeSettings : openSettings} aria-label="设置" aria-pressed={settings}>
         ⚙
       </button>
-      {settings && <Settings onClose={() => setSettings(false)} />}
     </header>
   );
 }

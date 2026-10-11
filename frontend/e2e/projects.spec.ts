@@ -162,55 +162,78 @@ test('a project that could not be opened says why; archived ones come back', asy
   await expect.poll(() => sent).toEqual([['retry_open', 'broken'], ['archive_project', 'broken'], ['unarchive_project', 'old']]);
 });
 
-// Archiving the project shown stops it; the settings ask once more first.
-test('the settings archive the project after asking', async ({ page }) => {
-  const sent: [string, unknown][] = [];
-  await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [], angela }, (name, args) => {
-    sent.push([name, args.project_id]);
-  });
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '设置' });
-  await settings.getByRole('button', { name: '归档这个项目…' }).click();
-  expect(sent).toEqual([]);
-  await settings.getByRole('button', { name: '归档「alpha」' }).click();
-  await expect(settings).toHaveCount(0);
-  expect(sent).toEqual([['archive_project', 'alpha']]);
-});
 
-// On 「全部」 there is no project snapshot. Settings still show the host's permissions and must
-// not repeatedly subscribe to a fresh empty array until React stops rendering the window.
-test('settings on 「全部」 stay usable without a project snapshot', async ({ page }) => {
+// The settings are a page of their own (frontend.md §7.8): they open on the page they showed last,
+// wherever the window is, read the project of their page themselves, and leave the window where
+// it was.
+test('the settings are a page of their own, wherever the window is', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await openHost(page, {
+  const backend = await openHost(page, {
     projects: [entry('alpha'), entry('beta')], attention: [],
     harnesses: [{ harness: 'codex', permission: 'auto_review' }], angela,
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '设置' });
-  await expect(settings.getByRole('heading', { name: '权限 · 本机所有项目共用' })).toBeVisible();
-  await expect(settings.getByRole('radio', { name: /自动审批/ })).toBeChecked();
-  await expect(settings.getByLabel('Malkuth 使用的 harness')).toHaveCount(0);
-  await settings.getByRole('button', { name: '关闭', exact: true }).click();
-  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /beta/ }).click();
-  await expect(page.locator('.topbar')).toContainText('beta · main');
+  const settings = page.getByRole('region', { name: '设置' });
+  await expect(settings.getByRole('heading', { name: '权限' })).toBeVisible();
+  await expect(settings.getByRole('radiogroup', { name: 'Codex 的权限' }).getByRole('radio', { name: '自动审批' })).toBeChecked();
+
+  const nav = settings.getByRole('navigation', { name: '设置分类' });
+  await nav.getByRole('button', { name: 'Angela' }).click();
+  await expect(settings.getByRole('radiogroup', { name: 'Angela 使用的 harness' })).toBeVisible();
+  await nav.locator('.settings-nav-group').filter({ hasText: 'beta' }).getByRole('button', { name: '常规' }).click();
+  await expect(settings.getByRole('radiogroup', { name: 'Malkuth 使用的 harness' })).toBeVisible();
+  expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['angela', 'angela', 'beta']);
+
+  await settings.getByRole('button', { name: '← 返回' }).click();
+  await expect(page.locator('.topbar')).toContainText('全部项目');
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
+  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  // From another project, the settings still show beta's page.
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(nav.locator('.settings-nav-group').filter({ hasText: 'beta' }).locator('[aria-current]')).toHaveText('常规');
+  await expect(settings.locator('.settings-header h2')).toHaveText('beta');
   expect(errors).toEqual([]);
 });
 
-// A host push can announce the archive before its command reply closes Settings. Hold that
-// reply until the window has switched to 「全部」, so this ordering is tested without a timer.
-test('archiving clears the project snapshot while settings await the reply', async ({ page }) => {
+// A form saves explicitly the version it was filled from, to the project of its page.
+test('the project configuration is saved to the settings’ project', async ({ page }) => {
+  const sent: [string, Record<string, unknown>][] = [];
+  const backend = await openHost(page, { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela }, (name, args) => {
+    sent.push([name, args]);
+    return { version: 2 };
+  });
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('region', { name: '设置' });
+  await settings.locator('.settings-nav-group').filter({ hasText: 'beta' }).getByRole('button', { name: '验证与采集' }).click();
+  await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
+  await settings.getByLabel('检查命令').fill('npm test');
+  await expect(settings.locator('.settings-save')).toContainText('有未保存的修改');
+  await settings.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(settings.locator('.settings-save')).toContainText('第 2 版');
+  expect(sent.map(([name, args]) => [name, args.expected_version, (args.config as { checks: { command: string }[] }).checks.map((c) => c.command)]))
+    .toEqual([['edit_project_config', 1, ['npm test']]]);
+  expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['beta']);
+});
+
+// Archiving from the settings asks once more. A host push can announce the archive before the
+// command's reply: the page of the archived project goes, the settings stay usable on the host's
+// page, and the window goes to 「全部」. The reply is held until then, so the order is tested
+// without a timer.
+test('archiving from the settings asks first and leaves them usable', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const host: HostSnapshot = {
     projects: [entry('alpha', [], true), entry('beta')], attention: [],
     harnesses: [{ harness: 'codex', permission: 'auto_review' }], angela,
   };
+  const sent: unknown[] = [];
   let finish!: () => void;
   const reply = new Promise<void>((resolve) => { finish = resolve; });
   const backend = await openHost(page, host, async (name, args) => {
     if (name !== 'archive_project') return null;
-    expect(args.project_id).toBe('alpha');
+    sent.push(args.project_id);
     host.projects[0].state = 'archived';
     backend.push({ type: 'host' });
     await reply;
@@ -219,19 +242,45 @@ test('archiving clears the project snapshot while settings await the reply', asy
   await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
   await expect(page.locator('.topbar')).toContainText('alpha · main');
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '设置' });
-  await settings.getByRole('button', { name: '归档这个项目…' }).click();
+  const settings = page.getByRole('region', { name: '设置' });
+  await settings.locator('.settings-nav-group').filter({ hasText: 'alpha' }).getByRole('button', { name: '常规' }).click();
+  await settings.getByRole('button', { name: '归档…' }).click();
+  expect(sent).toEqual([]);
   await settings.getByRole('button', { name: '归档「alpha」' }).click();
   try {
+    await expect(settings.getByRole('heading', { name: '权限' })).toBeVisible();
+    await expect(settings.locator('.settings-nav-group').filter({ hasText: 'alpha' })).toHaveCount(0);
     await expect(page.locator('.topbar')).toContainText('全部项目');
-    await expect(settings.getByRole('heading', { name: '权限 · 本机所有项目共用' })).toBeVisible();
-    await expect(settings.getByLabel('Malkuth 使用的 harness')).toHaveCount(0);
   } finally {
     finish();
   }
-  await expect(settings).toHaveCount(0);
+  expect(sent).toEqual(['alpha']);
+  await settings.getByRole('button', { name: '← 返回' }).click();
   await expect(page.getByRole('navigation', { name: '项目' })).toContainText('已归档 1');
   await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /beta/ }).click();
   await expect(page.locator('.topbar')).toContainText('beta · main');
   expect(errors).toEqual([]);
+});
+
+// The side columns and the task panel can be dragged wider or narrower; the width stays after a
+// reload (frontend.md §2). The arrow keys move the edge too.
+test('the right column is dragged wider and keeps its width', async ({ page }) => {
+  await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [], angela });
+  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  const sidebar = page.locator('.sidebar');
+  const sash = page.getByRole('separator', { name: '右侧栏的宽度' });
+  expect((await sidebar.boundingBox())!.width).toBeCloseTo(340, 0);
+  const box = (await sash.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 100, box.y + 200, { steps: 5 });
+  await page.mouse.up();
+  expect((await sidebar.boundingBox())!.width).toBeCloseTo(440, 0);
+  await sash.focus();
+  await page.keyboard.press('ArrowLeft');
+  expect((await sidebar.boundingBox())!.width).toBeCloseTo(456, 0);
+
+  await page.reload();
+  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  expect((await page.locator('.sidebar').boundingBox())!.width).toBeCloseTo(456, 0);
 });

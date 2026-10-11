@@ -51,8 +51,24 @@ export interface SearchState {
   focus: number;
 }
 
+/**
+ * A page of the settings (frontend.md §7.8): the host's permissions, Angela, or one tab of a
+ * project. The settings choose their page themselves; where the window is does not change it.
+ */
+export type SettingsPage =
+  | { kind: 'permissions' }
+  | { kind: 'angela' }
+  | { kind: 'project'; project: string; tab: 'general' | 'checks' };
+
+/** The settings while they are open, with the snapshot of the page's project or of Angela. */
+export interface SettingsState {
+  page: SettingsPage;
+  snapshot: Snapshot | null;
+}
+
 interface State {
   status: Status;
+  settings: SettingsState | null;
   /** The projects and what the host shows across them (frontend.md §3 rule 8). */
   host: HostSnapshot | null;
   /**
@@ -106,6 +122,7 @@ const emptyProject = () => ({
 
 export const useStore = create<State>(() => ({
   status: 'connecting',
+  settings: null,
   host: null,
   project: null,
   ...emptyProject(),
@@ -206,12 +223,71 @@ export function useCommand<T = unknown>(name: string) {
 
 /** Runtime actions take no request id. */
 export async function act<T = unknown>(name: string, args: Record<string, unknown> = {}): Promise<T | undefined> {
+  return command<T>({ name, args });
+}
+
+/** A user command about `project`, or Angela, wherever the window is: the settings run these. */
+export async function runIn<T = unknown>(project: string, name: string, args: Record<string, unknown> = {}): Promise<T | undefined> {
+  return command<T>({ name, args: { request_id: crypto.randomUUID(), ...args }, project });
+}
+
+async function command<T>(params: Record<string, unknown>): Promise<T | undefined> {
   try {
-    return await call<T>('command', { name, args });
+    return await call<T>('command', params);
   } catch (e) {
     toast(e instanceof RequestFailed ? `${e.remote.message}` : String(e));
     return undefined;
   }
+}
+
+// ---- settings (frontend.md §7.8) ----
+
+let settingsPage: SettingsPage = { kind: 'permissions' };
+
+/** The project or Angela whose snapshot a settings page needs; `null` for the host's pages. */
+export function settingsTarget(page: SettingsPage): string | null {
+  return page.kind === 'angela' ? ANGELA : page.kind === 'project' ? page.project : null;
+}
+
+/** Opens the settings on the page they showed last. */
+export function openSettings() {
+  showSettingsPage(settingsPage);
+}
+
+export function closeSettings() {
+  useStore.setState({ settings: null });
+}
+
+export function showSettingsPage(page: SettingsPage) {
+  const before = useStore.getState().settings;
+  const same = before !== null && settingsTarget(before.page) === settingsTarget(page);
+  settingsPage = page;
+  useStore.setState({ settings: { page, snapshot: same ? before.snapshot : null } });
+  if (!same) void loadSettingsSnapshot();
+}
+
+let settingsRequest = 0;
+
+async function loadSettingsSnapshot() {
+  const settings = useStore.getState().settings;
+  const target = settings && settingsTarget(settings.page);
+  if (!target) return;
+  const request = ++settingsRequest;
+  const snapshot = await call<Snapshot>('snapshot', { project: target }).catch(() => null);
+  const now = useStore.getState().settings;
+  if (request !== settingsRequest || !now || settingsTarget(now.page) !== target) return;
+  useStore.setState({ settings: { ...now, snapshot } });
+}
+
+/** A project whose page is open may close: the settings then go back to the host's page. */
+function keepSettingsPage(host: HostSnapshot) {
+  const settings = useStore.getState().settings;
+  if (!settings) return;
+  const page = settings.page;
+  const gone =
+    (page.kind === 'angela' && !angelaOpen(host)) ||
+    (page.kind === 'project' && !host.projects.some((p) => p.id === page.project && p.state === 'running' && p.error === null));
+  if (gone) showSettingsPage({ kind: 'permissions' });
 }
 
 /**
@@ -266,6 +342,7 @@ async function loadHost(): Promise<boolean> {
   const host = await call<HostSnapshot>('host');
   if (request < appliedHost) return false;
   appliedHost = request;
+  keepSettingsPage(host);
   const { project: current, host: before } = useStore.getState();
   const project = chooseProject(host, current, before === null);
   // On 「全部」, Angela opening or closing changes what the window shows.
@@ -463,6 +540,7 @@ function debounced(f: () => Promise<void>, ms: number) {
 }
 
 const refreshSnapshot = debounced(loadSnapshot, 120);
+const refreshSettings = debounced(loadSettingsSnapshot, 120);
 const refreshHostSoon = debounced(refreshHost, 120);
 /** The project list's counts and the window title follow every project's events. */
 const refreshCounts = debounced(async () => {
@@ -477,6 +555,11 @@ const refreshDetail = debounced(async () => {
 
 function onPush(push: Push) {
   if (push.type === 'events') refreshCounts();
+  // The settings follow their own page's project, wherever the window is.
+  const settings = useStore.getState().settings;
+  if (settings && (push.type === 'host' || push.type === 'resync' || ('project' in push && push.type === 'events' && push.project === settingsTarget(settings.page)))) {
+    refreshSettings();
+  }
   // Beyond the counts, the window shows only its own project, or Angela on 「全部」.
   if ('project' in push && push.project !== scope()) return;
   switch (push.type) {
