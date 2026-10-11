@@ -30,7 +30,7 @@ async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: strin
   let push!: (push: Push) => void;
   await page.routeWebSocket(/\/gui\?token=ui-test$/, (route) => {
     push = (p) => route.send(JSON.stringify(p));
-    route.onMessage((raw) => {
+    route.onMessage(async (raw) => {
       const { id, method, params } = JSON.parse(String(raw)) as { id: number; method: string; params: Record<string, any> };
       asked.push({ method, project: params.project });
       let result: unknown = null;
@@ -40,7 +40,7 @@ async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: strin
       else if (method === 'task') result = detail(exported);
       else if (method === 'trials' || method === 'diff') result = [];
       else if (method === 'disk_usage') result = { raw_output: { files: 0, bytes: 0 } };
-      else if (method === 'command') result = onCommand?.(params.name, params.args) ?? null;
+      else if (method === 'command') result = await onCommand?.(params.name, params.args) ?? null;
       route.send(JSON.stringify({ id, result }));
     });
   });
@@ -131,4 +131,63 @@ test('the settings archive the project after asking', async ({ page }) => {
   await settings.getByRole('button', { name: '归档「alpha」' }).click();
   await expect(settings).toHaveCount(0);
   expect(sent).toEqual([['archive_project', 'alpha']]);
+});
+
+// On 「全部」 there is no project snapshot. Settings still show the host's permissions and must
+// not repeatedly subscribe to a fresh empty array until React stops rendering the window.
+test('settings on 「全部」 stay usable without a project snapshot', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await openHost(page, {
+    projects: [entry('alpha'), entry('beta')], attention: [],
+    harnesses: [{ harness: 'codex', permission: 'auto_review' }],
+  });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await expect(settings.getByRole('heading', { name: '权限 · 本机所有项目共用' })).toBeVisible();
+  await expect(settings.getByRole('radio', { name: /自动审批/ })).toBeChecked();
+  await expect(settings.getByLabel('Malkuth 使用的 harness')).toHaveCount(0);
+  await settings.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /beta/ }).click();
+  await expect(page.locator('.topbar')).toContainText('beta · main');
+  expect(errors).toEqual([]);
+});
+
+// A host push can announce the archive before its command reply closes Settings. Hold that
+// reply until the window has switched to 「全部」, so this ordering is tested without a timer.
+test('archiving clears the project snapshot while settings await the reply', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const host: HostSnapshot = {
+    projects: [entry('alpha', [], true), entry('beta')], attention: [],
+    harnesses: [{ harness: 'codex', permission: 'auto_review' }],
+  };
+  let finish!: () => void;
+  const reply = new Promise<void>((resolve) => { finish = resolve; });
+  const backend = await openHost(page, host, async (name, args) => {
+    if (name !== 'archive_project') return null;
+    expect(args.project_id).toBe('alpha');
+    host.projects[0].state = 'archived';
+    backend.push({ type: 'host' });
+    await reply;
+    return null;
+  });
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
+  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置' });
+  await settings.getByRole('button', { name: '归档这个项目…' }).click();
+  await settings.getByRole('button', { name: '归档「alpha」' }).click();
+  try {
+    await expect(page.locator('.topbar')).toContainText('全部项目');
+    await expect(settings.getByRole('heading', { name: '权限 · 本机所有项目共用' })).toBeVisible();
+    await expect(settings.getByLabel('Malkuth 使用的 harness')).toHaveCount(0);
+  } finally {
+    finish();
+  }
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: '项目' })).toContainText('已归档 1');
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /beta/ }).click();
+  await expect(page.locator('.topbar')).toContainText('beta · main');
+  expect(errors).toEqual([]);
 });
