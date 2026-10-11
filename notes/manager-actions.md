@@ -216,6 +216,13 @@ ask_user(question, attachments?, blocking?: [task_id])
   → 生成等待用户的 open_question；blocking 中的任务进入"阻塞"
 ```
 
+现状（M4 第 3 步，2026-10-11）：
+
+- 实现的是 `ask_user(question)`。问题存在 Manager 的数据库中，列进「全部」的"等你决定"，可以在卡片上直接回复。
+- 用户在提问之后发出的消息送到她的下一个 turn 时，问题关闭，与执行者的提问相同（data-model.md §9.2，#17）。她仍需要回答时，再问一次。
+- 没有 `blocking` 参数。回答之前不该继续的任务，由她另外调用 `set_paused` 暂停，这是她自己的暂停，她可以恢复（roles-and-tasks.md §4）。依据：问题在她的数据库中，任务在项目的数据库中，一条命令只写一个数据库（data-model.md §10.6 跨库操作第 5 条）。
+- 没有 `attachments` 参数，问题里写明要用户看什么。
+
 运行时在以下情况发出通知：
 
 | 情况 | 判定 |

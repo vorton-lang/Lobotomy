@@ -17,6 +17,7 @@ use axum::{
 use lobotomy_core::Caller;
 use lobotomy_core::host::ProjectState;
 use lobotomy_core::id::new_id;
+use lobotomy_core::manager::AskUser;
 use lobotomy_core::quota::Domain;
 use lobotomy_core::task::{Abandon, Action, Assign, Quote, SendToRole, SetPaused};
 use lobotomy_core::turn::{TurnState, turn_by_token};
@@ -189,6 +190,12 @@ pub struct ReasonArgs {
     pub task_id: String,
     /// 理由，会原样记下；退回时也会原样发给执行者
     pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AskArgs {
+    /// 只有用户能决定的一个问题，带上你的推荐和默认选择
+    pub question: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -378,6 +385,28 @@ impl AngelaTools {
             Ok("已放弃。".to_owned())
         })
         .await
+    }
+
+    #[tool(description = "向用户提一个只有用户能决定的问题。它列进「等你决定」，直到用户在提问之后发来的消息送到你。\
+                       要让相关任务在回答前停下，另外用 set_paused 暂停它们。")]
+    async fn ask_user(
+        &self,
+        Parameters(args): Parameters<AskArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (reach, turn) = caller_turn(&context).await?;
+        let refused = |text: String| Ok(CallToolResult::error(vec![ContentBlock::text(format!("被拒绝：{text}"))]));
+        let Some(turn) = turn else {
+            return refused("这个 URL 不属于 Angela 的 turn".into());
+        };
+        let caller = Caller::Role { role: turn.role, turn_id: turn.id };
+        let ask = AskUser { question: args.question };
+        match db(&reach.angela, move |db| db.execute(&caller, &ask)).await {
+            Ok(id) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "已列进「等你决定」（{id}）。用户之后发来的消息送到你时，这个问题关闭。"
+            ))])),
+            Err(e) => refused(why(&e)),
+        }
     }
 
     #[tool(description = "暂停或恢复一个任务。用户暂停的任务只有用户能恢复；你暂停的任务你可以恢复。")]

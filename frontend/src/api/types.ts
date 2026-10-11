@@ -255,7 +255,9 @@ export type Attention =
   | { kind: 'accept'; task_id: string; title: string; verification_id: string }
   | { kind: 'quota'; domain: Domain }
   | { kind: 'job_failed'; key: string; reason: string }
-  | { kind: 'preview_stopped'; reason: string };
+  | { kind: 'preview_stopped'; reason: string }
+  /** Angela asked the user something only the user decides; the user's next message answers it. */
+  | { kind: 'question'; id: string; question: string; asked_at: number };
 
 export interface Snapshot {
   seq: number;

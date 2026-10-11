@@ -148,6 +148,25 @@ test('Angela’s references show the user’s words and attachments that open th
   await expect(page.getByRole('region', { name: '导出报表', exact: true })).toBeVisible();
 });
 
+// Angela's question waits beside her conversation; the reply goes to her (manager-actions.md §6
+// `ask_user`).
+test('Angela’s question waits in 「全部」 and the reply goes to her', async ({ page }) => {
+  const sent: [string, Record<string, unknown>][] = [];
+  const asking: AngelaStatus = { ...angela, attention: [{ kind: 'question', id: 'q1', question: '导出先做 CSV 还是 Excel？', asked_at: 1 }] };
+  const host: HostSnapshot = { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela: asking };
+  const backend = await openHost(page, host, (name, args) => {
+    sent.push([name, args]);
+    return { id: 'msg2' };
+  });
+  const card = page.getByRole('region', { name: '全部项目' }).getByRole('region', { name: 'Angela' });
+  await expect(card).toContainText('导出先做 CSV 还是 Excel？');
+  await expect(page).toHaveTitle('(1) Lobotomy');
+  await card.getByLabel('回复 Angela').fill('先做 CSV');
+  await card.getByRole('button', { name: '发送' }).click();
+  await expect.poll(() => sent.map(([name, args]) => [name, args.role, args.task_id, args.body])).toEqual([['send_message', 'Angela', null, '先做 CSV']]);
+  expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['angela']);
+});
+
 // The projects run without Angela (roles-and-tasks.md §1.4): when she cannot be opened, 「全部」
 // says why and lists what waits, as before her.
 test('without Angela 「全部」 says why and lists what waits', async ({ page }) => {

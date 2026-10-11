@@ -455,6 +455,10 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     {
         crate::report::set_blocked(cx, task, None)?;
     }
+    // The same for the manager's questions to the user (manager-actions.md §6 `ask_user`).
+    if let Some(sent) = messages.iter().filter(|m| m.source == Caller::User.scope()).map(|m| m.created_at).max() {
+        crate::manager::close_answered(cx, &turn_id, sent)?;
+    }
     ids.extend(messages.iter().map(|m| m.id.clone()));
     let resent = resend.map(|t| t.id.as_str());
     cx.emit(

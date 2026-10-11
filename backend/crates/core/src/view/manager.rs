@@ -112,6 +112,7 @@ fn waiting_line(attention: &Attention) -> WaitingLine {
         Attention::Quota { domain } => line("quota", None, None, domain.harness.clone()),
         Attention::JobFailed { key, reason } => line("job_failed", None, None, format!("{key}：{reason}")),
         Attention::PreviewStopped { reason } => line("preview_stopped", None, None, reason.clone()),
+        Attention::Question { question, .. } => line("question_to_user", None, None, question.clone()),
     }
 }
 
@@ -517,8 +518,15 @@ mod tests {
         };
         let mut tasks = vec![task("open", Phase::Executing, None)];
         tasks.extend((0..12).map(|i| task(&format!("done{i}"), Phase::Done, Some(i))));
-        let overview =
-            Overview { seq: 7, project: None, config: None, roles: Vec::new(), tasks, preview_stopped: None };
+        let overview = Overview {
+            seq: 7,
+            project: None,
+            config: None,
+            roles: Vec::new(),
+            tasks,
+            preview_stopped: None,
+            questions: vec![],
+        };
         let read = project_read(&overview, &[]);
         let ids: Vec<_> = read.tasks.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids.len(), 1 + CLOSED_LISTED);

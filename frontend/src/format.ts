@@ -346,6 +346,8 @@ export function attentionSummary(a: Attention): string {
       return `运行时的工作出错：${a.key}`;
     case 'preview_stopped':
       return `预览已停止：${a.reason}`;
+    case 'question':
+      return `Angela 问你：${a.question}`;
   }
 }
 
@@ -374,6 +376,8 @@ export function attentionKey(a: Attention): string {
       return `job:${a.key}`;
     case 'preview_stopped':
       return 'preview';
+    case 'question':
+      return `question:${a.id}`;
   }
 }
 

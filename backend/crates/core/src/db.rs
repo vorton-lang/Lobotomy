@@ -21,6 +21,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0010_event_command.sql"),
     include_str!("../migrations/0011_manager.sql"),
     include_str!("../migrations/0012_manager_cursor.sql"),
+    include_str!("../migrations/0013_question.sql"),
 ];
 
 /// One project's database.

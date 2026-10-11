@@ -46,6 +46,10 @@ pub struct Overview {
     /// Why the preview stopped, if it did. The GUI sees it as an attention entry.
     #[serde(skip)]
     pub preview_stopped: Option<String>,
+    /// The manager's open questions to the user; only her database has any. The GUI sees them as
+    /// attention entries.
+    #[serde(skip)]
+    pub questions: Vec<crate::manager::Question>,
 }
 
 #[derive(Serialize)]
@@ -132,7 +136,8 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
         });
     }
     let preview_stopped = if project.is_some() { preview_stopped(conn)? } else { None };
-    Ok(Overview { seq, project, config, roles, tasks, preview_stopped })
+    let questions = crate::manager::open_questions(conn)?;
+    Ok(Overview { seq, project, config, roles, tasks, preview_stopped, questions })
 }
 
 /// The role's task is executing, yet nothing will move it on without the user: the last turn of
@@ -227,6 +232,13 @@ pub enum Attention {
     PreviewStopped {
         reason: String,
     },
+    /// The manager asked the user something only the user decides (manager-actions.md §6
+    /// `ask_user`). The user's next message to her answers it.
+    Question {
+        id: String,
+        question: String,
+        asked_at: i64,
+    },
 }
 
 /// What waits for the user, in the order the GUI lists it: each role's, each task's, blocked
@@ -288,6 +300,11 @@ pub fn attention(
     if let Some(reason) = &overview.preview_stopped {
         out.push(Attention::PreviewStopped { reason: reason.clone() });
     }
+    out.extend(overview.questions.iter().map(|q| Attention::Question {
+        id: q.id.clone(),
+        question: q.body.clone(),
+        asked_at: q.created_at,
+    }));
     out
 }
 

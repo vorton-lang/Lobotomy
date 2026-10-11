@@ -60,6 +60,15 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
           </div>
         </div>
       );
+    case 'question':
+      // Answered by the user's next message to her, here or in the conversation.
+      return (
+        <div className="card">
+          <p>Angela 问你：</p>
+          <p className="quote">{a.question}</p>
+          <Reply role="Angela" taskId={null} placeholder="回复 Angela" />
+        </div>
+      );
     case 'preview_stopped':
       return (
         <div className="card warn">
@@ -253,7 +262,7 @@ function Reply({
   children,
 }: {
   role: string;
-  taskId: string;
+  taskId: string | null;
   placeholder?: string;
   children?: React.ReactNode;
 }) {

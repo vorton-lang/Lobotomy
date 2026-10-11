@@ -1291,6 +1291,27 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// Angela's question waits in "等你决定" until the user's next message reaches her
+/// (manager-actions.md §6 `ask_user`).
+#[tokio::test]
+async fn angelas_question_waits_for_the_users_next_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().expect("Angela opened");
+    let ask = json!({ "question": "导出先做 CSV 还是 Excel？我建议先做 CSV。" });
+    let asked = tell_angela(&angela, &format!("FAKE:call=ask_user{ask}"));
+    let turn = angela_turn_for(&angela, &asked).await;
+    let [reply] = reply_texts(&angela.db, &turn.id).try_into().expect("one reply");
+    assert!(reply.starts_with("已列进「等你决定」（q_"), "{reply}");
+    let open = || angela.db.read(lobotomy_core::manager::open_questions).unwrap();
+    assert_eq!(open().len(), 1);
+
+    let answer = tell_angela(&angela, "先做 CSV");
+    angela_turn_for(&angela, &answer).await;
+    assert!(open().is_empty(), "the answer closed it");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// A project that settles wakes Angela (manager-actions.md §6 "Manager 什么时候运行"): the runtime
 /// tells her it waits for the user, with what changed since her cursor, and she runs. The project
 /// she saw first at startup, settling after its slot was written, did not wake her.

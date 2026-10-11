@@ -6,11 +6,11 @@ mod common;
 
 use common::*;
 use lobotomy_core::Caller;
-use lobotomy_core::manager::{Cursor, TellManager, cursors};
+use lobotomy_core::manager::{AskUser, Cursor, TellManager, cursors, open_questions};
 use lobotomy_core::report::ReportStatus;
 use lobotomy_core::task::{SetPaused, queued_messages};
-use lobotomy_core::view::last_event;
 use lobotomy_core::view::manager::{changes_since, settled};
+use lobotomy_core::view::{Attention, attention, last_event, overview};
 
 fn is_settled(db: &lobotomy_core::Db, blocked: &[&str]) -> bool {
     let blocked: Vec<String> = blocked.iter().map(|h| h.to_string()).collect();
@@ -69,6 +69,39 @@ fn what_changed_comes_in_a_line_each_with_the_ids_to_attach() {
     let hers = db.read(|c| changes_since(c, read.as_of)).unwrap();
     assert_eq!((hers.lines.len(), hers.by_others), (1, 0));
     assert!(hers.lines[0].starts_with("你暂停了任务"), "{:?}", hers.lines);
+}
+
+/// Her question waits in "等你决定" until a message the user sent after it is delivered to her;
+/// one sent before it, still queued, answers nothing (manager-actions.md §6 `ask_user`). The role
+/// stands in for her: her database has the projects' schema.
+#[test]
+fn her_question_waits_for_a_message_sent_after_it() {
+    let db = db();
+    idle_slot(&db);
+    send(&db, "m1", None, "看看现状");
+    let t1 = register(&db);
+    send(&db, "m2", None, "顺便问一下进度");
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let asker = Caller::Role { role: ROLE.into(), turn_id: t1.turn_id.clone() };
+    let ask = AskUser { question: "导出先做 CSV 还是 Excel？".into() };
+    let id = db.execute(&asker, &ask).unwrap();
+    let open = || db.read(open_questions).unwrap();
+    assert_eq!(open()[0].id, id);
+    let overview = db.read(|c| overview(c, "lobotomy")).unwrap();
+    let asked = attention(&overview, &[], &[], |_| false);
+    assert!(asked.iter().any(|a| matches!(a, Attention::Question { question, .. } if question.starts_with("导出"))));
+    end_turn(&db, &t1.turn_id);
+    pin_captures(&db);
+    assert_eq!(common::rejection(db.execute(&asker, &ask)), "turn_ended");
+
+    let t2 = register(&db);
+    assert_eq!(open().len(), 1, "m2 was sent before the question");
+    end_turn(&db, &t2.turn_id);
+    pin_captures(&db);
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    send(&db, "m3", None, "先做 CSV");
+    register(&db);
+    assert!(open().is_empty(), "the answer closes it");
 }
 
 /// Her inbox and her cursors are written together, in her database only (data-model.md §10.6
