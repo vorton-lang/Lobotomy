@@ -86,6 +86,34 @@ async function openMocked(page: Page, state: State) {
   };
 }
 
+// A scroll before the viewport is measured must not look like the user reading back. Later
+// pages must keep their last message visible, without even a temporary loss of following.
+test('incoming pages keep following while the viewport is first measured', async ({ page }) => {
+  const items: Item[] = [];
+  const backend = await openMocked(page, {
+    snapshot: { roles: [role(null)], tasks: [], attention: [] }, items,
+    turns: { t1: turn('t1', null) },
+  });
+  await expect(page.locator('.thread.empty')).toContainText('还没有对话');
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  await page.evaluate(() => {
+    document.documentElement.dataset.lostFollowing = 'false';
+    new MutationObserver(() => {
+      if (document.querySelector('.to-latest')) document.documentElement.dataset.lostFollowing = 'true';
+    }).observe(document.querySelector('.conversation')!, { subtree: true, childList: true });
+  });
+  for (let batch = 0; batch < 3; batch++) {
+    for (let i = batch * 20 + 1; i <= (batch + 1) * 20; i++) {
+      items.push(message(i, 't1', `第 ${i} 条` + (i % 3 === 0 ? '\n\n较长的段落。'.repeat(12) : '')));
+    }
+    backend.push({ type: 'thread', project: PROJECT, role: 'Malkuth', seq: items.length });
+    await expect(page.locator(`[data-key="item-i${items.length}"]`)).toBeInViewport();
+  }
+  await expect(page.getByRole('button', { name: /回到最新/ })).toBeHidden();
+  expect(await page.locator('html').getAttribute('data-lost-following')).toBe('false');
+});
+
 // Reading back in the thread, the user stays where they are. A button says when something new
 // came and goes back to the end (#18). The report the last message repeats starts folded.
 test('back to the latest after reading back', async ({ page }) => {
