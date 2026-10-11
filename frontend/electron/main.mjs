@@ -2,7 +2,7 @@
 // not running, keeps the app in the tray when the window closes, and stops the organization when
 // the user quits from the tray. It carries no business data.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -204,8 +204,13 @@ function createWindow() {
     height: 860,
     title: 'Lobotomy',
     icon: trayIcon(),
+    // Shown once the page has painted, on the page's own background (--bg in src/styles.css), so
+    // the window does not flash white first.
+    show: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#191918' : '#fdfdfc',
     webPreferences: { preload: path.join(here, 'preload.cjs'), contextIsolation: true, sandbox: true },
   });
+  window.once('ready-to-show', () => window.show());
   window.removeMenu();
   // Links never navigate the app window; they open in the system browser.
   window.webContents.setWindowOpenHandler(({ url }) => {

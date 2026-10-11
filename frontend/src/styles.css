@@ -1,48 +1,141 @@
+/* Design tokens (notes/ui-ux-plan.md §3). Colors are steps of Radix Colors 3.0 (MIT): sand for
+   the neutrals, indigo for the accent, blue, amber, red and grass for the states. Rules below use
+   these names only; a literal color outside the two :root blocks fails src/styles.test.ts. */
 :root {
-  --bg: #fbfaf8;
-  --panel: #ffffff;
-  --sunken: #f3f1ed;
-  --text: #1f1d1a;
-  --muted: #77726a;
-  --line: #e4e0d9;
-  --accent: #3d63dd;
-  --accent-text: #ffffff;
-  --warn-bg: #fff6e5;
-  --warn-line: #f0c36d;
-  --error: #c4332b;
-  --ok: #2f8f4e;
-  --agent: #8a5a2b;
-  --mine: #e9eefc;
-  --runtime: #f1efe9;
-  --radius: 8px;
+  --bg: #fdfdfc; /* sand 1: the conversation, the page */
+  --bg-rail: #f9f9f8; /* sand 2: the side columns */
+  --panel: #ffffff; /* cards, inputs, dialogs */
+  --sunken: #f1f0ef; /* sand 3: code, outputs, quiet fills */
+  --hover: #e9e8e6; /* sand 4 */
+  --active: #e2e1de; /* sand 5: pressed, selected */
+  --line: #dad9d6; /* sand 6: separators, card edges */
+  --line-strong: #cfceca; /* sand 7: control edges */
+  --faint: #8d8d86; /* sand 9: decoration only, never text */
+  --muted: #63635e; /* sand 11 */
+  --text: #21201c; /* sand 12 */
+
+  --accent: #3e63dd; /* indigo 9: the primary action */
+  --accent-hover: #3358d4; /* indigo 10 */
+  --accent-text: #3a5bc7; /* indigo 11: links */
+  --accent-soft: #edf2fe; /* indigo 3 */
+  --on-accent: #ffffff;
+  --focus: #3e63dd;
+
+  /* States (§3 "状态"): text, solid mark, soft fill, edge. */
+  --run: #0d74ce; /* blue 11 */
+  --run-solid: #0090ff;
+  --run-soft: #e6f4fe;
+  --run-line: #8ec8f6;
+  --wait: #ab6400; /* amber 11 */
+  --wait-solid: #ffc53d;
+  --wait-soft: #fff7c2;
+  --wait-line: #e9c162;
+  --on-wait: #4f3422; /* amber 12: text on the solid amber */
+  --fail: #ce2c31; /* red 11 */
+  --fail-solid: #e5484d;
+  --fail-soft: #feebec;
+  --fail-line: #f4a9aa;
+  --done: #2a7e3b; /* grass 11 */
+  --done-solid: #3e9b4f; /* grass 10: grass 9 is too light on sand */
+  --done-soft: #e9f6e9;
+  --done-line: #94ce9a;
+
+  --mine: #edf2fe; /* indigo 3: the user's own messages */
+  --agent: #21201c;
+  --scrim: rgb(17 17 16 / 0.32);
+  --highlight: rgb(255 197 61 / 0.45);
+  --highlight-current: rgb(255 138 0 / 0.65);
+  --shadow-1: 0 1px 2px rgb(33 32 28 / 0.06), 0 2px 8px rgb(33 32 28 / 0.06);
+  --shadow-2: 0 2px 6px rgb(33 32 28 / 0.08), 0 16px 40px rgb(33 32 28 / 0.14);
+
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans', 'Microsoft YaHei UI', 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
+  --font-mono: 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', 'Microsoft YaHei UI', 'Noto Sans Mono CJK SC', monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --dur-fast: 100ms;
+  --dur-base: 160ms;
+  --dur-panel: 220ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
   color-scheme: light;
-  font-family: 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif;
-  font-size: 14px;
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  line-height: 1.5;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17171a;
-    --panel: #1e1e22;
-    --sunken: #26262b;
-    --text: #e8e6e1;
-    --muted: #9b968d;
-    --line: #34343a;
-    --accent: #7b9bff;
-    --accent-text: #0f1220;
-    --warn-bg: #2e2717;
-    --warn-line: #7a5f22;
-    --error: #ff7b72;
-    --ok: #5cc27e;
-    --agent: #d9a066;
-    --mine: #23304f;
-    --runtime: #26262b;
+    --bg: #191918; /* sand 2 */
+    --bg-rail: #111110; /* sand 1: side columns sit back */
+    --panel: #222221; /* sand 3: raised surfaces are lighter */
+    --sunken: #111110; /* sand 1 */
+    --hover: #2a2a28; /* sand 4 */
+    --active: #31312e; /* sand 5 */
+    --line: #3b3a37; /* sand 6 */
+    --line-strong: #494844; /* sand 7 */
+    --faint: #6f6d66; /* sand 9 */
+    --muted: #b5b3ad; /* sand 11 */
+    --text: #eeeeec; /* sand 12 */
+
+    --accent: #3e63dd;
+    --accent-hover: #3358d4; /* white text stays readable on it */
+    --accent-text: #9eb1ff;
+    --accent-soft: #182449;
+    --on-accent: #ffffff;
+    --focus: #5472e4;
+
+    --run: #70b8ff;
+    --run-solid: #0090ff;
+    --run-soft: #0d2847;
+    --run-line: #205d9e;
+    --wait: #ffca16;
+    --wait-solid: #ffc53d;
+    --wait-soft: #302008;
+    --wait-line: #714f19;
+    --on-wait: #4f3422;
+    --fail: #ff9592;
+    --fail-solid: #e5484d;
+    --fail-soft: #3b1219;
+    --fail-line: #8c333a;
+    --done: #71d083;
+    --done-solid: #46a758;
+    --done-soft: #1b2a1e;
+    --done-line: #366740;
+
+    --mine: #182449;
+    --agent: #eeeeec;
+    --scrim: rgb(0 0 0 / 0.5);
+    --highlight: rgb(255 197 61 / 0.35);
+    --highlight-current: rgb(255 138 0 / 0.6);
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 8px rgb(0 0 0 / 0.25);
+    --shadow-2: 0 2px 6px rgb(0 0 0 / 0.35), 0 16px 40px rgb(0 0 0 / 0.45);
+
     color-scheme: dark;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-panel: 0ms;
   }
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
 }
 
 html,
@@ -54,42 +147,100 @@ body,
   color: var(--text);
 }
 
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+/* Controls act like a desktop app's: the arrow cursor, a fill on hover, no text selection. */
 button {
   font: inherit;
   color: inherit;
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 5px 12px;
-  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 3px 12px;
+  cursor: default;
+  user-select: none;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
 }
 button:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: var(--hover);
+}
+button:active:not(:disabled) {
+  background: var(--active);
 }
 button:disabled {
   opacity: 0.5;
-  cursor: default;
 }
 button.primary {
   background: var(--accent);
-  color: var(--accent-text);
-  border-color: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
 }
 button.ghost {
-  border: none;
+  border-color: transparent;
   background: transparent;
   padding: 2px 6px;
 }
+button.ghost:hover:not(:disabled) {
+  background: var(--hover);
+}
 button.small {
-  padding: 1px 8px;
-  font-size: 12px;
+  padding: 0 8px;
+  font-size: var(--text-xs);
   margin-left: 8px;
 }
 button.link {
   border: none;
   background: none;
   padding: 0;
-  color: var(--accent);
+  color: var(--accent-text);
+}
+button.link:hover:not(:disabled),
+button.link:active:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+button.danger {
+  color: var(--fail);
+  border-color: var(--fail-line);
+}
+button.danger:hover:not(:disabled) {
+  background: var(--fail-soft);
+}
+/* A button that is only an icon. */
+button.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+button.icon:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+button.icon[aria-pressed='true'] {
+  background: var(--active);
+  color: var(--text);
+}
+.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 input,
@@ -97,8 +248,8 @@ textarea {
   font: inherit;
   color: inherit;
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   width: 100%;
 }
@@ -109,13 +260,24 @@ select {
   font: inherit;
   color: inherit;
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
   padding: 4px 8px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 label {
   display: block;
-  margin: 10px 0;
+  margin: 12px 0;
   color: var(--muted);
 }
 label input,
@@ -126,8 +288,9 @@ label textarea {
 
 code,
 pre {
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 12.5px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-autospace: no-autospace;
 }
 pre {
   white-space: pre-wrap;
@@ -135,74 +298,121 @@ pre {
   margin: 0;
 }
 
+/* A disclosure's marker: a chevron that turns when it opens, in place of the browser's triangle. */
+summary {
+  list-style: none;
+  cursor: default;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+summary::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+  vertical-align: -1px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  transition: transform var(--dur-fast) var(--ease);
+}
+details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
 .muted {
   color: var(--muted);
 }
 .error {
-  color: var(--error);
+  color: var(--fail);
 }
 /* A small pill: a state, a phase, a kind. */
 .badge {
   display: inline-block;
-  font-size: 11px;
+  font-size: var(--text-xs);
+  line-height: 18px;
   padding: 0 6px;
-  border-radius: 10px;
+  border-radius: var(--radius-pill);
   background: var(--sunken);
   color: var(--muted);
   white-space: nowrap;
+  user-select: none;
 }
 .badge.passed {
-  color: var(--ok);
+  color: var(--done);
+  background: var(--done-soft);
 }
 .badge.failed {
-  color: var(--error);
+  color: var(--fail);
+  background: var(--fail-soft);
 }
 .badge.expired {
-  color: var(--error);
+  color: var(--fail);
   margin-left: 6px;
+}
+/* A round mark for a state, such as a turn that runs. */
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.dot.running {
+  background: var(--run-solid);
 }
 
 /* The references in Angela's reply, which the runtime renders (manager-actions.md §2.1). */
 .ref-quote {
-  margin: 6px 0;
-  padding: 4px 10px;
-  border-left: 3px solid var(--accent);
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--line-strong);
   background: var(--sunken);
-  border-radius: 0 var(--radius) var(--radius) 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 .ref-head {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--muted);
 }
 .ref-attachment {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   width: 100%;
   margin: 4px 0;
   padding: 4px 8px;
   text-align: left;
-  font-size: 13px;
+  font-size: var(--text-sm);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   overflow-wrap: anywhere;
+  user-select: text;
+}
+.ref-attachment svg {
+  flex: none;
+  color: var(--muted);
 }
 .ref-attachment.expired {
   color: var(--muted);
 }
 .ref-error {
-  color: var(--error);
-  font-size: 13px;
+  color: var(--fail);
+  font-size: var(--text-sm);
 }
 
 /* Replying to one of Angela's replies, and where she forwarded the user's words (manager-actions.md §1). */
 .reply-to {
   margin-left: 8px;
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .reply-line {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--muted);
-  border-left: 2px solid var(--line);
+  border-left: 2px solid var(--line-strong);
   padding-left: 6px;
   margin-bottom: 4px;
 }
@@ -211,7 +421,7 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--muted);
   padding: 2px 4px;
 }
@@ -222,7 +432,7 @@ pre {
   margin-top: 4px;
 }
 .forward {
-  font-size: 12px;
+  font-size: var(--text-xs);
   text-align: left;
 }
 
@@ -246,26 +456,34 @@ pre {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 14px;
+  min-height: 40px;
+  padding: 4px 8px 4px 16px;
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--bg-rail);
+  user-select: none;
 }
 .topbar .spacer {
   flex: 1;
 }
+.topbar strong {
+  font-weight: 600;
+}
 .status {
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 .status::before {
-  content: '●';
-  margin-right: 4px;
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fail-solid);
 }
 .status.open::before {
-  color: var(--ok);
-}
-.status.connecting::before,
-.status.closed::before {
-  color: var(--error);
+  background: var(--done-solid);
 }
 
 .body {
@@ -285,12 +503,13 @@ pre {
   width: 200px;
   flex-shrink: 0;
   border-right: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--bg-rail);
   overflow-y: auto;
   padding: 8px 6px 20px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  user-select: none;
 }
 .project-item {
   display: flex;
@@ -300,15 +519,22 @@ pre {
   width: 100%;
   text-align: left;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 6px 8px;
   background: transparent;
 }
 button.project-item:hover:not(:disabled) {
-  background: var(--sunken);
+  background: var(--hover);
 }
-.project-item.selected {
-  background: var(--mine);
+.project-item.selected,
+button.project-item.selected:hover:not(:disabled) {
+  background: var(--active);
+  font-weight: 600;
+}
+/* A window in the background dims its selection, as native apps do. */
+.window-inactive .project-item.selected,
+.window-inactive .settings-item.selected {
+  background: var(--hover);
 }
 .project-name {
   flex: 1;
@@ -317,14 +543,10 @@ button.project-item:hover:not(:disabled) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.project-item .busy {
-  color: var(--ok);
-  font-size: 10px;
-}
 .project-item.failed .failure {
   flex-basis: 100%;
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-xs);
   word-break: break-word;
 }
 .project-item.failed .actions {
@@ -336,11 +558,10 @@ button.project-item:hover:not(:disabled) {
 }
 .projects .archived summary {
   padding: 6px 8px;
-  cursor: pointer;
 }
 .projects .new-project {
   align-self: flex-start;
-  margin: 10px 0 0 8px;
+  margin: 12px 0 0 8px;
 }
 /* A narrow window keeps its width for the project it shows. */
 @media (max-width: 760px) {
@@ -357,14 +578,15 @@ button.project-item:hover:not(:disabled) {
   max-width: 760px;
 }
 .overview h2 {
-  font-size: 16px;
+  font-size: var(--text-lg);
+  font-weight: 600;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .overview .group h3 {
-  font-size: 13px;
-  margin: 18px 0 8px;
+  font-size: var(--text-sm);
+  margin: 20px 0 8px;
 }
 /* Beside Angela's conversation (M4), the list is the right column. */
 .sidebar .overview {
@@ -372,8 +594,8 @@ button.project-item:hover:not(:disabled) {
   overflow: visible;
 }
 .sidebar .overview h2 {
-  font-size: 13px;
-  margin: 14px 0 8px;
+  font-size: var(--text-sm);
+  margin: 16px 0 8px;
 }
 .conversation {
   flex: 1;
@@ -400,13 +622,17 @@ button.project-item:hover:not(:disabled) {
   left: 50%;
   transform: translateX(-50%);
   z-index: 4;
-  border-radius: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-1);
 }
-.to-latest.fresh {
+.to-latest.fresh,
+.to-latest.fresh:hover:not(:disabled) {
   background: var(--accent);
-  color: var(--accent-text);
-  border-color: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
 }
 .thread.empty {
   display: flex;
@@ -415,7 +641,7 @@ button.project-item:hover:not(:disabled) {
   color: var(--muted);
 }
 .row {
-  padding: 3px 24px;
+  padding: 2px 24px;
   max-width: 980px;
   margin: 0 auto;
 }
@@ -423,25 +649,25 @@ button.project-item:hover:not(:disabled) {
 .turn-divider {
   display: flex;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--muted);
-  margin: 14px 0 4px;
-  border-top: 1px dashed var(--line);
+  margin: 16px 0 4px;
+  border-top: 1px solid var(--line);
   padding-top: 6px;
 }
 .turn-divider.failed,
 .turn-divider.interrupted {
-  color: var(--error);
+  color: var(--fail);
 }
 
 .message {
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   margin: 4px 0;
   max-width: 85%;
 }
 .message .who {
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--muted);
   margin-bottom: 2px;
 }
@@ -450,12 +676,11 @@ button.project-item:hover:not(:disabled) {
   margin-left: auto;
 }
 .message.runtime {
-  background: var(--runtime);
+  background: var(--sunken);
   padding: 4px 12px;
 }
 .message.runtime summary {
-  cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -479,21 +704,87 @@ button.project-item:hover:not(:disabled) {
   opacity: 0.65;
 }
 
+/* Agent text: prose with headings kept at the size of a conversation. */
+.markdown {
+  line-height: 1.65;
+  text-autospace: normal;
+  overflow-wrap: anywhere;
+}
 .markdown > :first-child {
   margin-top: 0;
 }
 .markdown > :last-child {
   margin-bottom: 0;
 }
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown table,
+.markdown pre {
+  margin: 8px 0;
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 24px;
+}
+.markdown li + li {
+  margin-top: 2px;
+}
+.markdown h1,
+.markdown h2 {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin: 16px 0 4px;
+}
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: var(--text-md);
+  font-weight: 600;
+  margin: 12px 0 4px;
+}
+.markdown blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--muted);
+}
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
+}
+.markdown table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+}
+.markdown th {
+  background: var(--sunken);
+  font-weight: 600;
+}
+.markdown :not(pre) > code {
+  padding: 1px 4px;
+  border-radius: var(--radius-xs);
+  background: var(--sunken);
+  font-size: 0.92em;
+}
 .markdown.plain {
   white-space: pre-wrap;
 }
 .markdown pre.shiki,
 .markdown pre.code {
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
   background: var(--sunken);
   overflow-x: auto;
+  line-height: 1.5;
 }
 .markdown pre.shiki span {
   color: var(--shiki-light);
@@ -506,21 +797,20 @@ button.project-item:hover:not(:disabled) {
 
 .item {
   margin: 4px 0;
-  padding: 4px 10px;
-  border-left: 3px solid var(--line);
+  padding: 2px 12px;
+  border-left: 2px solid var(--line);
 }
 .item summary {
-  cursor: pointer;
   color: var(--muted);
 }
 .item.command summary code {
   color: var(--text);
 }
 .item.command.failed {
-  border-left-color: var(--error);
+  border-left-color: var(--fail-line);
 }
 .running {
-  color: var(--accent);
+  color: var(--run);
 }
 .item.todo {
   list-style: none;
@@ -534,7 +824,7 @@ button.project-item:hover:not(:disabled) {
 .output pre {
   background: var(--sunken);
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   margin-top: 4px;
   overflow-wrap: anywhere;
 }
@@ -551,13 +841,13 @@ button.project-item:hover:not(:disabled) {
 }
 .output .elided {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-xs);
   margin: 2px 0;
 }
 
 .report {
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   margin: 6px 0;
   background: var(--panel);
@@ -569,11 +859,11 @@ button.project-item:hover:not(:disabled) {
   margin-bottom: 4px;
 }
 .report.done {
-  border-color: var(--ok);
+  border-color: var(--done-line);
 }
 .report.blocked {
-  border-color: var(--warn-line);
-  background: var(--warn-bg);
+  border-color: var(--wait-line);
+  background: var(--wait-soft);
 }
 /* A report the backend recorded without effect: it must not look like one that took effect (#14). */
 .report.void {
@@ -585,22 +875,21 @@ button.project-item:hover:not(:disabled) {
 }
 .report-void {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
   margin: 4px 0;
 }
 .report-body summary {
-  cursor: pointer;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 
 .composer {
   border-top: 1px solid var(--line);
-  padding: 10px 24px;
+  padding: 12px 24px;
   display: flex;
   gap: 8px;
   align-items: flex-end;
-  background: var(--panel);
+  background: var(--bg);
 }
 .composer-actions {
   display: flex;
@@ -616,49 +905,59 @@ button.project-item:hover:not(:disabled) {
   width: 340px;
   border-left: 1px solid var(--line);
   overflow-y: auto;
-  background: var(--panel);
-  padding: 4px 14px 20px;
+  background: var(--bg-rail);
+  padding: 4px 16px 20px;
 }
 .sidebar h3 {
-  font-size: 13px;
-  margin: 14px 0 8px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin: 16px 0 8px;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 .sidebar h4 {
-  font-size: 12px;
+  font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--muted);
-  margin: 10px 0 4px;
+  margin: 12px 0 4px;
 }
 .count {
-  background: var(--error);
-  color: #fff;
-  border-radius: 10px;
-  padding: 0 7px;
-  font-size: 11px;
+  display: inline-block;
+  min-width: 18px;
+  line-height: 18px;
+  text-align: center;
+  background: var(--wait-solid);
+  color: var(--on-wait);
+  font-weight: 600;
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  font-size: var(--text-xs);
+  user-select: none;
 }
 .card {
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
   margin-bottom: 8px;
+  background: var(--panel);
 }
 .card p {
   margin: 0 0 6px;
+  text-autospace: normal;
 }
 .card.warn {
-  background: var(--warn-bg);
-  border-color: var(--warn-line);
+  background: var(--wait-soft);
+  border-color: var(--wait-line);
 }
 .card .quote {
-  border-left: 3px solid var(--line);
+  border-left: 3px solid var(--line-strong);
   padding-left: 8px;
 }
 .card .paths {
   margin: 0 0 6px;
-  padding-left: 18px;
-  font-size: 12px;
+  padding-left: 20px;
+  font-size: var(--text-xs);
   max-height: 160px;
   overflow: auto;
 }
@@ -670,7 +969,7 @@ button.project-item:hover:not(:disabled) {
 }
 .modal .actions {
   justify-content: flex-end;
-  margin-top: 14px;
+  margin-top: 16px;
 }
 .modal .viewer-actions {
   justify-content: space-between;
@@ -694,26 +993,28 @@ button.project-item:hover:not(:disabled) {
 .task-line {
   display: flex;
   align-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .task-line:hover,
 .task-line.selected {
-  background: var(--sunken);
+  background: var(--hover);
 }
 /* The row opens the task: a button the width of the row, without a button's frame. */
-.task-open {
+.task-open,
+.task-open:hover:not(:disabled),
+.task-open:active:not(:disabled) {
   flex: 1;
   min-width: 0;
   display: flex;
   gap: 6px;
   align-items: center;
-  padding: 5px 6px;
+  padding: 4px 6px;
   border: none;
   background: none;
   text-align: left;
 }
 .task-open:focus-visible {
-  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .task-title {
   flex: 1;
@@ -722,13 +1023,13 @@ button.project-item:hover:not(:disabled) {
   white-space: nowrap;
 }
 .reorder button {
-  padding: 0 3px;
+  padding: 2px;
 }
 .phase.executing {
-  color: var(--accent);
+  color: var(--run);
 }
 .phase.accepting {
-  color: var(--ok);
+  color: var(--done);
 }
 .phase.abandoned,
 .phase.done {
@@ -741,7 +1042,7 @@ button.project-item:hover:not(:disabled) {
   width: min(820px, 100%);
   background: var(--bg);
   border-left: 1px solid var(--line);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-2);
   display: flex;
   flex-direction: column;
   z-index: 5;
@@ -749,22 +1050,23 @@ button.project-item:hover:not(:disabled) {
 .task-panel > header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 18px 0;
+  gap: 12px;
+  padding: 12px 20px 0;
 }
 .task-panel > header h2 {
   flex: 1;
-  font-size: 17px;
+  font-size: var(--text-lg);
+  font-weight: 600;
   margin: 0;
 }
 .task-panel > .actions {
-  padding: 0 18px 8px;
+  padding: 0 20px 8px;
   border-bottom: 1px solid var(--line);
 }
 .task-panel > .now-running {
   margin: 0;
-  padding: 6px 18px;
-  background: var(--mine);
+  padding: 6px 20px;
+  background: var(--accent-soft);
   border-bottom: 1px solid var(--line);
 }
 .task-panel > .now-running button {
@@ -772,11 +1074,12 @@ button.project-item:hover:not(:disabled) {
 }
 .panel-body {
   overflow-y: auto;
-  padding: 0 18px 30px;
+  padding: 0 20px 32px;
 }
 .panel-body h3 {
-  font-size: 13px;
-  margin: 18px 0 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin: 20px 0 6px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -785,17 +1088,17 @@ button.project-item:hover:not(:disabled) {
   margin: 6px 0;
 }
 .check.failed summary {
-  color: var(--error);
+  color: var(--fail);
 }
 .history {
-  padding-left: 18px;
+  padding-left: 20px;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 .diff-note {
-  padding: 6px 10px;
+  padding: 6px 12px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   margin: 6px 0;
 }
 .diff > * + * {
@@ -805,7 +1108,7 @@ button.project-item:hover:not(:disabled) {
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -821,8 +1124,9 @@ button.project-item:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   background: var(--panel);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--line);
+  box-shadow: var(--shadow-2);
   resize: both;
   overflow: hidden;
 }
@@ -832,20 +1136,22 @@ button.project-item:hover:not(:disabled) {
 .modal header {
   display: flex;
   align-items: center;
-  padding: 10px 16px;
+  padding: 8px 8px 8px 16px;
   border-bottom: 1px solid var(--line);
 }
 .modal header h2 {
   flex: 1;
   margin: 0;
-  font-size: 15px;
+  font-size: var(--text-lg);
+  font-weight: 600;
 }
 .modal-body {
   padding: 4px 16px 16px;
   overflow-y: auto;
 }
 .modal-body h3 {
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-weight: 600;
   margin: 16px 0 4px;
 }
 .check-row {
@@ -868,17 +1174,19 @@ button.project-item:hover:not(:disabled) {
   width: 220px;
   flex-shrink: 0;
   border-right: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--bg-rail);
   overflow-y: auto;
   padding: 8px 8px 20px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  user-select: none;
 }
 .settings-nav h3 {
-  font-size: 12px;
+  font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--muted);
-  margin: 14px 8px 4px;
+  margin: 16px 8px 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -896,10 +1204,11 @@ button.project-item:hover:not(:disabled) {
   text-align: left;
   border: none;
   background: transparent;
-  padding: 6px 10px;
+  padding: 6px 12px;
 }
-.settings-item.selected {
-  background: var(--sunken);
+.settings-item.selected,
+.settings-item.selected:hover:not(:disabled) {
+  background: var(--active);
   font-weight: 600;
 }
 .settings-content {
@@ -911,16 +1220,18 @@ button.project-item:hover:not(:disabled) {
   max-width: 760px;
 }
 .settings-header h2 {
-  font-size: 20px;
+  font-size: var(--text-xl);
+  font-weight: 600;
   margin: 0;
 }
 .settings-header p {
   margin: 4px 0 12px;
 }
 .settings-section {
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-weight: 600;
   color: var(--muted);
-  margin: 28px 0 0;
+  margin: 32px 0 0;
 }
 .setting-row {
   display: flex;
@@ -937,7 +1248,7 @@ button.project-item:hover:not(:disabled) {
   font-weight: 600;
 }
 .setting-description {
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   margin-top: 2px;
 }
 .setting-control {
@@ -952,51 +1263,52 @@ button.project-item:hover:not(:disabled) {
 /* Choices that apply at once: radio buttons drawn as one bar. */
 .segmented {
   display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
   overflow: hidden;
+  user-select: none;
 }
 .segmented label {
   margin: 0;
   padding: 4px 12px;
   color: var(--text);
-  cursor: pointer;
+  cursor: default;
   position: relative;
+  background: var(--panel);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.segmented label:hover {
+  background: var(--hover);
 }
 .segmented label + label {
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--line-strong);
 }
 .segmented label.selected {
   background: var(--accent);
-  color: var(--accent-text);
+  color: var(--on-accent);
 }
 .segmented input {
   position: absolute;
   opacity: 0;
   inset: 0;
   margin: 0;
-  cursor: pointer;
+  cursor: default;
 }
 .segmented label:has(input:focus-visible) {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: -2px;
 }
 .segmented label:has(input:disabled) {
   opacity: 0.5;
-  cursor: default;
 }
 .danger-zone {
   margin: 36px 0 24px;
-  border: 1px solid var(--error);
-  border-radius: var(--radius);
+  border: 1px solid var(--fail-line);
+  border-radius: var(--radius-md);
   padding: 0 16px;
 }
 .danger-zone .setting-row {
   border-bottom: none;
-}
-button.danger {
-  color: var(--error);
-  border-color: var(--error);
 }
 /* The form's save bar stays in view at the bottom of the page. */
 .settings-save {
@@ -1046,7 +1358,7 @@ button.danger {
 .viewer {
   height: 70vh;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .viewer .cm-editor {
@@ -1066,8 +1378,9 @@ button.danger {
 .toast {
   background: var(--text);
   color: var(--bg);
-  padding: 8px 14px;
-  border-radius: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
   max-width: 560px;
 }
 
@@ -1083,32 +1396,31 @@ button.danger {
   padding: 4px 6px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
 }
 .search-bar input {
   width: 220px;
 }
 .search-count {
   min-width: 64px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   white-space: nowrap;
 }
 ::highlight(search) {
-  background-color: rgba(255, 196, 0, 0.35);
+  background-color: var(--highlight);
 }
 ::highlight(search-current) {
-  background-color: rgba(255, 128, 0, 0.75);
+  background-color: var(--highlight-current);
 }
 
 .verification-details,
 .changes-details {
-  margin-top: 18px;
+  margin-top: 20px;
 }
 .verification-details > summary,
 .changes-details > summary {
-  cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 .delivery {
@@ -1119,8 +1431,8 @@ button.danger {
 }
 .trial-command {
   background: var(--sunken);
-  padding: 10px;
-  border-radius: var(--radius);
+  padding: 12px;
+  border-radius: var(--radius-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

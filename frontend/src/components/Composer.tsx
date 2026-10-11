@@ -2,8 +2,10 @@
 // says where it goes (`composerHint`).
 
 import { useState } from 'react';
+import { X } from 'lucide-react';
 import { composerHint, harnessName } from '../format';
 import { act, setFollowing, setReplyTo, useCommand, useMainRole, useStore } from '../store';
+import { ICON } from './common';
 
 export function Composer() {
   const [text, setText] = useState('');
@@ -33,8 +35,8 @@ export function Composer() {
           <span>
             回复 {role.name}：「{replyTo.text}」
           </span>
-          <button className="ghost" aria-label="不回复这一条" onClick={() => setReplyTo(null)}>
-            ✕
+          <button className="icon" aria-label="不回复这一条" onClick={() => setReplyTo(null)}>
+            <X {...ICON} />
           </button>
         </div>
       )}

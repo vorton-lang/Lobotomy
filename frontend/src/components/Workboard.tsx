@@ -2,10 +2,11 @@
 // the closed tasks on demand.
 
 import { useState } from 'react';
+import { ArrowDown, ArrowUp } from 'lucide-react';
 import type { RoleView, TaskView } from '../api/types';
 import { harnessName, PHASE_LABEL, roleActivity } from '../format';
 import { run, selectTask, useMainRole, useStore } from '../store';
-import { useNow } from './common';
+import { ICON, useNow } from './common';
 import { NewTask } from './NewTask';
 
 export function Workboard() {
@@ -73,16 +74,16 @@ function TaskLine({ task, queue }: { task: TaskView; queue?: { index: number; le
       </button>
       {queue && (
         <span className="reorder">
-          <button className="ghost" disabled={queue.index === 0} onClick={() => move(queue.index - 1)} aria-label={`上移「${task.title}」`}>
-            ↑
+          <button className="icon" disabled={queue.index === 0} onClick={() => move(queue.index - 1)} aria-label={`上移「${task.title}」`}>
+            <ArrowUp {...ICON} size={14} />
           </button>
           <button
-            className="ghost"
+            className="icon"
             disabled={queue.index === queue.length - 1}
             onClick={() => move(queue.index + 1)}
             aria-label={`下移「${task.title}」`}
           >
-            ↓
+            <ArrowDown {...ICON} size={14} />
           </button>
         </span>
       )}

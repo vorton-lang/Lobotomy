@@ -5,6 +5,7 @@
 // (the project configuration), never both; archiving sits apart at the bottom.
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { ArrowLeft, X } from 'lucide-react';
 import type { Check, HarnessView, Permission, ProjectConfig, RoleView } from '../api/types';
 import { bytes, harnessName, PERMISSION_LABEL } from '../format';
 import {
@@ -19,6 +20,7 @@ import {
   useStore,
   type SettingsPage,
 } from '../store';
+import { ICON } from './common';
 
 export function Settings() {
   const settings = useStore((s) => s.settings);
@@ -40,8 +42,9 @@ export function Settings() {
   return (
     <section className="settings-page" aria-label="设置">
       <nav className="settings-nav" aria-label="设置分类">
-        <button className="ghost settings-back" onClick={closeSettings}>
-          ← 返回
+        <button className="ghost settings-back with-icon" onClick={closeSettings}>
+          <ArrowLeft {...ICON} />
+          返回
         </button>
         <h3>本机</h3>
         {item({ kind: 'permissions' }, '权限')}
@@ -332,8 +335,8 @@ function ConfigForm({ project, version, config }: { project: string; version: nu
           <input value={check.command} onChange={(e) => setCheck(i, { command: e.target.value })} placeholder="例如 cargo test" aria-label="检查命令" />
           <input type="number" min={1} value={check.timeout_secs} onChange={(e) => setCheck(i, { timeout_secs: Number(e.target.value) })} aria-label="超时（秒）" />
           <span className="muted">秒</span>
-          <button type="button" className="ghost" onClick={() => set({ checks: form.checks.filter((_, j) => j !== i) })} aria-label="删除">
-            ✕
+          <button type="button" className="icon" onClick={() => set({ checks: form.checks.filter((_, j) => j !== i) })} aria-label="删除">
+            <X {...ICON} />
           </button>
         </div>
       ))}

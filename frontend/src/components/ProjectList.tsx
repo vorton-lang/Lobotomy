@@ -75,11 +75,7 @@ function ProjectItem({ project: p, selected }: { project: ProjectStatus; selecte
   }
   return (
     <button className={`project-item ${selected ? 'selected' : ''}`} aria-current={selected || undefined} title={p.repo_path} onClick={() => selectProject(p.id)}>
-      {p.busy && (
-        <span className="busy" title="有 turn 在运行" aria-label="有 turn 在运行">
-          ●
-        </span>
-      )}
+      {p.busy && <span className="dot running" title="有 turn 在运行" aria-label="有 turn 在运行" role="img" />}
       <span className="project-name">{p.name}</span>
       <Count n={p.attention.length} />
     </button>

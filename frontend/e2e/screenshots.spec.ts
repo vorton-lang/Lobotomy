@@ -32,7 +32,7 @@ test('screenshots of a managed Codex', async ({ page, backend }) => {
   await page.screenshot({ path: `${out}/10-settings.png` });
   await codex.getByRole('radio', { name: '完全放开' }).click();
   await expect(codex.getByRole('radio', { name: '完全放开' })).toBeChecked();
-  await settings.getByRole('button', { name: '← 返回' }).click();
+  await settings.getByRole('button', { name: '返回', exact: true }).click();
   await accept.getByRole('button', { name: '查看并验收' }).click();
   const panel = taskPanel(page, '受管环境的任务');
   await panel.getByRole('button', { name: '验收', exact: true }).click();

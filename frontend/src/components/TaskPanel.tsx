@@ -4,6 +4,7 @@
 // drags it wider or narrower; it never gets wider than the thread.
 
 import { useState } from 'react';
+import { X } from 'lucide-react';
 import type { CheckRun, TaskDetail } from '../api/types';
 import {
   ACTION_LABEL,
@@ -20,7 +21,7 @@ import {
   workRange,
 } from '../format';
 import { run, selectTask, useStore } from '../store';
-import { Markdown, Modal, Output } from './common';
+import { ICON, Markdown, Modal, Output } from './common';
 import { DiffPool, DiffView } from './DiffView';
 import { Sash, useWidth } from './Sash';
 import { TrialControls } from './TrialControls';
@@ -74,8 +75,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
       <header>
         <span className={`badge phase ${task.phase}`}>{PHASE_LABEL[task.phase]}</span>
         <h2>{task.title}</h2>
-        <button className="ghost" onClick={close} aria-label="关闭">
-          ✕
+        <button className="icon" onClick={close} aria-label="关闭">
+          <X {...ICON} />
         </button>
       </header>
       <div className="actions">

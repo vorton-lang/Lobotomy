@@ -28,5 +28,6 @@ export default defineConfig({
   // IPv4 explicitly: `localhost` may bind only ::1 and then not answer 127.0.0.1.
   server: { host: '127.0.0.1', port: 5173, strictPort: true },
   worker: { format: 'es' },
-  test: { environment: 'node', include: ['src/**/*.test.ts'] },
+  // styles.test.ts reads the stylesheet; Vitest otherwise replaces CSS with an empty string.
+  test: { environment: 'node', include: ['src/**/*.test.ts'], css: { include: [/styles\.css/] } },
 });

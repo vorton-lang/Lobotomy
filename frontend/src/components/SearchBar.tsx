@@ -3,7 +3,9 @@
 // scrolls to each match.
 
 import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import { closeSearch, runSearch, stepSearch, useStore } from '../store';
+import { ICON } from './common';
 
 const DEBOUNCE_MS = 200;
 
@@ -44,14 +46,14 @@ export function SearchBar() {
         }}
       />
       <span className="muted search-count">{label}</span>
-      <button className="ghost" onClick={() => void stepSearch(-1)} disabled={count === 0} aria-label="更早的匹配" title="更早（Enter）">
-        ↑
+      <button className="icon" onClick={() => void stepSearch(-1)} disabled={count === 0} aria-label="更早的匹配" title="更早（Enter）">
+        <ChevronUp {...ICON} />
       </button>
-      <button className="ghost" onClick={() => void stepSearch(1)} disabled={count === 0} aria-label="更新的匹配" title="更新（Shift+Enter）">
-        ↓
+      <button className="icon" onClick={() => void stepSearch(1)} disabled={count === 0} aria-label="更新的匹配" title="更新（Shift+Enter）">
+        <ChevronDown {...ICON} />
       </button>
-      <button className="ghost" onClick={closeSearch} aria-label="关闭搜索">
-        ✕
+      <button className="icon" onClick={closeSearch} aria-label="关闭搜索">
+        <X {...ICON} />
       </button>
     </div>
   );

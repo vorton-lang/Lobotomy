@@ -3,9 +3,13 @@ import { createPortal } from 'react-dom';
 import { defaultKeymap } from '@codemirror/commands';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
+import { X } from 'lucide-react';
 import { bytes, firstLines, fits, isBlob, lastLines } from '../format';
 import { useMarkdown } from '../markdown/render';
 import { call, toast } from '../store';
+
+/** An icon's size and role: decoration beside a label, or inside a button that names itself. */
+export const ICON = { size: 16, 'aria-hidden': true } as const;
 
 /** Rendered Markdown; plain text until the worker has it ready. */
 export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
@@ -45,8 +49,8 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
       <div className={wide ? 'modal wide' : 'modal'} role="dialog" aria-modal="true" aria-label={title}>
         <header>
           <h2>{title}</h2>
-          <button className="ghost" onClick={onClose} aria-label="关闭">
-            ✕
+          <button className="icon" onClick={onClose} aria-label="关闭">
+            <X {...ICON} />
           </button>
         </header>
         <div className="modal-body">{children}</div>

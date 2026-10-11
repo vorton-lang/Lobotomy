@@ -132,6 +132,8 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
 | diff | @pierre/diffs | 自带 worker 池与虚拟化；opencode、t3code 在用 |
 | 搜索 | 自建 Ctrl+F：后端在 SQLite 中搜索整条 Thread，前端加载到匹配所在的分页，滚动过去，用 CSS Custom Highlight API 标出。原设计是在 worker 中搜索前端的数据模型；前端只有已加载的分页，所以改由后端搜索（**语义更新**，2026-10-04） | 虚拟化后浏览器查找搜不到未挂载的内容。Claude 桌面应用也自带查找窗口和对话搜索 worker |
 | 状态订阅 | 按行用选择器订阅（zustand 一类），展开/收起状态放在行外 | OpenHands 改用选择器后输入延迟从 171ms 降到 22ms |
+| 颜色与刻度 | 手写 CSS 的设计变量（design token），颜色取 Radix Colors 的色阶：中性色 sand，强调色 indigo，状态用 blue、amber、red、grass | 色阶的亮暗两套都经过调校；只取值，不引入依赖。依据见 [ui-ux-plan.md](ui-ux-plan.md) §3 |
+| 图标 | lucide-react，只用具名导入 | 每个图标约 1KB；整套导入会把全部图标打进包（[research/ui-ux-survey.md](research/ui-ux-survey.md) §3.3） |
 
 xterm.js 只用于实时终端，v1 不需要。
 
@@ -345,6 +347,18 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
 - Inspector 还没有做：现在只有一个 role，它的 Thread 就在主区。
 - Windows 上由 Electron 拉起的后端会继承 Electron 的标准输出句柄。正常从桌面启动时没有影响；Playwright 因此要先停后端才能关闭应用。
 - 流式 Markdown 还没有按块解析：每次更新都把整条文本交给 worker 重新解析。未闭合围栏中的代码也会高亮。两者都与 §4.1 不同。
+
+### 7.15 视觉基础
+
+界面改进专项的 P0（[ui-ux-plan.md](ui-ux-plan.md) §4）。
+
+- `styles.css` 开头的两个 `:root` 块定义全部颜色：亮色一套，`prefers-color-scheme: dark` 一套。规则中只用语义变量：背景（`--bg`、侧栏 `--bg-rail`、卡片与输入框 `--panel`、`--sunken`）、悬停与按下、边线、文字（`--text`、`--muted`）、强调色，以及四种状态（运行 `--run`、等你 `--wait`、失败 `--fail`、完成 `--done`），每种都有文字色、实色、浅底与边线。另有字号（12 / 13 / 14 / 16 / 20）、圆角、阴影与动效时长的变量；减弱动效时，时长为 0。
+- `src/styles.test.ts` 检查：两个 `:root` 块之外没有颜色字面量；每个颜色都有暗色的值；文字与它所在的底色对比度不低于 4.5:1，焦点环与状态标记不低于 3:1，亮暗两套都查。
+- 字体只用系统字体：界面先用 Segoe UI Variable / Segoe UI 显示西文，中文落到微软雅黑 UI，Linux 上用 Noto；等宽字体是 Cascadia Mono。消息与卡片的正文打开 `text-autospace`，代码中关闭。
+- 控件按桌面应用的习惯：按钮与列表行是箭头光标，悬停时换底色，文字不可选中；键盘焦点有统一的焦点环。在 Electron 中，窗口失去焦点时，项目列表与设置导航中的选中项变淡。
+- 折叠块的箭头由 CSS 画出，展开时转动。图标用 lucide-react，按钮中只有图标时，按钮写 `aria-label`。
+- Electron 的窗口在页面第一次绘制后才显示，窗口背景色与页面的 `--bg` 相同，不先闪白。
+- 截图场景：`e2e/screenshots-mocked.spec.ts` 用模拟的后端截「全部」、项目、任务面板和窄窗口，亮暗各一张；`e2e/screenshots.spec.ts` 用真实后端截流程中的画面。两者只在设置了 `SCREENSHOT_DIR` 时运行，用于审阅，不是测试。
 
 ## 8. 候选成果试用
 

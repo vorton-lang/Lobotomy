@@ -305,7 +305,7 @@ test('the settings are a page of their own, wherever the window is', async ({ pa
   await expect(settings.getByRole('radiogroup', { name: 'Malkuth 使用的 harness' })).toBeVisible();
   expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['angela', 'angela', 'beta']);
 
-  await settings.getByRole('button', { name: '← 返回' }).click();
+  await settings.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page.locator('.topbar')).toContainText('全部项目');
   await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
   await expect(page.locator('.topbar')).toContainText('alpha · main');
@@ -375,7 +375,7 @@ test('archiving from the settings asks first and leaves them usable', async ({ p
     finish();
   }
   expect(sent).toEqual(['alpha']);
-  await settings.getByRole('button', { name: '← 返回' }).click();
+  await settings.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page.getByRole('navigation', { name: '项目' })).toContainText('已归档 1');
   await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /beta/ }).click();
   await expect(page.locator('.topbar')).toContainText('beta · main');

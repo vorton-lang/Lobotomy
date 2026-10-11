@@ -3,10 +3,11 @@
 // the version it is bound to and whether it still holds now, and opens the task in its project.
 
 import { useEffect, useMemo } from 'react';
+import { ChevronRight } from 'lucide-react';
 import type { AttachmentView, QuotedMessage, Resolved } from '../api/types';
 import { attachmentExpired, attachmentLine, attachmentWarning, clock, previewLine, splitReply, textOf } from '../format';
 import { selectProject, useStore, wantForwards, wantRefs } from '../store';
-import { Markdown } from './common';
+import { ICON, Markdown } from './common';
 
 export function Reply({ text }: { text: string }) {
   const parts = useMemo(() => splitReply(text), [text]);
@@ -87,7 +88,7 @@ function Attachment({ id }: { id: string }) {
       disabled={!task}
       onClick={() => task && void selectProject(attachment.project, task)}
     >
-      <span aria-hidden>▸ </span>
+      <ChevronRight {...ICON} size={14} />
       {attachmentLine(attachment)}
       {warning && <span className="badge expired">{warning}</span>}
       {expired && <span className="badge expired">{expired}</span>}

@@ -135,7 +135,7 @@ test('back to the latest after reading back', async ({ page }) => {
   const thread = page.locator('.thread');
   await thread.hover();
   await page.mouse.wheel(0, -100_000);
-  await expect(latest).toHaveText('回到最新 ↓');
+  await expect(latest).toHaveText('回到最新');
 
   const area = await thread.boundingBox();
   await latest.click();
@@ -145,7 +145,7 @@ test('back to the latest after reading back', async ({ page }) => {
   await page.evaluate(() => new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   ));
-  await expect(latest).toHaveText('回到最新 ↓');
+  await expect(latest).toHaveText('回到最新');
 
   // A turn of a new task reports done, then says the same again.
   items.push(
@@ -153,7 +153,7 @@ test('back to the latest after reading back', async ({ page }) => {
     message(62, 't2', 'finished'),
   );
   backend.push({ type: 'thread', project: PROJECT, role: 'Malkuth', seq: 62 });
-  await expect(latest).toHaveText('有新内容 · 回到最新 ↓');
+  await expect(latest).toHaveText('有新内容 · 回到最新');
   await expect(page.locator('.report.done')).toHaveCount(0);
 
   await latest.click();

@@ -88,7 +88,7 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   );
   await settings.getByRole('button', { name: '保存', exact: true }).click();
   await expect(settings.locator('.settings-save')).toContainText('第 2 版');
-  await settings.getByRole('button', { name: '← 返回' }).click();
+  await settings.getByRole('button', { name: '返回', exact: true }).click();
   await expect(settings).toHaveCount(0);
 
   await createTask(page, '改 work.txt', 'FAKE:done FAKE:text=first');

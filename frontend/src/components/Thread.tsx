@@ -5,11 +5,12 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { VList, type VListHandle } from 'virtua';
+import { ArrowDown } from 'lucide-react';
 import type { CommandRecord, Message } from '../api/types';
 import { buildRows, clock, sourceLabel, turnOutcome, type Row } from '../format';
 import { clearHighlight, highlight } from '../highlight';
 import { loadOlder, matchRowKey, setFollowing, useStore } from '../store';
-import { Markdown } from './common';
+import { ICON, Markdown } from './common';
 import { ItemView, LiveItemView, RunningView } from './ItemView';
 import { ForwardTags, ReplyLine } from './Reply';
 
@@ -128,7 +129,8 @@ export function Thread() {
       </VList>
       {!following && (
         <button className={`to-latest ${fresh ? 'fresh' : ''}`} onClick={() => setFollowing(true)}>
-          {fresh ? '有新内容 · 回到最新 ↓' : '回到最新 ↓'}
+          {fresh ? '有新内容 · 回到最新' : '回到最新'}
+          <ArrowDown {...ICON} size={14} />
         </button>
       )}
     </div>
