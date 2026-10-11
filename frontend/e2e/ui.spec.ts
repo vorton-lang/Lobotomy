@@ -102,22 +102,18 @@ test('back to the latest after reading back', async ({ page }) => {
   await expect(page.locator('.thread .message.other').last()).toContainText('第 60 条');
   await expect(latest).toBeHidden();
 
-  // Scroll up with the wheel, as the user does. Just after rows render, the list still goes to the
-  // end each time a row's height changes (virtua's scrollToIndex, for about 150 ms). A scroll made
-  // then is undone, so scroll again until the list stays where it was scrolled to.
-  await page.locator('.thread').hover();
-  await expect(async () => {
-    await page.mouse.wheel(0, -100_000);
-    await expect(latest).toHaveText('回到最新 ↓', { timeout: 1_000 });
-  }).toPass();
+  // A single wheel gesture must leave the end, including while the jump to the last row is
+  // still measuring differently sized messages. Repeated wheels would hide a lost gesture.
+  const thread = page.locator('.thread');
+  await thread.hover();
+  await page.mouse.wheel(0, -100_000);
+  await expect(latest).toHaveText('回到最新 ↓');
 
-  // Immediately read back again while scrollToIndex is still measuring rows. The wheel must
-  // win over that request, including when the newly visible messages have different heights.
-  const area = await page.locator('.thread').boundingBox();
+  const area = await thread.boundingBox();
   await latest.click();
   await page.mouse.move(area!.x + area!.width / 2, area!.y + area!.height / 2);
   await page.mouse.wheel(0, -1500);
-  // Let the newly visible rows measure and apply their layout before checking the position.
+  // Cross the row-measurement/render boundary before checking that the jump stayed cancelled.
   await page.evaluate(() => new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   ));

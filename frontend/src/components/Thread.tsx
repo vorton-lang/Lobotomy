@@ -114,7 +114,7 @@ export function Thread() {
         wheel.current = { offset: list.current.scrollOffset, direction: Math.sign(event.deltaY) };
       }
     }}>
-      <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} keepMounted={[rows.length - 1]}>
+      <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} onScrollEnd={() => { wheel.current = null; }} keepMounted={[rows.length - 1]}>
         {rows.map((row) => (
           <div key={row.key} className="row" data-key={row.key}>
             <RowView row={row} role={thread.role} title={title} commands={thread.commands} />
