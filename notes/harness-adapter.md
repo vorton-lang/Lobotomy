@@ -175,17 +175,21 @@ Lobotomy 不恢复被中断的执行现场。
 
 ### 1.8 后端与 harness 的生命周期绑定（#7 建议）
 
-后端退出时，操作系统默认不保证后端启动的 harness 进程一起退出。#7 建议加一层很薄的平台启动适配，把后端与它直接启动的 harness 进程绑定。harness 仍负责自己的子进程；Lobotomy 不扩展成自建的进程树监管器。
+后端退出时，操作系统默认不保证后端启动的 harness 进程一起退出。#7 建议加一层很薄的平台启动适配，把后端与它启动的 harness 进程树绑定。
+
+**语义更新**（用户确认，2026-10-11；问题见 [#46](https://github.com/vorton-lang/Lobotomy/issues/46)）：原来是"harness 负责自己的子进程，Lobotomy 不扩展成自建的进程树监管器"。现在 Lobotomy 负责自己启动的进程树。依据：两个平台行为一致，Windows 的 Job Object 本来就结束整个进程树；归档超时时结束 CLI 的进程树（data-model.md §10.4）也需要这一点。Windows 用 Job Object；Linux 用独立进程组，覆盖 CLI 和仍在这个进程组中的普通子进程。主动脱离进程组或另建 session 的进程不在 Linux 的保证范围内。harness 仍先走自己的中断与清理路径。
 
 | 平台 | 做法 | 效果 | 实现时注意 |
 |---|---|---|---|
-| Linux | 子进程 exec 前设置 [`PR_SET_PDEATHSIG`](https://www.man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)`=SIGTERM` | 请求 harness 退出并尽量清理，不保证强制终止 | 处理设置之前父进程已退出的竞态。信号针对创建子进程的父线程，需注意启动线程的生命周期 |
+| Linux | CLI 在独立进程组中运行；子进程 exec 前设置 [`PR_SET_PDEATHSIG`](https://www.man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)`=SIGTERM` | 正常收尾结束进程组；后端异常退出时请求直接 CLI 退出，不保证强制终止整组 | 处理设置之前父进程已退出的竞态。信号针对创建子进程的父线程，需注意启动线程的生命周期 |
 | Windows | 带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)，句柄由后端独占且不可继承 | 最后一个句柄关闭时，终止已关联的进程；不是优雅退出 | 处理好进程创建与加入 Job 的顺序 |
 
 后端正常关闭时：
 
 1. 运行时调用 harness 的原生中断或退出路径。
-2. 运行时等待 CLI 退出。
+2. 运行时等待 CLI 退出。归档超过宽限期时强制结束所属进程组或 Job Object，确认其中的进程已退出，再释放项目。Linux 已退出但尚未回收的僵尸进程不再运行，不阻止这一步。
+
+丢弃 runner、关闭进程句柄和 kill-on-drop 都只作兜底，不能代替正常收尾中的退出确认。
 
 OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功。
 
@@ -407,7 +411,7 @@ cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-thre
 - rebase 由 jj 的树合并完成：以候选成果的父提交为基，合并当前集成版本与候选成果。冲突记录在提交中，rebase 不中断。写入文件的冲突标记采用 git 的格式。
 - 合成的提交以集成版本头为唯一父提交，提交信息与作者按 §4.3，并以验证记录的 ID 建立 pin。验收时发布的就是这个提交，所以验收只是一个 SQLite 事务。
 - 检查命令经平台的 shell 运行：Windows 为 `cmd.exe /d /s /c`，Linux 为 `sh -c`。环境与 role 一样经过能力裁剪（§1.6）。超时后，运行时终止命令及其启动的进程，记为超时。
-- 一条检查结束（正常退出或超时）后，运行时结束它启动、仍在运行的所有进程：Windows 上关闭它的 Job Object；Linux 上命令在独立的进程组中运行，运行时结束整个进程组（[#12](https://github.com/vorton-lang/Lobotomy/issues/12)）。否则留下的子进程会占着输出管道，并可能继续写验证现场。harness 的 CLI 在 Linux 上不放进独立进程组，仍按 §1.8 由 harness 负责自己的子进程。
+- 一条检查结束（正常退出或超时）后，运行时结束它启动、仍在运行的所有进程：Windows 上关闭它的 Job Object；Linux 上命令在独立的进程组中运行，运行时结束整个进程组（[#12](https://github.com/vorton-lang/Lobotomy/issues/12)）。否则留下的子进程会占着输出管道，并可能继续写验证现场。harness 的 CLI 也按 §1.8 归入独立进程组。
 - 运行时按顺序运行检查命令，第一条失败后不再运行其余的。stdout 与 stderr 各保留最后 4 MB。发回执行者的消息引用输出的最后 40 行。
 - **验证现场一次只给一个验证使用**（#12，用户确认，2026-10-04）：从物化开始，直到最后一条检查的进程全部结束。被放弃任务的验证若仍在运行，下一个验证等它结束；放弃不终止正在运行的检查，只是不再启动后续的检查。没有全部运行的检查不算通过。
   - 理由：验证现场是固定目录，用来保留构建缓存。原来只按验证记录去重，被放弃任务仍在运行的检查实测改写了下一个任务正在验证的文件。

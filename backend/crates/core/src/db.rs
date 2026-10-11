@@ -18,6 +18,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0007_attempt_conflicts.sql"),
     include_str!("../migrations/0008_attempt_done_summary.sql"),
     include_str!("../migrations/0009_attempt_trial.sql"),
+    include_str!("../migrations/0010_event_command.sql"),
 ];
 
 /// One project's database.
@@ -97,8 +98,12 @@ impl Db {
         }
 
         let now = now_ms();
-        let out = cmd.apply(caller, &mut Cx::new(&tx, now))?;
+        // The id comes first so that the command's events can name it. The record itself is
+        // written after `apply`, with the result, so the events come before it: their reference
+        // to the record is checked at commit (migration 0010), not at each insert. That keeps the
+        // record one insert, never a row with a result still to come.
         let id = new_id("cmd");
+        let out = cmd.apply(caller, &mut Cx::new(&tx, now, &id))?;
         tx.execute(
             "INSERT INTO command_record (id, name, caller, idem_key, args, result, created_at, turn_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -217,6 +222,43 @@ mod tests {
         assert_eq!(err.code(), Some("newer_database"), "{err}");
         let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
         assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn events_from_before_they_named_their_command_are_kept_and_still_read() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        // Up to 0009: events name no command yet.
+        migrate(&mut conn, &MIGRATIONS[..9]).unwrap();
+        conn.execute(
+            "INSERT INTO event (kind, entity, payload, created_at) VALUES ('task.created', 'task_old', '{}', 1)",
+            [],
+        )
+        .unwrap();
+        migrate(&mut conn, MIGRATIONS).unwrap();
+        let events = crate::view::events_after(&conn, 0).unwrap();
+        let [old] = events.as_slice() else { panic!("expected the one old event, got {}", events.len()) };
+        assert_eq!((old.seq, old.kind.as_str(), old.entity.as_str()), (1, "task.created", "task_old"));
+        assert_eq!(
+            (old.command_id.as_deref(), old.caller.as_deref(), old.caller_turn_id.as_deref()),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn an_event_naming_an_unrecorded_command_does_not_commit() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn, MIGRATIONS).unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute(
+            "INSERT INTO event (kind, entity, payload, created_at, command_id)
+             VALUES ('task.created', 'task_x', '{}', 1, 'cmd_nowhere')",
+            [],
+        )
+        .expect("the reference is checked at commit, not at the insert");
+        assert!(tx.commit().is_err());
+        let events: i64 = conn.query_row("SELECT COUNT(*) FROM event", [], |r| r.get(0)).unwrap();
+        assert_eq!(events, 0);
     }
 
     /// A database in a file, as a project's is; one in memory has no read connection.

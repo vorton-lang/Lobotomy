@@ -58,6 +58,12 @@ Worker 的实现已经完成并通过验证，检查全部通过。TL 提了一�
   ▸ TL 汇报 · 并发语义疑点 · 10-01 14:20 · 1.2k 字
 ```
 
+**引用用户原话**（用户确认，2026-10-11）：Manager 在回复中引用用户说过的话时，写 `[[quote:<msg_id>]]`，由运行时原样渲染那条消息，并标出时间。Manager 不自己写出带引号的"用户原话"。
+
+- 运行时校验 ID 存在，而且是用户本人的消息；否则渲染为错误引用。规则与 §3.2 中 `decision` 的依据相同。
+- 依据：§0 规定原文由运行时插入。Manager 的面试中，指令明确要求"引用时原样引用"，模型仍把自己的概括放进引号，当作用户原话（[Ember manager-interviews 第三轮](https://github.com/vorton-lang/Ember/tree/main/manager-interviews/2026-10-11-official-cli-round3)）。
+- 待决问题：是否支持只引用一条消息中的一段，例如按字符范围。
+
 ### 2.2 下层产出的去向
 
 | 状态 | 怎么进入 | 用户在哪里看到 |
@@ -197,7 +203,7 @@ ask_user(question, attachments?, blocking?: [task_id])
 
 | 使用方 | 工具 |
 |---|---|
-| Manager | `send_to_role`、`defer`、`ledger_add`、`ask_user`、`propose_meeting`、GitHub 读工具、`request_external_action`；回复中使用 `[[att:<id>]]` |
+| Manager | `send_to_role`、`defer`、`ledger_add`、`ask_user`、`propose_meeting`、GitHub 读工具、`request_external_action`；回复中使用 `[[att:<id>]]` 与 `[[quote:<msg_id>]]` |
 | TL / Worker | `org_report(title, body, status)`、`org_checkpoint`、`flag_mismatch`、ledger 只读查询、GitHub 读工具、`request_external_action` |
 | 运行时（不是工具） | 采集、集成、预览物化、对账、冲突与检查失败通知、压缩与用量、会议投递与轮数上限、权限校验、附件渲染、GitHub 轮询 |
 

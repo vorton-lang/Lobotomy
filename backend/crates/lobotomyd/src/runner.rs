@@ -21,6 +21,7 @@ use lobotomy_harness::process::{self, Spawned};
 use lobotomy_harness::{Harness, MCP_SERVER, Output, claude, codex};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio_util::sync::CancellationToken;
 
 use crate::launch;
 use crate::mcp::command_id_in;
@@ -65,18 +66,19 @@ pub(crate) async fn catch_panic<T>(f: impl Future<Output = anyhow::Result<T>>) -
 
 /// Starts a runner for a registered turn unless one is running already.
 pub fn launch(project: &Arc<Project>, turn_id: String) {
-    {
-        let mut running = project.running.lock().unwrap();
-        if running.contains_key(&turn_id) {
-            return;
-        }
-        running.insert(turn_id.clone(), RunningTurn { pid: None, interrupt_requested: false, abort: None });
+    let stop = CancellationToken::new();
+    let mut running = project.running.lock().unwrap();
+    if running.contains_key(&turn_id) {
+        return;
     }
+    running
+        .insert(turn_id.clone(), RunningTurn { pid: None, interrupt_requested: false, stop: stop.clone(), task: None });
     let id = turn_id.clone();
     let runner = project.tasks.spawn({
         let project = project.clone();
         async move {
-            if let Err(e) = catch_panic(run(&project, &turn_id)).await {
+            let result = catch_panic(run(&project, &turn_id, stop)).await;
+            if let Err(e) = &result {
                 tracing::error!(turn_id, error = format!("{e:#}"), "turn runner failed");
                 // The turn must not stay running without a runner. If the CLI may still be alive,
                 // the turn becomes unknown at the next start and is reconciled then.
@@ -91,12 +93,11 @@ pub fn launch(project: &Arc<Project>, turn_id: String) {
             }
             project.running.lock().unwrap().remove(&turn_id);
             project.wake.notify_one();
+            result
         }
     });
-    // A runner that already ended has removed its entry.
-    if let Some(turn) = project.running.lock().unwrap().get_mut(&id) {
-        turn.abort = Some(runner.abort_handle());
-    }
+    // Publish the task with its stop handle, so archiving cannot take an unjoinable runner.
+    running.get_mut(&id).unwrap().task = Some(runner);
 }
 
 /// Asks the turn's CLI to stop (harness-adapter.md §1.3 rule 6). The turn ends as interrupted
@@ -164,7 +165,7 @@ async fn end(project: &Arc<Project>, turn_id: &str, outcome: Outcome, failure: O
     Ok(())
 }
 
-async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
+async fn run(project: &Arc<Project>, turn_id: &str, stop: CancellationToken) -> anyhow::Result<()> {
     let id = turn_id.to_owned();
     let turn = db(project, move |db| db.read(|c| load_turn(c, &id))).await?;
     let role_name = turn.role.clone();
@@ -234,21 +235,25 @@ async fn run(project: &Arc<Project>, turn_id: &str) -> anyhow::Result<()> {
     let launched =
         TurnLaunched { turn_id: turn_id.to_owned(), pid: spawned.pid as i64, process_start: spawned.process_start };
     if let Err(e) = runtime(project, launched).await {
-        let _ = spawned.child.start_kill();
+        spawned.finish().await?;
         return Err(e);
     }
     let live = LiveTurn { role: turn.role.clone(), started_at: now_ms(), items: Default::default() };
     project.update_live(|turns| {
         turns.insert(turn_id.to_owned(), live);
     });
-    let outcome = drive(project, harness, &turn, &mut spawned).await;
+    let outcome = tokio::select! {
+        biased;
+        _ = stop.cancelled() => None,
+        result = catch_panic(drive(project, harness, &turn, &mut spawned)) => Some(result),
+    };
     project.update_live(|turns| {
         turns.remove(turn_id);
     });
     // Whatever happened, the CLI is gone or must go before the turn ends.
-    let _ = spawned.child.start_kill();
-    let _ = spawned.child.wait().await;
-    spawned.reap();
+    spawned.finish().await?;
+    // Archiving reconciles a forced stop when the project opens again. The CLI is already gone.
+    let Some(outcome) = outcome else { return Ok(()) };
     let (outcome, failure, clean) = outcome?;
     end(project, turn_id, outcome, failure).await?;
     if clean {

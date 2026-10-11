@@ -227,10 +227,10 @@ pub fn backend_diagnostic(project: &Project) -> String {
     });
     let mut jobs: Vec<_> = project.jobs.lock().unwrap().keys().cloned().collect();
     jobs.sort();
-    let running = project.running.lock().unwrap().clone();
+    let running = format!("{:?}", project.running.lock().unwrap());
     let failed = lobotomyd::results::failures(project);
     format!(
-        "project={}\njobs={jobs:?}\nrunning={running:?}\nfailed={failed:?}\n{}",
+        "project={}\njobs={jobs:?}\nrunning={running}\nfailed={failed:?}\n{}",
         project.data_dir.display(),
         match persisted {
             Ok(value) => serde_json::to_string_pretty(&value).unwrap(),

@@ -403,12 +403,22 @@ export interface RemoteError {
   message: string;
 }
 
-/** An entry of the global event log: `<object>.<what happened>`, such as `task.created`. */
+/**
+ * An entry of the global event log: `<object>.<what happened>`, such as `task.created`. The source
+ * fields name the command that wrote it; they are null for events from before events named their
+ * command (data-model.md §7.6).
+ */
 export interface LogEvent {
   seq: number;
   kind: `${'attempt' | 'capture' | 'integration' | 'message' | 'native_session' | 'preview' | 'project' | 'report' | 'role' | 'task' | 'turn' | 'verification' | 'workspace'}.${string}`;
   entity: string;
   payload: { task_id?: string | null } & Record<string, unknown>;
+  /** The command record of the command that wrote it. */
+  command_id?: string | null;
+  /** Who issued that command: `user`, `runtime` or `role:<name>`. */
+  caller?: string | null;
+  /** For a role's command, the turn it came from. */
+  caller_turn_id?: string | null;
 }
 
 /** A registered project and how it is (data-model.md §10.3; frontend.md §3 rule 8). */
