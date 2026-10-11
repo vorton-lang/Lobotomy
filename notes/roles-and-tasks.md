@@ -116,7 +116,7 @@ Yesod    审查：实现 Codex adapter               进行中
 | Manager | `assign(role, title, done_when, actions, stop_when, quote, context?, ledger?, interpretation, links?)`；`send_to_role(..., task_id?)` 追加说明；`accept(task_id)`；`send_back(task_id, items: [id], reason)`；`abandon(task_id, reason)` |
 | 执行者 | `org_report(title, body, status: progress \| blocked \| done, blocked_on?, trial?)`；`trial` 是 done 时可选的试用建议，只保存，不执行（frontend.md §8） |
 | Reviewer | `org_report(..., verdict: approve \| changes_requested, items)` |
-| 用户（GUI） | Manager 的全部控制流命令（建任务、验收、退回、放弃），以及调整队列、重开、暂停某个 role；立即生效，Manager 只收到通知 |
+| 用户（GUI） | Manager 的全部控制流命令（建任务、验收、退回、放弃），以及调整队列、重开、暂停任务；立即生效，Manager 只收到通知 |
 
 **`assign` 必须写明允许的动作和停止条件**（用户确认，2026-10-11）：
 
@@ -127,6 +127,12 @@ Yesod    审查：实现 Codex adapter               进行中
 - 待决问题：
   - 运行时怎样检查 `actions`，例如只读调查的任务产生了文件改动时怎么处理；
   - `stop_when` 由运行时执行到什么程度：只展示给执行者和用户，还是按时间或 turn 数计量。
+
+**用户设的暂停只有用户能解除**（用户确认，2026-10-11，[#50](https://github.com/vorton-lang/Lobotomy/issues/50)）：
+
+- 运行时记下暂停由谁设置。任务被用户暂停时，Manager 的恢复命令被拒绝。Manager 自己设的暂停，Manager 可以解除（manager-actions.md §6）。
+- 依据：#50 中的场景是用户先同意继续，之后直接暂停任务。Manager 按旧的摘要行动时，可能重新启动这个任务。只写在 Manager 的指令里防不住这种情况（roadmap.md M4）。暂停是用户的权威，Manager 的判断不能覆盖它（roadmap.md"事实、权威、判断分开"）。
+- 待决问题：用户的其他直接操作是否也只有用户能撤销，例如重开用户放弃的任务、改回用户刚修改的完成条件。
 
 ## 5. 未决
 
