@@ -254,7 +254,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 **实现**（2026-10-04）：
 
-- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{project}/{token}`（M3 起）：路由先按项目 ID 找到打开的项目实例，没有时返回 404；再把项目实例和 token 放进 HTTP 请求的扩展中。工具处理函数从请求上下文读取它们，在这个项目中按 token 找到 turn（data-model.md §10.3）。Angela 的地址在 host 层，不带项目 ID，工具参数带项目 ID（M4，data-model.md §10.6）。
+- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{project}/{token}`（M3 起）：路由先按项目 ID 找到打开的项目实例，没有时返回 404；再把项目实例和 token 放进 HTTP 请求的扩展中。工具处理函数从请求上下文读取它们，在这个项目中按 token 找到 turn（data-model.md §10.3）。Angela 的地址是 `/mcp/angela/{token}`，不带项目 ID；token 在她自己的数据库中找到她的 turn，工具参数带项目 ID（M4，data-model.md §10.6）。项目 ID 是带前缀的 ULID，不会是 `angela`。
 - 服务不保存 MCP 会话（rmcp 的 stateless 模式），工具调用以单个 JSON 响应返回，不用 SSE 流，不提供 GET 流（返回 405）。调用者已由 URL 中的 token 识别，会话没有额外作用。
 - `Host` 只接受 loopback 名称，防止 DNS 重绑定。
 - 两家 CLI 协商的协议版本不同（§1.4）：Claude 已使用 2026-07-28 的无状态协议，Codex 仍使用 2025-06-18 的 `initialize` 握手。stateless 模式对两者逐个请求应答，两者都能工作。

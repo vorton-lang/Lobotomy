@@ -243,7 +243,7 @@ Lobotomy 在磁盘上创建的每个目录或文件，在 SQLite 中都有归属
 
 ### 7.2 Item
 
-- 业务事实只存一份。`org_report`、`done`、`flag_mismatch` 等调用经命令入口写成命令记录；Thread 中对应的工具调用 item 只引用该命令记录，不重复保存内容。
+- 业务事实只存一份。`org_report`、`done`、`flag_mismatch` 等调用经命令入口写成命令记录；Thread 中对应的工具调用 item 只引用该命令记录，不重复保存内容。只读的工具调用（例如 Angela 读取项目）不写命令记录，item 保存完整的回复。回复中提到别的数据库的命令记录时，item 也不引用它。
 - 其他 item 是展示类：agent 文本、思考、工具调用及其输出、文件改动。每个 item 在完成时落库（frontend.md §3）。
 
 ### 7.3 存储
@@ -558,6 +558,11 @@ host 持有跨项目共享的状态：
   - 还没验收的候选成果，她经 MCP 读 diff，来源与任务面板相同。
   - 她的指令写明：主仓库是展示用的预览目录，不修改。运行时不另加只读沙箱，也不去掉写文件的工具。依据：role 默认在 bypass 模式下运行（harness-adapter.md §1.9），指令写明后，模型一般会遵循。万一误写，下一次物化预览前的检查会停下并通知，不覆盖文件（§5）。
 - **MCP 地址**（用户确认，2026-10-11）：Angela 的 MCP 地址在 host 层，不带项目 ID，由 token 识别她的 turn。工具参数带项目 ID（harness-adapter.md §2）。
+- **现状**（M4 第 1 步，2026-10-11）：
+  - 她的数据目录是 host 目录下的 `angela/`：数据库 `lobotomy.db` 用项目数据库的迁移，库中只有她一个 role（manager，默认 Claude，没有槽位）；工作目录是其中的 `work/`。
+  - 后端打不开她时，项目照常运行，GUI 显示原因（roles-and-tasks.md §1.4）。
+  - 她的 turn 只在收件箱有消息时登记，与项目的 role 一样受额度域约束。
+  - 读取工具：`list_projects`、`read_project`、`read_task`、`read_events`，按下面的"读取带边界"返回。还没有调用者 `manager` 和写操作（roadmap.md M4 第 2 步）。
 
 **读取带边界**（用户确认，2026-10-11，[#50](https://github.com/vorton-lang/Lobotomy/issues/50)）。Angela 读取任务、成果、记录和事件时，运行时在结果中写明：
 

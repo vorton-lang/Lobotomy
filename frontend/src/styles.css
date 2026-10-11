@@ -298,6 +298,15 @@ button.project-item:hover:not(:disabled) {
   font-size: 13px;
   margin: 18px 0 8px;
 }
+/* Beside Angela's conversation (M4), the list is the right column. */
+.sidebar .overview {
+  padding: 0;
+  overflow: visible;
+}
+.sidebar .overview h2 {
+  font-size: 13px;
+  margin: 14px 0 8px;
+}
 .conversation {
   flex: 1;
   display: flex;

@@ -73,7 +73,7 @@ async fn serve(Options { host_dir, repo, port }: Options) -> anyhow::Result<()> 
     std::fs::create_dir_all(&host_dir).with_context(|| format!("creating {}", host_dir.display()))?;
     // One backend per host directory (data-model.md §10.3). The OS releases the lock when the
     // process ends, however it ends.
-    let _lock = lobotomyd::project::lock_file(&host_dir.join("lock"), &host_dir.display().to_string())?;
+    let _lock = lobotomyd::instance::lock_file(&host_dir.join("lock"), &host_dir.display().to_string())?;
     let host = Arc::new(Host::open(&host_dir, HarnessConfig::detect()?)?);
     let backend = Backend::start(host.clone(), port).await?;
     if let Some(repo) = repo {

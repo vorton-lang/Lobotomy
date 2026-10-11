@@ -4,10 +4,13 @@
 //!   `{id, error: {code, message}}`. Commands carry the GUI's request id as their idempotency
 //!   key, so a repeated request does nothing twice.
 //! - A request about a project names it: `params.project` for reads, and for `command`, whose
-//!   params are `{name, args, project}`. `host` reads the host snapshot; the host's commands
-//!   (`create_project`, `archive_project`, `unarchive_project`, `retry_open`, `set_permission`,
-//!   `quota_retry`, `shutdown`) need no project.
-//! - The server pushes what changed, not the content. About a project, with its id in `project`:
+//!   params are `{name, args, project}`. A request about Angela names `angela` there instead
+//!   (data-model.md §10.6): her snapshot, thread, searches and blobs, and the commands about her
+//!   turns and messages. `host` reads the host snapshot; the host's commands (`create_project`,
+//!   `archive_project`, `unarchive_project`, `retry_open`, `set_permission`, `quota_retry`,
+//!   `shutdown`) need no project.
+//! - The server pushes what changed, not the content. About a project, with its id in `project`
+//!   (`angela` for Angela):
 //!   `{type: "events", events}` with its event log, `{type: "thread", role, seq}` when a thread
 //!   has a new item, `{type: "live", live}` with items of running turns. About the host:
 //!   `{type: "host"}` when a host setting or the project list changed, `{type: "tick"}` every 15
@@ -21,6 +24,8 @@
 
 mod command;
 mod view;
+
+pub use view::project_attention;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -44,6 +49,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::host::Host;
+use crate::instance::Instance;
 use crate::project::Project;
 use crate::projects::Projects;
 use crate::runner::db;
@@ -58,27 +64,45 @@ pub const PUSH_BUFFER: usize = 512;
 struct Service {
     host: Arc<Host>,
     projects: Arc<Projects>,
+    /// Angela's instance, or why it could not be opened.
+    angela: Result<Arc<Instance>, String>,
     shutdown: CancellationToken,
     sessions: TaskTracker,
 }
 
+/// What a request is about.
+enum Scope {
+    Project(Arc<Project>),
+    Angela(Arc<Instance>),
+}
+
 impl Service {
-    /// The open project a request names.
-    fn project(&self, id: Option<&str>) -> anyhow::Result<Arc<Project>> {
+    /// The open project, or Angela, that a request names.
+    fn scope(&self, id: Option<&str>) -> anyhow::Result<Scope> {
         let Some(id) = id else {
             return Err(Error::rejected("bad_request", "the request names no project").into());
         };
-        self.projects.get(id).ok_or_else(|| Error::rejected("unknown_project", format!("项目 {id} 没有打开")).into())
+        if id == crate::angela::ID {
+            return match &self.angela {
+                Ok(angela) => Ok(Scope::Angela(angela.clone())),
+                Err(error) => Err(Error::rejected("angela_unavailable", format!("Angela 没有打开：{error}")).into()),
+            };
+        }
+        let project = self.projects.get(id);
+        project
+            .map(Scope::Project)
+            .ok_or_else(|| Error::rejected("unknown_project", format!("项目 {id} 没有打开")).into())
     }
 }
 
 pub fn gui_router(
     host: Arc<Host>,
     projects: Arc<Projects>,
+    angela: Result<Arc<Instance>, String>,
     shutdown: CancellationToken,
     sessions: TaskTracker,
 ) -> Router {
-    Router::new().route("/gui", get(upgrade)).with_state(Service { host, projects, shutdown, sessions })
+    Router::new().route("/gui", get(upgrade)).with_state(Service { host, projects, angela, shutdown, sessions })
 }
 
 #[derive(Deserialize)]
@@ -203,42 +227,42 @@ async fn session(socket: WebSocket, service: Service) {
     while requests.join_next().await.is_some() {}
 }
 
-/// Pushes a project's changes to every connected GUI: new entries of its event log and the live
+/// Pushes an instance's changes to every connected GUI: new entries of its event log and the live
 /// view of its running turns. Stops with `shutdown`. It reads on the read connection, so polling
 /// never waits for a command, nor holds one up.
-pub async fn watch(project: Arc<Project>, shutdown: CancellationToken) {
-    let mut last_seq = db(&project, |db| db.read(last_event)).await.unwrap_or(0);
-    let mut last_live = project.live_version.load(Ordering::Relaxed);
-    let mut last_items: HashMap<String, i64> = db(&project, |db| db.read(thread_heads)).await.unwrap_or_default();
+pub async fn watch(instance: Arc<Instance>, shutdown: CancellationToken) {
+    let mut last_seq = db(&instance, |db| db.read(last_event)).await.unwrap_or(0);
+    let mut last_live = instance.live_version.load(Ordering::Relaxed);
+    let mut last_items: HashMap<String, i64> = db(&instance, |db| db.read(thread_heads)).await.unwrap_or_default();
     loop {
         tokio::select! {
             _ = tokio::time::sleep(WATCH_INTERVAL) => {}
             _ = shutdown.cancelled() => return,
         }
         let after = last_seq;
-        match db(&project, move |db| db.read(|c| events_after(c, after))).await {
+        match db(&instance, move |db| db.read(|c| events_after(c, after))).await {
             Ok(events) if !events.is_empty() => {
                 last_seq = events.last().map_or(last_seq, |e| e.seq);
-                project.push(json!({ "type": "events", "events": events }));
+                instance.push(json!({ "type": "events", "events": events }));
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = format!("{e:#}"), "could not read the event log"),
         }
         // Transcript items are not business events; each thread's newest item tells the GUI to
         // fetch what it has not seen.
-        if let Ok(heads) = db(&project, |db| db.read(thread_heads)).await {
+        if let Ok(heads) = db(&instance, |db| db.read(thread_heads)).await {
             for (role, seq) in &heads {
                 if last_items.get(role) != Some(seq) {
-                    project.push(json!({ "type": "thread", "role": role, "seq": seq }));
+                    instance.push(json!({ "type": "thread", "role": role, "seq": seq }));
                 }
             }
             last_items = heads;
         }
-        let version = project.live_version.load(Ordering::Relaxed);
+        let version = instance.live_version.load(Ordering::Relaxed);
         if version != last_live {
             last_live = version;
-            let live = project.live.lock().unwrap().clone();
-            project.push(json!({ "type": "live", "live": live }));
+            let live = instance.live.lock().unwrap().clone();
+            instance.push(json!({ "type": "live", "live": live }));
         }
     }
 }
@@ -279,20 +303,28 @@ fn error_code(e: &anyhow::Error) -> &'static str {
 /// project.
 async fn call(service: &Service, method: &str, params: Value) -> anyhow::Result<Value> {
     match method {
-        "host" => view::host_snapshot(&service.host, &service.projects).await,
+        "host" => view::host_snapshot(&service.host, &service.projects, &service.angela).await,
         "command" => {
             let params: command::CommandParams = serde_json::from_value(params)?;
             if let Some(result) = command::host(&service.host, &service.projects, &params).await {
                 return result;
             }
-            let project = service.project(params.project.as_deref())?;
-            let result = command::run(&project, params).await?;
-            project.wake.notify_one();
-            Ok(result)
+            match service.scope(params.project.as_deref())? {
+                Scope::Project(project) => {
+                    let result = command::run(&project, params).await?;
+                    project.wake.notify_one();
+                    Ok(result)
+                }
+                Scope::Angela(angela) => {
+                    let result = command::run_angela(&angela, params).await?;
+                    angela.wake.notify_one();
+                    Ok(result)
+                }
+            }
         }
-        _ => {
-            let project = service.project(params.get("project").and_then(Value::as_str))?;
-            view::answer(&project, method, params).await
-        }
+        _ => match service.scope(params.get("project").and_then(Value::as_str))? {
+            Scope::Project(project) => view::answer(&project, method, params).await,
+            Scope::Angela(angela) => view::answer_angela(&angela, method, params).await,
+        },
     }
 }

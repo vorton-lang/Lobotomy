@@ -2,7 +2,8 @@
 // (harness-adapter.md §1.9); the harness of each role, which also applies at once; then the project
 // configuration (data-model.md §9.1 project_config): check commands, capture scope and the size
 // guardrail. Each save of the project configuration is a new version; checks and captures name
-// the version they used. In 「全部」 only the host's part shows.
+// the version they used. In 「全部」 the host's part shows, with Angela's harness while she is open:
+// the window then holds her snapshot (data-model.md §10.6).
 
 import { useEffect, useState } from 'react';
 import type { Check, HarnessView, Permission, ProjectConfig, RoleView } from '../api/types';
@@ -47,10 +48,10 @@ function Permissions({ harnesses }: { harnesses: HarnessView[] }) {
  * Which harness each role of the project runs on; no role is bound to one (harness-adapter.md §0).
  * A switch applies at once: the role's current session ends, and its next turn starts a new one.
  */
-function Roles({ roles, harnesses }: { roles: RoleView[]; harnesses: HarnessView[] }) {
+function Roles({ title, roles, harnesses }: { title: string; roles: RoleView[]; harnesses: HarnessView[] }) {
   return (
     <>
-      <h3>角色 · 本项目</h3>
+      <h3>{title}</h3>
       <p className="muted">
         切换后，角色当前的会话结束，下一个 turn 在新 harness 的新会话中开始；正在做的任务会重新发给它。turn 运行时不能切换。
       </p>
@@ -156,6 +157,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
     return (
       <Modal title="设置" onClose={onClose} wide>
         <Permissions harnesses={harnesses} />
+        {roles.length > 0 && <Roles title="Angela · 本机所有项目共用" roles={roles} harnesses={harnesses} />}
       </Modal>
     );
   }
@@ -176,7 +178,7 @@ export function Settings({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="设置" onClose={onClose} wide>
       <Permissions harnesses={harnesses} />
-      <Roles roles={roles} harnesses={harnesses} />
+      <Roles title="角色 · 本项目" roles={roles} harnesses={harnesses} />
       <Storage />
       <Archive onClose={onClose} />
 

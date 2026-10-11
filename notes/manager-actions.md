@@ -215,7 +215,7 @@ ask_user(question, attachments?, blocking?: [task_id])
 
 | 使用方 | 工具 |
 |---|---|
-| Manager | `send_to_role`、`defer`、`ledger_add`、`ask_user`、`propose_meeting`、GitHub 读工具、`request_external_action`；回复中使用 `[[att:<id>]]` 与 `[[quote:<msg_id>]]` |
+| Manager | `send_to_role`、`defer`、`ledger_add`、`ask_user`、`propose_meeting`、GitHub 读工具、`request_external_action`；回复中使用 `[[att:<id>]]` 与 `[[quote:<msg_id>]]`。已实现的只有读取项目的工具：`list_projects`、`read_project`、`read_task`、`read_events`（M4 第 1 步，data-model.md §10.6） |
 | TL / Worker | `org_report(title, body, status)`、`org_checkpoint`、`flag_mismatch`、ledger 只读查询、GitHub 读工具、`request_external_action` |
 | 运行时（不是工具） | 采集、集成、预览物化、对账、冲突与检查失败通知、压缩与用量、会议投递与轮数上限、权限校验、附件渲染、GitHub 轮询 |
 

@@ -14,6 +14,8 @@
 //   FAKE:textstream=<s>  a reply that streams for s seconds, a line every 20 ms; each line carries
 //                 the time it was written, so the GUI's lag can be measured (perf-baseline.md)
 //   FAKE:marker=<w>  the turn's last reply is "bench <w>"
+//   FAKE:call=<tool>{json}  calls that Lobotomy tool with those arguments ({} when left out); one
+//                 call per line, in order
 //   otherwise     completes the turn with a message
 // Flags placed before Claude's own arguments change the process itself:
 //   --fake-start-error  rejects its arguments: an error on stderr, nothing on stdout, exit code 1
@@ -74,16 +76,18 @@ function tool(name, toolInput, content, extra = {}) {
   emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: false }] }, parent_tool_use_id: null, ...extra });
 }
 
-/** Calls org_report on the runtime's MCP service, the way Claude calls an MCP tool. */
-async function report(arguments_) {
+/** Calls a tool on the runtime's MCP service, the way Claude calls an MCP tool. */
+async function call(name, arguments_) {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'org_report', arguments: arguments_ } }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: arguments_ } }),
   });
   const reply = await response.json();
-  tool('mcp__lobotomy__org_report', arguments_, reply.result.content);
+  tool(`mcp__lobotomy__${name}`, arguments_, reply.result.content);
 }
+
+const report = arguments_ => call('org_report', arguments_);
 
 message({ type: 'text', text: `got ${input.length} chars` });
 
@@ -139,6 +143,10 @@ if (stream) {
   }
   emit({ type: 'assistant', message: { id, type: 'message', role: 'assistant', content: [{ type: 'text', text }] }, parent_tool_use_id: null });
   emit({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 }, parent_tool_use_id: null });
+}
+
+for (const [, name, json] of input.matchAll(/FAKE:call=(\w+)(\{[^\n]*\})?/g)) {
+  await call(name, json ? JSON.parse(json) : {});
 }
 
 const marker = /FAKE:marker=(\S+)/.exec(input);

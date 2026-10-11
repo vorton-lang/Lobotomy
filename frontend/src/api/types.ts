@@ -437,14 +437,25 @@ export interface ProjectStatus {
   busy: boolean;
 }
 
+/** Angela as the host shows her (data-model.md §10.6). The projects run without her. */
+export interface AngelaStatus {
+  /** Why she could not be opened; she does not run. */
+  error: string | null;
+  /** What of hers waits for the user, such as a turn to continue. */
+  attention: Attention[];
+  /** A turn of hers is running. */
+  busy: boolean;
+}
+
 export interface HostSnapshot {
   projects: ProjectStatus[];
   /** What waits for the user outside any project: blocked quota domains (data-model.md §10.5). */
   attention: Attention[];
   harnesses: HarnessView[];
+  angela: AngelaStatus;
 }
 
-/** Pushes about a project name it in `project`. */
+/** Pushes about a project name it in `project`; pushes about Angela name `angela` there. */
 export type Push =
   | { type: 'events'; project: string; events: LogEvent[] }
   | { type: 'live'; project: string; live: Record<string, LiveTurn> }

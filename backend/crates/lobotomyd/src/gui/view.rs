@@ -16,12 +16,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::host::Host;
-use crate::project::{LiveTurn, Project};
+use crate::instance::{Instance, LiveTurn};
+use crate::project::Project;
 use crate::projects::Projects;
 use crate::results;
 use crate::runner::db;
 
-/// Answers a read method.
+/// Answers a read method about a project.
 pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Result<Value> {
     Ok(match method {
         "trials" => {
@@ -29,14 +30,6 @@ pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyh
             serde_json::to_value(project.trials.list(&task_id))?
         }
         "snapshot" => serde_json::to_value(snapshot(project).await?)?,
-        "thread" => {
-            let q: ThreadQuery = serde_json::from_value(params)?;
-            read(project, move |c| view::thread_page(c, &q)).await?
-        }
-        "search" => {
-            let q: SearchQuery = serde_json::from_value(params)?;
-            read(project, move |c| view::search(c, &q)).await?
-        }
         "task" => {
             let TaskParams { task_id } = serde_json::from_value(params)?;
             read(project, move |c| view::task_detail(c, &task_id)).await?
@@ -52,12 +45,36 @@ pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyh
             let store = project.store.clone();
             serde_json::to_value(tokio::task::spawn_blocking(move || store.diff(&from, &to)).await??)?
         }
+        _ => return transcript(project, method, params).await,
+    })
+}
+
+/// Answers a read method about Angela (data-model.md §10.6). Her snapshot has the shape of a
+/// project's, without a repository and tasks, so the window shows her as it shows an executor.
+pub async fn answer_angela(angela: &Instance, method: &str, params: Value) -> anyhow::Result<Value> {
+    match method {
+        "snapshot" => Ok(serde_json::to_value(angela_snapshot(angela).await?)?),
+        _ => transcript(angela, method, params).await,
+    }
+}
+
+/// The reads every instance answers: its transcript, searches in it and its blobs.
+async fn transcript(instance: &Instance, method: &str, params: Value) -> anyhow::Result<Value> {
+    Ok(match method {
+        "thread" => {
+            let q: ThreadQuery = serde_json::from_value(params)?;
+            read(instance, move |c| view::thread_page(c, &q)).await?
+        }
+        "search" => {
+            let q: SearchQuery = serde_json::from_value(params)?;
+            read(instance, move |c| view::search(c, &q)).await?
+        }
         "blob" => {
             let BlobParams { hash } = serde_json::from_value(params)?;
             if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(Error::rejected("bad_request", format!("not a blob hash: {hash}")).into());
             }
-            json!({ "text": project.blobs.read(&hash)? })
+            json!({ "text": instance.blobs.read(&hash)? })
         }
         other => return Err(Error::rejected("bad_request", format!("unknown method {other}")).into()),
     })
@@ -65,10 +82,10 @@ pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyh
 
 /// Reads a model on the read connection.
 async fn read<T: Serialize + Send + 'static>(
-    project: &Arc<Project>,
+    instance: &Instance,
     f: impl FnOnce(&Connection) -> lobotomy_core::Result<T> + Send + 'static,
 ) -> anyhow::Result<Value> {
-    Ok(serde_json::to_value(db(project, move |db| db.read(f)).await?)?)
+    Ok(serde_json::to_value(db(instance, move |db| db.read(f)).await?)?)
 }
 
 #[derive(Deserialize)]
@@ -107,19 +124,46 @@ struct HarnessView {
 
 pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
     let overview = db(project, |db| db.read(|c| view::overview(c, MCP_SERVER))).await?;
-    let used: BTreeSet<&str> = overview.roles.iter().map(|r| r.role.harness.as_str()).collect();
-    let quota = used.into_iter().map(|harness| project.host.db.domain(harness)).collect::<Result<Vec<_>, _>>()?;
-    let attention = attention(project, &overview, &quota);
-    let harnesses = harnesses(&project.host)?;
-    let live = project.live.lock().unwrap().clone();
+    let quota = quota(&project.host, &overview)?;
+    let attention = attention(&overview, &quota, &results::failures(project));
+    instance_snapshot(project, overview, attention, quota)
+}
+
+async fn angela_snapshot(angela: &Instance) -> anyhow::Result<Snapshot> {
+    let overview = db(angela, |db| db.read(|c| view::overview(c, MCP_SERVER))).await?;
+    let quota = quota(&angela.host, &overview)?;
+    let attention = attention(&overview, &quota, &[]);
+    instance_snapshot(angela, overview, attention, quota)
+}
+
+fn instance_snapshot(
+    instance: &Instance,
+    overview: Overview,
+    attention: Vec<Attention>,
+    quota: Vec<Domain>,
+) -> anyhow::Result<Snapshot> {
+    let harnesses = harnesses(&instance.host)?;
+    let live = instance.live.lock().unwrap().clone();
     Ok(Snapshot { overview, attention, quota, harnesses, live })
 }
 
-fn attention(project: &Project, overview: &Overview, quota: &[Domain]) -> Vec<Attention> {
-    view::attention(overview, quota, &results::failures(project), |turn| {
+/// The quota domains of the harnesses the roles use.
+fn quota(host: &Host, overview: &Overview) -> anyhow::Result<Vec<Domain>> {
+    let used: BTreeSet<&str> = overview.roles.iter().map(|r| r.role.harness.as_str()).collect();
+    Ok(used.into_iter().map(|harness| host.db.domain(harness)).collect::<Result<Vec<_>, _>>()?)
+}
+
+fn attention(overview: &Overview, quota: &[Domain], failed: &[(String, String)]) -> Vec<Attention> {
+    view::attention(overview, quota, failed, |turn| {
         matches!((turn.pid, turn.process_start), (Some(pid), Some(start))
             if lobotomy_harness::process::is_running(pid as u32, start))
     })
+}
+
+/// What waits for the user in a project, without the quota domains the host lists once
+/// (data-model.md §10.5).
+pub fn project_attention(project: &Project, overview: &Overview) -> Vec<Attention> {
+    attention(overview, &[], &results::failures(project))
 }
 
 fn harnesses(host: &Host) -> anyhow::Result<Vec<HarnessView>> {
@@ -137,6 +181,19 @@ pub struct HostSnapshot {
     /// (data-model.md §10.5).
     attention: Vec<Attention>,
     harnesses: Vec<HarnessView>,
+    angela: AngelaStatus,
+}
+
+/// Angela as the host shows her (data-model.md §10.6). Projects run without her.
+#[derive(Serialize)]
+struct AngelaStatus {
+    /// Why her instance could not be opened; she does not run.
+    error: Option<String>,
+    /// What of hers waits for the user, such as a turn to continue; her quota domain is in the
+    /// host's own list.
+    attention: Vec<Attention>,
+    /// A turn of hers is running.
+    busy: bool,
 }
 
 #[derive(Serialize)]
@@ -151,27 +208,42 @@ struct ProjectStatus {
     busy: bool,
 }
 
-pub async fn host_snapshot(host: &Arc<Host>, projects: &Projects) -> anyhow::Result<Value> {
+pub async fn host_snapshot(
+    host: &Arc<Host>,
+    projects: &Projects,
+    angela: &Result<Arc<Instance>, String>,
+) -> anyhow::Result<Value> {
     let mut statuses = Vec::new();
     for entry in host.db.projects()? {
         let (mut attention, mut busy, mut error) = (Vec::new(), false, projects.failure(&entry.id));
         if let Some(project) = projects.get(&entry.id) {
             // One project's broken database does not hide the others.
             match db(&project, |db| db.read(|c| view::overview(c, MCP_SERVER))).await {
-                Ok(overview) => attention = self::attention(&project, &overview, &[]),
+                Ok(overview) => attention = project_attention(&project, &overview),
                 Err(e) => error = Some(format!("{e:#}")),
             }
             busy = !project.running.lock().unwrap().is_empty();
         }
         statuses.push(ProjectStatus { error, entry, attention, busy });
     }
+    let angela = match angela {
+        Ok(angela) => match db(angela, |db| db.read(|c| view::overview(c, MCP_SERVER))).await {
+            Ok(overview) => AngelaStatus {
+                error: None,
+                attention: attention(&overview, &[], &[]),
+                busy: !angela.running.lock().unwrap().is_empty(),
+            },
+            Err(e) => AngelaStatus { error: Some(format!("{e:#}")), attention: Vec::new(), busy: false },
+        },
+        Err(error) => AngelaStatus { error: Some(error.clone()), attention: Vec::new(), busy: false },
+    };
     let attention = Harness::ALL
         .iter()
         .map(|harness| host.db.domain(harness.as_str()))
         .filter(|domain| domain.as_ref().map_or(true, Domain::is_blocked))
         .map(|domain| Ok(Attention::Quota { domain: domain? }))
         .collect::<anyhow::Result<_>>()?;
-    let snapshot = HostSnapshot { projects: statuses, attention, harnesses: harnesses(host)? };
+    let snapshot = HostSnapshot { projects: statuses, attention, harnesses: harnesses(host)?, angela };
     Ok(serde_json::to_value(snapshot)?)
 }
 

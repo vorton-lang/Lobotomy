@@ -1,8 +1,9 @@
 // The project list and 「全部」 against a mocked backend with two projects (frontend.md §2 "M3 的布局").
 // The backend's own rules (registration, failure, the one-unarchived-project rule) have Rust tests;
-// these check what the window makes of the host snapshot.
+// these check what the window makes of the host snapshot. 「全部」 is the conversation with Angela
+// (roadmap.md M4 step 1).
 import { expect, test, type Page } from '@playwright/test';
-import type { Attention, HostSnapshot, Push, Snapshot } from '../src/api/types';
+import type { AngelaStatus, Attention, HostSnapshot, Push, Snapshot } from '../src/api/types';
 import { detail, role, task } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
@@ -24,6 +25,14 @@ const snapshotOf = (id: string): Snapshot => ({
   attention: id === 'alpha' ? [accept] : [],
 });
 
+const angela: AngelaStatus = { error: null, attention: [], busy: false };
+
+/** Angela's snapshot has the shape of a project's, without a repository and tasks. */
+const angelaSnapshot: Snapshot = {
+  seq: 1, quota: [], harnesses: [], live: {}, config: null, project: null, tasks: [], attention: [],
+  roles: [{ ...role(null), name: 'Angela', kind: 'manager', harness: 'claude', slot: null }],
+};
+
 /** Opens the GUI on a backend with the projects `host` lists. */
 async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: string, args: Record<string, unknown>) => unknown) {
   const asked: { method: string; project?: string }[] = [];
@@ -35,7 +44,7 @@ async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: strin
       asked.push({ method, project: params.project });
       let result: unknown = null;
       if (method === 'host') result = host;
-      else if (method === 'snapshot') result = snapshotOf(params.project);
+      else if (method === 'snapshot') result = params.project === 'angela' ? angelaSnapshot : snapshotOf(params.project);
       else if (method === 'thread') result = { items: [], has_more: false, turns: {}, messages: [], commands: {}, queued: [] };
       else if (method === 'task') result = detail(exported);
       else if (method === 'trials' || method === 'diff') result = [];
@@ -52,7 +61,7 @@ async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: strin
 // With several projects the window starts on 「全部」: each project's items, the host's blocked quota
 // once under 「本机」, and the total in the title. 「前往」 shows the project and opens the task.
 test('「全部」 lists every project’s items and goes to one', async ({ page }) => {
-  const host: HostSnapshot = { projects: [entry('alpha', [accept]), entry('beta', [], true)], attention: [quota], harnesses: [] };
+  const host: HostSnapshot = { projects: [entry('alpha', [accept]), entry('beta', [], true)], attention: [quota], harnesses: [], angela };
   const backend = await openHost(page, host);
 
   const list = page.getByRole('navigation', { name: '项目' });
@@ -63,7 +72,8 @@ test('「全部」 lists every project’s items and goes to one', async ({ page
   await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」通过了验证，等你验收');
   await expect(overview.getByRole('region', { name: 'beta' })).toHaveCount(0);
   await expect(page).toHaveTitle('(2) Lobotomy');
-  expect(backend.asked.some((a) => a.method === 'snapshot')).toBe(false);
+  // No project's snapshot: 「全部」 holds Angela's.
+  expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['angela']);
 
   await overview.getByRole('region', { name: 'alpha' }).getByRole('button', { name: '前往' }).click();
   await expect(list.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-current', 'true');
@@ -74,12 +84,46 @@ test('「全部」 lists every project’s items and goes to one', async ({ page
   await list.getByRole('button', { name: /beta/ }).click();
   await expect(page.locator('.topbar')).toContainText('beta · main');
   await expect(page.getByRole('region', { name: '导出报表', exact: true })).toHaveCount(0);
-  expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['alpha', 'beta']);
+  expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['angela', 'alpha', 'beta']);
+});
+
+// 「全部」 is the conversation with Angela (frontend.md §2): the user's message goes to her, and
+// what waits in every project stays beside her.
+test('「全部」 is the conversation with Angela beside every project’s items', async ({ page }) => {
+  const sent: [string, Record<string, unknown>][] = [];
+  const host: HostSnapshot = { projects: [entry('alpha', [accept]), entry('beta')], attention: [], harnesses: [], angela };
+  const backend = await openHost(page, host, (name, args) => {
+    sent.push([name, args]);
+    return { id: 'msg1' };
+  });
+  const conversation = page.getByRole('region', { name: 'Angela', exact: true });
+  await conversation.getByLabel('消息').fill('现在怎么样');
+  await conversation.getByRole('button', { name: '发送' }).click();
+  await expect.poll(() => sent.map(([name, args]) => [name, args.role, args.task_id, args.body]))
+    .toEqual([['send_message', 'Angela', null, '现在怎么样']]);
+  expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['angela']);
+  const overview = page.getByRole('region', { name: '全部项目' });
+  await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」通过了验证，等你验收');
+});
+
+// The projects run without Angela (roles-and-tasks.md §1.4): when she cannot be opened, 「全部」
+// says why and lists what waits, as before her.
+test('without Angela 「全部」 says why and lists what waits', async ({ page }) => {
+  const host: HostSnapshot = {
+    projects: [entry('alpha', [accept]), entry('beta')], attention: [], harnesses: [],
+    angela: { error: '数据库是更新版本的 Lobotomy 写的', attention: [], busy: false },
+  };
+  const backend = await openHost(page, host);
+  const overview = page.getByRole('region', { name: '全部项目' });
+  await expect(overview).toContainText('Angela 没有打开：数据库是更新版本的 Lobotomy 写的');
+  await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('等你验收');
+  await expect(page.getByLabel('消息')).toHaveCount(0);
+  expect(backend.asked.some((a) => a.method === 'snapshot')).toBe(false);
 });
 
 // A new project is connected while the backend runs; the window then shows it.
 test('a new project connects from the list and opens', async ({ page }) => {
-  const host: HostSnapshot = { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [] };
+  const host: HostSnapshot = { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela };
   const created: Record<string, unknown>[] = [];
   await openHost(page, host, (name, args) => {
     if (name !== 'create_project') throw new Error(name);
@@ -103,7 +147,7 @@ test('a project that could not be opened says why; archived ones come back', asy
   const broken = { ...entry('broken'), error: '数据目录不存在：/data/broken' };
   const old = { ...entry('old'), state: 'archived' as const };
   const sent: [string, unknown][] = [];
-  await openHost(page, { projects: [entry('alpha'), broken, old], attention: [], harnesses: [] }, (name, args) => {
+  await openHost(page, { projects: [entry('alpha'), broken, old], attention: [], harnesses: [], angela }, (name, args) => {
     sent.push([name, args.project_id]);
   });
   const list = page.getByRole('navigation', { name: '项目' });
@@ -121,7 +165,7 @@ test('a project that could not be opened says why; archived ones come back', asy
 // Archiving the project shown stops it; the settings ask once more first.
 test('the settings archive the project after asking', async ({ page }) => {
   const sent: [string, unknown][] = [];
-  await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [] }, (name, args) => {
+  await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [], angela }, (name, args) => {
     sent.push([name, args.project_id]);
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -140,7 +184,7 @@ test('settings on 「全部」 stay usable without a project snapshot', async ({
   page.on('pageerror', (error) => errors.push(error.message));
   await openHost(page, {
     projects: [entry('alpha'), entry('beta')], attention: [],
-    harnesses: [{ harness: 'codex', permission: 'auto_review' }],
+    harnesses: [{ harness: 'codex', permission: 'auto_review' }], angela,
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '设置' });
@@ -160,7 +204,7 @@ test('archiving clears the project snapshot while settings await the reply', asy
   page.on('pageerror', (error) => errors.push(error.message));
   const host: HostSnapshot = {
     projects: [entry('alpha', [], true), entry('beta')], attention: [],
-    harnesses: [{ harness: 'codex', permission: 'auto_review' }],
+    harnesses: [{ harness: 'codex', permission: 'auto_review' }], angela,
   };
   let finish!: () => void;
   const reply = new Promise<void>((resolve) => { finish = resolve; });

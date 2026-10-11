@@ -1,6 +1,7 @@
-// The window (frontend.md §2 "M3 的布局"): the project list on the left. 「全部」 lists what waits for
-// the user in every project. A project shows as in M1: the executor's thread in the main area, what
-// waits for the user and the Workboard on the right, a task's detail in a panel over the thread.
+// The window (frontend.md §2 "M3 的布局"): the project list on the left. 「全部」 is the conversation
+// with Angela, with what waits for the user in every project on the right; without Angela, that
+// list fills it. A project shows as in M1: the executor's thread in the main area, what waits for
+// the user and the Workboard on the right, a task's detail in a panel over the thread.
 
 import { useEffect, useState } from 'react';
 import { backendUrl, inElectron } from './bridge';
@@ -13,7 +14,7 @@ import { Sidebar } from './components/Sidebar';
 import { TaskPanel } from './components/TaskPanel';
 import { Thread } from './components/Thread';
 import { TopBar } from './components/TopBar';
-import { connect, openSearch, totalAttention, useStore } from './store';
+import { angelaOpen, connect, openSearch, totalAttention, useStore } from './store';
 
 export function App() {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
@@ -26,6 +27,8 @@ export function App() {
   const empty = useStore((s) => s.host !== null && s.host.projects.every((p) => p.state === 'onboarding'));
   const project = useStore((s) => s.project);
   const opened = useStore((s) => s.snapshot?.project != null);
+  const angela = useStore((s) => angelaOpen(s.host));
+  const angelaLoaded = useStore((s) => s.snapshot !== null);
   const selectedTask = useStore((s) => s.selectedTask);
   const toasts = useStore((s) => s.toasts);
   const searching = useStore((s) => s.search !== null);
@@ -84,8 +87,21 @@ export function App() {
       <div className="body">
         <ProjectList />
         <main className="main">
-          {project === null ? (
+          {project === null && !angela ? (
             <Overview />
+          ) : project === null && !angelaLoaded ? (
+            <div className="splash">正在打开 Angela…</div>
+          ) : project === null ? (
+            <>
+              <section className="conversation" aria-label="Angela">
+                <Thread />
+                <Composer />
+                {searching && <SearchBar />}
+              </section>
+              <aside className="sidebar">
+                <Overview />
+              </aside>
+            </>
           ) : !opened ? (
             <div className="splash">正在打开项目…</div>
           ) : (

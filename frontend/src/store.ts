@@ -56,8 +56,9 @@ interface State {
   /** The projects and what the host shows across them (frontend.md §3 rule 8). */
   host: HostSnapshot | null;
   /**
-   * The project the window shows; requests about a project name it. `null` is 「全部」: what waits
-   * for the user in every project (frontend.md §2 "M3 的布局").
+   * The project the window shows; requests about a project name it. `null` is 「全部」: the
+   * conversation with Angela beside what waits for the user in every project (frontend.md §2
+   * "M3 的布局"). There, requests name Angela (`scope`).
    */
   project: string | null;
   snapshot: Snapshot | null;
@@ -111,6 +112,20 @@ export const useStore = create<State>(() => ({
   toasts: [],
 }));
 
+/** What requests and pushes name instead of a project for Angela (data-model.md §10.6). */
+export const ANGELA = 'angela';
+
+/** Whether Angela is open. A host snapshot that does not mention her has no Angela. */
+export const angelaOpen = (host: HostSnapshot | null): boolean => host?.angela?.error === null;
+
+/**
+ * What the window's requests are about: the project it shows, or on 「全部」 Angela when she is
+ * open; `null` when there is neither.
+ */
+export function scope(state: { project: string | null; host: HostSnapshot | null } = useStore.getState()): string | null {
+  return state.project ?? (angelaOpen(state.host) ? ANGELA : null);
+}
+
 /** Whether the window still shows `project`: a reply about another one is dropped. */
 const showing = (project: string | null) => useStore.getState().project === project;
 
@@ -131,12 +146,13 @@ export function connect(url: string) {
 }
 
 /**
- * A request to the backend. Requests about the project name the one the window shows, unless they
- * name one themselves; `host` and the host's commands need none (frontend.md §3 rule 8).
+ * A request to the backend. Requests about the project name the one the window shows, or Angela on
+ * 「全部」, unless they name one themselves; `host` and the host's commands need none (frontend.md
+ * §3 rule 8).
  */
 export function call<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   if (!connection) return Promise.reject(new Error('not connected'));
-  const project = useStore.getState().project;
+  const project = scope();
   const scoped = method === 'host' || project === null || 'project' in params ? params : { ...params, project };
   return connection.call<T>(method, scoped);
 }
@@ -213,7 +229,7 @@ async function reloadAll() {
 }
 
 async function reloadProject() {
-  if (!useStore.getState().project) return;
+  if (scope() === null) return;
   await loadSnapshot();
   await loadNewestThread();
   const selected = useStore.getState().selectedTask;
@@ -233,11 +249,12 @@ export function chooseProject(host: HostSnapshot, current: string | null, initia
 
 /**
  * What waits for the user in all projects, for the window title and the tray: each project's,
- * and the host's blocked quota domains once (data-model.md §10.5).
+ * Angela's, and the host's blocked quota domains once (data-model.md §10.5).
  */
 export function totalAttention(host: HostSnapshot | null): number {
   if (!host) return 0;
-  return host.projects.reduce((n, p) => n + p.attention.length, host.attention.length);
+  const own = host.attention.length + (host.angela?.attention.length ?? 0);
+  return host.projects.reduce((n, p) => n + p.attention.length, own);
 }
 
 let hostRequest = 0;
@@ -251,7 +268,8 @@ async function loadHost(): Promise<boolean> {
   appliedHost = request;
   const { project: current, host: before } = useStore.getState();
   const project = chooseProject(host, current, before === null);
-  if (project === current) {
+  // On 「全部」, Angela opening or closing changes what the window shows.
+  if (project === current && scope({ project, host }) === scope({ project, host: before })) {
     useStore.setState({ host });
     return false;
   }
@@ -279,7 +297,7 @@ export async function selectProject(project: string | null, taskId: string | nul
 /** After the project list or a host setting changed. Host settings show in the project snapshot. */
 export async function refreshHost() {
   if (await loadHost()) await reloadProject();
-  else if (useStore.getState().project) await loadSnapshot();
+  else if (scope() !== null) await loadSnapshot();
 }
 
 // Refreshes can overlap: a host setting has no event sequence to order its snapshots.
@@ -288,7 +306,7 @@ let appliedSnapshot = 0;
 
 async function loadSnapshot() {
   const { project } = useStore.getState();
-  if (project === null) return;
+  if (scope() === null) return;
   const request = ++snapshotRequest;
   const snapshot = await call<Snapshot>('snapshot');
   if (request < appliedSnapshot || !showing(project)) return;
@@ -372,8 +390,8 @@ export function selectTask(taskId: string | null) {
 // ---- search (frontend.md §4.1 "搜索") ----
 
 export function openSearch() {
-  // 「全部」 has no thread to search.
-  if (useStore.getState().project === null) return;
+  // 「全部」 without Angela has no thread to search.
+  if (scope() === null) return;
   const search = useStore.getState().search;
   useStore.setState({ search: search ? { ...search, focus: search.focus + 1 } : { query: '', matches: [], more: false, current: -1, jump: 0, focus: 1 } });
   // A task panel would cover the matches.
@@ -459,8 +477,8 @@ const refreshDetail = debounced(async () => {
 
 function onPush(push: Push) {
   if (push.type === 'events') refreshCounts();
-  // Beyond the counts, the window shows only its own project.
-  if ('project' in push && push.project !== useStore.getState().project) return;
+  // Beyond the counts, the window shows only its own project, or Angela on 「全部」.
+  if ('project' in push && push.project !== scope()) return;
   switch (push.type) {
     case 'events': {
       refreshSnapshot();

@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import type { ConnectionEvents } from './api/connection';
-import type { HostSnapshot, Snapshot } from './api/types';
+import type { AngelaStatus, Attention, HostSnapshot, Snapshot } from './api/types';
 
 interface Pending {
   method: string;
@@ -25,7 +25,7 @@ vi.mock('./api/connection', async (original) => ({
   },
 }));
 
-import { chooseProject, connect, selectProject, totalAttention, useStore } from './store';
+import { ANGELA, chooseProject, connect, scope, selectProject, totalAttention, useStore } from './store';
 
 afterEach(() => {
   // A debounced refresh still waiting would swallow the next test's.
@@ -44,7 +44,10 @@ const project = (id: string, extra: Partial<HostSnapshot['projects'][number]> = 
   id, name: id, data_dir: `/data/${id}`, repo_path: `/repo/${id}`, state: 'running', registered_at: 1, error: null, attention: [], busy: false, ...extra,
 });
 
-const host = (...ids: string[]): HostSnapshot => ({ projects: ids.map((id) => project(id)), attention: [], harnesses: [] });
+/** Angela as the host shows her: open, or not with the reason. */
+const angela = (error: string | null = null, attention: Attention[] = []): AngelaStatus => ({ error, attention, busy: false });
+
+const host = (...ids: string[]): HostSnapshot => ({ projects: ids.map((id) => project(id)), attention: [], harnesses: [], angela: angela() });
 
 /** Answers the oldest request of this method. */
 async function answer(method: string, value: unknown) {
@@ -139,7 +142,7 @@ test('pushes about another project do not change the window', async () => {
 test('the window keeps its project while it stays open; at start it shows the only open one', () => {
   const failed = project('p1', { error: '数据目录不存在' });
   const archived = project('p2', { state: 'archived' });
-  const others = { projects: [failed, archived, project('p3')], attention: [], harnesses: [] };
+  const others = { projects: [failed, archived, project('p3')], attention: [], harnesses: [], angela: angela() };
   expect(chooseProject(host('p1', 'p2'), 'p2', false)).toBe('p2');
   // A project that closes leaves the window on 「全部」.
   expect(chooseProject(others, 'p1', false)).toBe(null);
@@ -147,17 +150,47 @@ test('the window keeps its project while it stays open; at start it shows the on
   // At start: the only open project, else 「全部」.
   expect(chooseProject(others, null, true)).toBe('p3');
   expect(chooseProject(host('p1', 'p2'), null, true)).toBe(null);
-  expect(chooseProject({ projects: [failed, archived], attention: [], harnesses: [] }, null, true)).toBe(null);
+  expect(chooseProject({ projects: [failed, archived], attention: [], harnesses: [], angela: angela() }, null, true)).toBe(null);
 });
 
-test('the total counts each project’s items and the host’s quota domains once', () => {
+test('the total counts each project’s items, Angela’s, and the host’s quota domains once', () => {
   const accept = { kind: 'accept', task_id: 't', title: 'T', verification_id: 'v' } as const;
   const quota = { kind: 'quota', domain: { harness: 'claude', account: '', blocked_at: 1, resets_at: null, message: null } } as const;
+  const held: Attention = { kind: 'unknown_turn', role: 'Angela', turn_id: 'turn1' };
   const counted: HostSnapshot = {
     projects: [project('p1', { attention: [accept] }), project('p2', { attention: [accept, accept] })],
     attention: [quota],
     harnesses: [],
+    angela: angela(null, [held]),
   };
-  expect(totalAttention(counted)).toBe(4);
+  expect(totalAttention(counted)).toBe(5);
   expect(totalAttention(null)).toBe(0);
+});
+
+// 「全部」 is the conversation with Angela (frontend.md §2): its requests name her. Without her it is
+// the list of what waits, which needs no snapshot.
+test('on 「全部」 requests name Angela while she is open', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  probe.events!.opened();
+  await answer('host', host('p1', 'p2'));
+  expect(useStore.getState().project).toBe(null);
+  expect(scope()).toBe(ANGELA);
+  expect(pending('snapshot')[0].params).toEqual({ project: ANGELA });
+  await answer('snapshot', snapshot('full'));
+
+  // Her pushes are the window's; a project's are not.
+  probe.events!.push({ type: 'live', project: 'p1', live: { t: { role: 'Malkuth', started_at: 1, items: {} } } });
+  expect(useStore.getState().live).toEqual({});
+  probe.events!.push({ type: 'live', project: ANGELA, live: { t: { role: 'Angela', started_at: 1, items: {} } } });
+  expect(Object.keys(useStore.getState().live)).toEqual(['t']);
+});
+
+test('on 「全部」 without Angela nothing names her', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  probe.events!.opened();
+  await answer('host', { ...host('p1', 'p2'), angela: angela('数据库是更新版本的 Lobotomy 写的') });
+  expect(scope()).toBe(null);
+  expect(pending('snapshot')).toHaveLength(0);
 });
