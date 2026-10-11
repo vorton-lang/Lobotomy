@@ -89,7 +89,9 @@ async function openMocked(page: Page, state: State) {
 // Reading back in the thread, the user stays where they are. A button says when something new
 // came and goes back to the end (#18). The report the last message repeats starts folded.
 test('back to the latest after reading back', async ({ page }) => {
-  const items = Array.from({ length: 60 }, (_, i) => message(i + 1, 't1', `第 ${i + 1} 条`));
+  const items = Array.from({ length: 60 }, (_, i) =>
+    message(i + 1, 't1', `第 ${i + 1} 条` + (i < 50 && i % 3 === 0 ? '\n\n较长的段落。'.repeat(12) : '')),
+  );
   const backend = await openMocked(page, {
     snapshot: { roles: [role(null)], tasks: [], attention: [] },
     items,
@@ -100,14 +102,22 @@ test('back to the latest after reading back', async ({ page }) => {
   await expect(page.locator('.thread .message.other').last()).toContainText('第 60 条');
   await expect(latest).toBeHidden();
 
-  // Scroll up with the wheel, as the user does. Just after rows render, the list still goes to the
-  // end each time a row's height changes (virtua's scrollToIndex, for about 150 ms). A scroll made
-  // then is undone, so scroll again until the list stays where it was scrolled to.
-  await page.locator('.thread').hover();
-  await expect(async () => {
-    await page.mouse.wheel(0, -100_000);
-    await expect(latest).toHaveText('回到最新 ↓', { timeout: 1_000 });
-  }).toPass();
+  // A single wheel gesture must leave the end, including while the jump to the last row is
+  // still measuring differently sized messages. Repeated wheels would hide a lost gesture.
+  const thread = page.locator('.thread');
+  await thread.hover();
+  await page.mouse.wheel(0, -100_000);
+  await expect(latest).toHaveText('回到最新 ↓');
+
+  const area = await thread.boundingBox();
+  await latest.click();
+  await page.mouse.move(area!.x + area!.width / 2, area!.y + area!.height / 2);
+  await page.mouse.wheel(0, -1500);
+  // Cross the row-measurement/render boundary before checking that the jump stayed cancelled.
+  await page.evaluate(() => new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  ));
+  await expect(latest).toHaveText('回到最新 ↓');
 
   // A turn of a new task reports done, then says the same again.
   items.push(
