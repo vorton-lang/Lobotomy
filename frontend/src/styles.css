@@ -298,6 +298,15 @@ button.project-item:hover:not(:disabled) {
   font-size: 13px;
   margin: 18px 0 8px;
 }
+/* Beside Angela's conversation (M4), the list is the right column. */
+.sidebar .overview {
+  padding: 0;
+  overflow: visible;
+}
+.sidebar .overview h2 {
+  font-size: 13px;
+  margin: 14px 0 8px;
+}
 .conversation {
   flex: 1;
   display: flex;
@@ -734,14 +743,20 @@ button.project-item:hover:not(:disabled) {
   justify-content: center;
   z-index: 20;
 }
+/* A dialog's lower right corner drags it larger or smaller. */
 .modal {
   width: min(560px, 92vw);
-  max-height: 88vh;
+  max-width: 96vw;
+  min-width: 320px;
+  max-height: 92vh;
+  min-height: 140px;
   display: flex;
   flex-direction: column;
   background: var(--panel);
   border-radius: 10px;
   border: 1px solid var(--line);
+  resize: both;
+  overflow: hidden;
 }
 .modal.wide {
   width: min(960px, 94vw);
@@ -765,33 +780,6 @@ button.project-item:hover:not(:disabled) {
   font-size: 13px;
   margin: 16px 0 4px;
 }
-.modal-body h2.settings-group {
-  font-size: 14px;
-  margin: 24px 0 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-.choices {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  margin: 8px 0;
-  padding: 4px 10px;
-}
-.choices legend {
-  padding: 0 4px;
-  font-weight: 600;
-}
-label.choice {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  margin: 6px 0;
-  color: var(--text);
-}
-label.choice input {
-  width: auto;
-  margin: 3px 0 0;
-}
 .check-row {
   display: flex;
   gap: 6px;
@@ -801,6 +789,192 @@ label.choice input {
 .check-row input[type='number'] {
   width: 90px;
 }
+/* The settings (components/Settings.tsx, frontend.md §7.8): their own navigation on the left,
+   one setting per row on the right. */
+.settings-page {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.settings-nav {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  overflow-y: auto;
+  padding: 8px 8px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav h3 {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 14px 8px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-back {
+  align-self: flex-start;
+  margin: 2px 0 4px;
+}
+.settings-item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 6px 10px;
+}
+.settings-item.selected {
+  background: var(--sunken);
+  font-weight: 600;
+}
+.settings-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 40px 0;
+}
+.settings-content > * {
+  max-width: 760px;
+}
+.settings-header h2 {
+  font-size: 20px;
+  margin: 0;
+}
+.settings-header p {
+  margin: 4px 0 12px;
+}
+.settings-section {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 28px 0 0;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.setting-text {
+  flex: 1;
+  min-width: 0;
+}
+.setting-label {
+  font-weight: 600;
+}
+.setting-description {
+  font-size: 12.5px;
+  margin-top: 2px;
+}
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.setting-control input[type='number'] {
+  width: 90px;
+}
+/* Choices that apply at once: radio buttons drawn as one bar. */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.segmented label {
+  margin: 0;
+  padding: 4px 12px;
+  color: var(--text);
+  cursor: pointer;
+  position: relative;
+}
+.segmented label + label {
+  border-left: 1px solid var(--line);
+}
+.segmented label.selected {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.segmented input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.segmented label:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+.danger-zone {
+  margin: 36px 0 24px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius);
+  padding: 0 16px;
+}
+.danger-zone .setting-row {
+  border-bottom: none;
+}
+button.danger {
+  color: var(--error);
+  border-color: var(--error);
+}
+/* The form's save bar stays in view at the bottom of the page. */
+.settings-save {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+  padding: 12px 0 16px;
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+.settings-save .spacer {
+  flex: 1;
+}
+
+/* A column's edge that drags it wider or narrower (components/Sash.tsx). */
+.sash {
+  flex: none;
+  width: 7px;
+  margin: 0 -3px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 4;
+  touch-action: none;
+}
+.sash:hover,
+.sash:focus-visible,
+.sash:active {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  outline: none;
+}
+.task-panel > .sash {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  margin: 0;
+}
+@media (max-width: 760px) {
+  .projects + .sash {
+    display: none;
+  }
+}
+
 .viewer {
   height: 70vh;
   border: 1px solid var(--line);

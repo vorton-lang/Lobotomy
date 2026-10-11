@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::host::Host;
+use crate::instance::Instance;
 use crate::project::Project;
 use crate::projects::Projects;
 use crate::results;
@@ -33,13 +34,13 @@ pub struct CommandParams {
     pub project: Option<String>,
 }
 
-async fn user<C>(project: &Arc<Project>, args: Value) -> anyhow::Result<Value>
+async fn user<C>(instance: &Instance, args: Value) -> anyhow::Result<Value>
 where
     C: Command + serde::de::DeserializeOwned + Send + 'static,
     C::Output: Send + 'static,
 {
     let cmd: C = serde_json::from_value(args).with_context(|| format!("arguments of {}", C::NAME))?;
-    let out = db(project, move |db: &Db| db.execute(&Caller::User, &cmd)).await?;
+    let out = db(instance, move |db: &Db| db.execute(&Caller::User, &cmd)).await?;
     Ok(serde_json::to_value(out)?)
 }
 
@@ -160,16 +161,36 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: Comma
             project.trials.stop(&trial_id).await?;
             Ok(Value::Null)
         }
+        "retry_failed" => Ok(json!({ "retried": results::retry_failed(project) })),
+        _ => turn_actions(project, &name, args).await,
+    }
+}
+
+/// Runs a command about Angela (data-model.md §10.6): her messages and turns. She has no tasks,
+/// slot or results.
+pub async fn run_angela(angela: &Instance, CommandParams { name, args, .. }: CommandParams) -> anyhow::Result<Value> {
+    macro_rules! user_commands {
+        ($($ty:ty),* $(,)?) => {
+            $(if name == <$ty as Command>::NAME { return user::<$ty>(angela, args).await; })*
+        };
+    }
+    user_commands!(SendMessage, Continue, NewNativeSession, SetRoleHarness);
+    turn_actions(angela, &name, args).await
+}
+
+/// The runtime actions on a turn that the user may trigger, in any instance.
+async fn turn_actions(instance: &Instance, name: &str, args: Value) -> anyhow::Result<Value> {
+    match name {
         "interrupt" => {
             let TurnParams { turn_id } = serde_json::from_value(args)?;
-            crate::runner::interrupt(project, &turn_id).await?;
+            crate::runner::interrupt(instance, &turn_id).await?;
             Ok(Value::Null)
         }
         // "终止残留进程" (data-model.md §3.3): only the CLI of an unknown turn that still runs.
         "terminate" => {
             let TurnParams { turn_id } = serde_json::from_value(args)?;
             let id = turn_id.clone();
-            let turn = db(project, move |db| db.read(|c| load_turn(c, &id))).await?;
+            let turn = db(instance, move |db| db.read(|c| load_turn(c, &id))).await?;
             let (TurnState::Unknown, Some(pid), Some(start)) = (turn.state, turn.pid, turn.process_start) else {
                 return Err(Error::rejected(
                     "not_unknown_turn",
@@ -179,7 +200,6 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: Comma
             };
             Ok(json!({ "terminated": lobotomy_harness::process::terminate(pid as u32, start)? }))
         }
-        "retry_failed" => Ok(json!({ "retried": results::retry_failed(project) })),
         other => Err(Error::rejected("bad_request", format!("unknown command {other}")).into()),
     }
 }

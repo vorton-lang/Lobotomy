@@ -1,6 +1,9 @@
-// The window (frontend.md §2 "M3 的布局"): the project list on the left. 「全部」 lists what waits for
-// the user in every project. A project shows as in M1: the executor's thread in the main area, what
-// waits for the user and the Workboard on the right, a task's detail in a panel over the thread.
+// The window (frontend.md §2 "M3 的布局"): the project list on the left. 「全部」 is the conversation
+// with Angela, with what waits for the user in every project on the right; without Angela, that
+// list fills it. A project shows as in M1: the executor's thread in the main area, what waits for
+// the user and the Workboard on the right, a task's detail in a panel over the thread. The side
+// columns and the task panel can be dragged wider or narrower. The settings are a page of their
+// own, in place of all this while open (§7.8).
 
 import { useEffect, useState } from 'react';
 import { backendUrl, inElectron } from './bridge';
@@ -8,12 +11,14 @@ import { Composer } from './components/Composer';
 import { Onboarding } from './components/Onboarding';
 import { Overview } from './components/Overview';
 import { ProjectList } from './components/ProjectList';
+import { Sash, useWidth } from './components/Sash';
 import { SearchBar } from './components/SearchBar';
+import { Settings } from './components/Settings';
 import { Sidebar } from './components/Sidebar';
 import { TaskPanel } from './components/TaskPanel';
 import { Thread } from './components/Thread';
 import { TopBar } from './components/TopBar';
-import { connect, openSearch, totalAttention, useStore } from './store';
+import { angelaOpen, connect, openSearch, totalAttention, useStore } from './store';
 
 export function App() {
   const [url, setUrl] = useState<string | null | undefined>(undefined);
@@ -26,11 +31,16 @@ export function App() {
   const empty = useStore((s) => s.host !== null && s.host.projects.every((p) => p.state === 'onboarding'));
   const project = useStore((s) => s.project);
   const opened = useStore((s) => s.snapshot?.project != null);
+  const angela = useStore((s) => angelaOpen(s.host));
+  const angelaLoaded = useStore((s) => s.snapshot !== null);
   const selectedTask = useStore((s) => s.selectedTask);
   const toasts = useStore((s) => s.toasts);
   const searching = useStore((s) => s.search !== null);
+  const settings = useStore((s) => s.settings !== null);
   // The title and the tray count every project's items (data-model.md §10.5).
   const attention = useStore((s) => totalAttention(s.host));
+  const projectsColumn = useWidth('projects', 200, 150, 420);
+  const rightColumn = useWidth('sidebar', 340, 260, 640);
 
   const find = () => {
     setFailed(null);
@@ -81,26 +91,46 @@ export function App() {
   return (
     <div className="app">
       <TopBar />
-      <div className="body">
-        <ProjectList />
-        <main className="main">
-          {project === null ? (
-            <Overview />
-          ) : !opened ? (
-            <div className="splash">正在打开项目…</div>
-          ) : (
-            <>
-              <section className="conversation">
-                <Thread />
-                <Composer />
-                {searching && <SearchBar />}
-                {selectedTask && <TaskPanel taskId={selectedTask} />}
-              </section>
-              <Sidebar />
-            </>
-          )}
-        </main>
-      </div>
+      {settings ? (
+        <Settings />
+      ) : (
+        <div className="body">
+          <ProjectList width={projectsColumn.width} />
+          <Sash label="项目列表的宽度" edge="right" column={projectsColumn} />
+          <main className="main">
+            {project === null && !angela ? (
+              <Overview />
+            ) : project === null && !angelaLoaded ? (
+              <div className="splash">正在打开 Angela…</div>
+            ) : project === null ? (
+              <>
+                <section className="conversation" aria-label="Angela">
+                  <Thread />
+                  <Composer />
+                  {searching && <SearchBar />}
+                </section>
+                <Sash label="右侧栏的宽度" edge="left" column={rightColumn} />
+                <aside className="sidebar" style={{ width: rightColumn.width }}>
+                  <Overview />
+                </aside>
+              </>
+            ) : !opened ? (
+              <div className="splash">正在打开项目…</div>
+            ) : (
+              <>
+                <section className="conversation">
+                  <Thread />
+                  <Composer />
+                  {searching && <SearchBar />}
+                  {selectedTask && <TaskPanel taskId={selectedTask} />}
+                </section>
+                <Sash label="右侧栏的宽度" edge="left" column={rightColumn} />
+                <Sidebar width={rightColumn.width} />
+              </>
+            )}
+          </main>
+        </div>
+      )}
       <div className="toasts">
         {toasts.map((t) => (
           <div key={t.id} className="toast">

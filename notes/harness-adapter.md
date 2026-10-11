@@ -254,7 +254,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 **实现**（2026-10-04）：
 
-- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{project}/{token}`（M3 起）：路由先按项目 ID 找到打开的项目实例，没有时返回 404；再把项目实例和 token 放进 HTTP 请求的扩展中。工具处理函数从请求上下文读取它们，在这个项目中按 token 找到 turn（data-model.md §10.3）。
+- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{project}/{token}`（M3 起）：路由先按项目 ID 找到打开的项目实例，没有时返回 404；再把项目实例和 token 放进 HTTP 请求的扩展中。工具处理函数从请求上下文读取它们，在这个项目中按 token 找到 turn（data-model.md §10.3）。Angela 的地址是 `/mcp/angela/{token}`，不带项目 ID；token 在她自己的数据库中找到她的 turn，工具参数带项目 ID（M4，data-model.md §10.6）。项目 ID 是带前缀的 ULID，不会是 `angela`。
 - 服务不保存 MCP 会话（rmcp 的 stateless 模式），工具调用以单个 JSON 响应返回，不用 SSE 流，不提供 GET 流（返回 405）。调用者已由 URL 中的 token 识别，会话没有额外作用。
 - `Host` 只接受 loopback 名称，防止 DNS 重绑定。
 - 两家 CLI 协商的协议版本不同（§1.4）：Claude 已使用 2026-07-28 的无状态协议，Codex 仍使用 2025-06-18 的 `initialize` 握手。stateless 模式对两者逐个请求应答，两者都能工作。
@@ -275,12 +275,12 @@ cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-thre
 
 | Role | 执行现场 |
 |---|---|
-| Angela（manager） | 不占槽位；工作目录与读取项目代码的方式在 M4 设计（data-model.md §10.6） |
+| Angela（manager） | 不占槽位；工作目录是 host 目录下的一个空目录，按绝对路径读各项目的主仓库（data-model.md §10.6） |
 | Binah（tech_lead） | 槽位 `tl` |
 | Malkuth（worker） | 槽位 `worker` |
 | Yesod（reviewer） | 在固定的候选成果上单独物化的审查现场；现场中的改动不影响成果 |
 
-角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。Angela 原来每个项目一个，执行现场是用户的主仓库（只读），与用户看到同一份代码。她改为全局一个之后（data-model.md §10.6），这一条待 M4 重新设计。
+角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。Angela 原来每个项目一个，执行现场是用户的主仓库（只读），与用户看到同一份代码。她改为全局一个之后，工作目录是 host 目录下的一个空目录。她仍读主仓库，与用户看到同一份代码；指令写明主仓库是展示用的预览目录，不修改（data-model.md §10.6，用户确认，2026-10-11）。
 
 - **执行现场不是事实来源。** 工作目录只是 CLI 的执行环境，不能反过来推断业务事实；业务事实以 SQLite 为准（#6 §1）。
 - **只有 Lobotomy 创建执行现场。** 不使用 `claude -w`、`codex --worktree`，`EnterWorktree` 已在 1.6 中禁用。

@@ -33,7 +33,7 @@ impl Running {
     pub async fn start(project: Arc<Project>) -> anyhow::Result<Self> {
         scheduler::recover(&project).await?;
         let watching = CancellationToken::new();
-        let watcher = tokio::spawn(gui::watch(project.clone(), watching.clone()));
+        let watcher = tokio::spawn(gui::watch(project.instance.clone(), watching.clone()));
         let scheduling = CancellationToken::new();
         let scheduler = tokio::spawn(scheduler::run(project.clone(), scheduling.clone()));
         Ok(Self { project, scheduling, scheduler, watching, watcher })
@@ -50,15 +50,7 @@ impl Running {
         self.scheduling.cancel();
         let _ = self.scheduler.await;
         self.project.stop_checks();
-        let running: Vec<String> = self.project.running.lock().unwrap().keys().cloned().collect();
-        for turn_id in running {
-            if let Err(e) = runner::interrupt(&self.project, &turn_id).await {
-                tracing::warn!(project = self.project.id, turn_id, error = format!("{e:#}"), "could not interrupt");
-            }
-        }
-        while !self.project.running.lock().unwrap().is_empty() && Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
+        runner::interrupt_all(&self.project, deadline).await;
         self.watching.cancel();
         // Cancellation only asks the watcher to stop; join it before releasing its project.
         let _ = self.watcher.await;
@@ -206,13 +198,14 @@ impl Projects {
         self.host.changed();
         let running = self.runtimes.lock().unwrap().remove(id);
         if let Some(running) = running {
-            let project = Arc::downgrade(&running.close(grace).await?);
+            // The instance holds the data directory's lock.
+            let instance = Arc::downgrade(&running.close(grace).await?.instance);
             self.open.lock().unwrap().remove(id);
             let deadline = Instant::now() + RELEASE_WAIT;
-            while project.strong_count() > 0 && Instant::now() < deadline {
+            while instance.strong_count() > 0 && Instant::now() < deadline {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            if project.strong_count() > 0 {
+            if instance.strong_count() > 0 {
                 tracing::warn!(
                     project = id,
                     "the archived project is still in use; its lock is released when that ends"

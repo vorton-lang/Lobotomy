@@ -1,6 +1,7 @@
 // A task's detail over the thread: what the user asked, the criteria, the latest verification,
 // the candidate's changes, and the actions of its phase (data-model.md §9.2). It is a region of
-// the window, not a dialog: the thread and the sidebar stay usable while it is open.
+// the window, not a dialog: the thread and the sidebar stay usable while it is open. Its left edge
+// drags it wider or narrower; it never gets wider than the thread.
 
 import { useState } from 'react';
 import type { CheckRun, TaskDetail } from '../api/types';
@@ -8,9 +9,11 @@ import { checkPassed, checkSummary, clock, deliveryReport, PHASE_LABEL, shortSha
 import { run, selectTask, useStore } from '../store';
 import { Markdown, Modal, Output } from './common';
 import { DiffPool, DiffView } from './DiffView';
+import { Sash, useWidth } from './Sash';
 import { TrialControls } from './TrialControls';
 
 export function TaskPanel({ taskId }: { taskId: string }) {
+  const column = useWidth('task-panel', 820, 360, 2400);
   const detail = useStore((s) => s.taskDetail);
   const task = useStore((s) => s.snapshot?.tasks.find((t) => t.id === taskId));
   const integration = useStore((s) => s.snapshot?.project?.integration);
@@ -52,7 +55,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     });
 
   return (
-    <section className="task-panel" aria-label={task.title}>
+    <section className="task-panel" aria-label={task.title} style={{ width: `min(${column.width}px, 100%)` }}>
+      <Sash label="任务面板的宽度" edge="left" column={column} />
       <header>
         <span className={`badge phase ${task.phase}`}>{PHASE_LABEL[task.phase]}</span>
         <h2>{task.title}</h2>

@@ -2,9 +2,11 @@
 //!
 //! rmcp types stay inside this module (architecture.md §3). Each turn gets its own URL,
 //! `/mcp/{project}/{token}`, so the URL identifies the caller (data-model.md §3.1, §10.3) and the
-//! service keeps no MCP sessions. Stateless serving also covers clients that still use the
-//! `initialize` handshake of the protocol versions before 2026-07-28: rmcp answers each of their
-//! requests on its own.
+//! service keeps no MCP sessions. Angela's turns use `/mcp/angela/{token}` (`angela`). Stateless
+//! serving also covers clients that still use the `initialize` handshake of the protocol versions
+//! before 2026-07-28: rmcp answers each of their requests on its own.
+
+pub mod angela;
 
 use std::sync::Arc;
 
@@ -53,11 +55,7 @@ where
     S: ServerHandler + Send + 'static,
     P: Clone + Send + Sync + 'static,
 {
-    let service = StreamableHttpService::new(
-        move || Ok(make_handler()),
-        Arc::new(NeverSessionManager::default()),
-        config(shutdown),
-    );
+    let service = service(make_handler, shutdown);
     Router::new().route(
         "/mcp/{project}/{token}",
         any(move |Path((project, token)): Path<(String, String)>, mut request: Request| {
@@ -72,6 +70,14 @@ where
             }
         }),
     )
+}
+
+/// Serves the tools `make_handler` makes, keeping no MCP sessions.
+fn service<S: ServerHandler + Send + 'static>(
+    make_handler: impl Fn() -> S + Send + Sync + 'static,
+    shutdown: CancellationToken,
+) -> StreamableHttpService<S, NeverSessionManager> {
+    StreamableHttpService::new(move || Ok(make_handler()), Arc::new(NeverSessionManager::default()), config(shutdown))
 }
 
 fn config(shutdown: CancellationToken) -> StreamableHttpServerConfig {

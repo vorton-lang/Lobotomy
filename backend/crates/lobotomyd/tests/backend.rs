@@ -18,8 +18,10 @@ use lobotomy_core::turn::{
 use lobotomy_core::verify::{Accept, RetryPreview, VerificationState, latest_verification, preview_stopped};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::host::Host;
+use lobotomyd::instance::Instance;
 use lobotomyd::project::Project;
 use lobotomyd::results::{failures, retry_failed};
+use serde_json::Value;
 
 /// The M1 chain: the user creates a task, Malkuth works in its slot and reports done, the runtime
 /// captures and verifies the candidate, the user accepts it, and the user's repository is
@@ -1173,4 +1175,97 @@ async fn a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown() {
     std::fs::create_dir_all(&leftover).unwrap();
     lobotomyd::results::sweep(&project).await.unwrap();
     assert!(!project.trials_dir().join("trial_left").exists(), "startup deletes leftover copies");
+}
+
+// ---- Angela (roadmap.md M4 step 1), on the fake Claude ----
+
+/// The user's message to Angela, as the window sends it.
+fn tell_angela(angela: &Instance, body: &str) {
+    let message =
+        SendMessage { request_id: format!("a-{body}"), role: "Angela".into(), task_id: None, body: body.into() };
+    angela.db.execute(&Caller::User, &message).unwrap();
+    angela.wake.notify_one();
+}
+
+/// The replies of the Lobotomy tools Angela called in a turn, in order, as JSON.
+fn tool_replies(db: &Db, turn: &str) -> Vec<Value> {
+    db.read(|c| {
+        let mut stmt =
+            c.prepare("SELECT content, command_id FROM item WHERE turn_id = ?1 AND kind = 'mcp_call' ORDER BY seq")?;
+        let rows = stmt.query_map([turn], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+    .unwrap()
+    .into_iter()
+    .map(|(content, command)| {
+        assert_eq!(command, None, "a read is no command of hers");
+        let content: Value = serde_json::from_str(&content).unwrap();
+        serde_json::from_str(content["result_text"].as_str().unwrap()).unwrap()
+    })
+    .collect()
+}
+
+/// Angela reads every project through her tools (data-model.md §10.6 "读取带边界"): each read
+/// says up to which event it is, an archived project is named as unavailable with the reason
+/// rather than left out, and a task's candidate and verification say whether they still hold.
+#[tokio::test]
+async fn angela_reads_every_project_with_the_bounds_of_each_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().expect("Angela opened");
+    let project = backend.project.clone();
+    let task = create_task(&project.db, "FAKE:done");
+    phase(&project.db, &task, Phase::Accepting).await;
+    let projects = backend.backend.projects.clone();
+    let archived = projects.create(&user_repo(&dir.path().join("b"))).await.unwrap().id;
+    projects.archive(&archived).await.unwrap();
+
+    let calls = [
+        "FAKE:call=list_projects".to_owned(),
+        format!(r#"FAKE:call=read_project{{"project_id":"{}"}}"#, project.id),
+        format!(r#"FAKE:call=read_task{{"project_id":"{}","task_id":"{task}"}}"#, project.id),
+        format!(r#"FAKE:call=read_events{{"project_id":"{}","limit":3}}"#, project.id),
+        format!(r#"FAKE:call=read_project{{"project_id":"{archived}"}}"#),
+    ];
+    tell_angela(&angela, &calls.join("\n"));
+    let turn = wait_for("Angela's turn to end", || {
+        angela.db.read(|c| lobotomy_core::turn::last_turn(c, "Angela")).unwrap().filter(|t| t.state == TurnState::Ended)
+    })
+    .await;
+    assert_eq!((turn.outcome, turn.workspace_id.as_deref()), (Some(Outcome::Completed), None));
+    let args = last_args(&host_dir(dir.path()).join("angela").join("work"));
+    assert!(after(&args, "--append-system-prompt").contains("你是 Angela"), "she runs in her own directory");
+
+    let replies = tool_replies(&angela.db, &turn.id);
+    let [list, read, task_read, events, gone] = replies.as_slice() else { panic!("five replies: {replies:#?}") };
+    let as_of = project.db.read(lobotomy_core::view::last_event).unwrap();
+    let entries = list["projects"].as_array().unwrap();
+    let open = entries.iter().find(|p| p["id"] == project.id.as_str()).unwrap();
+    assert_eq!((open["as_of"].as_i64(), open["open_tasks"].as_i64()), (Some(as_of), Some(1)));
+    let closed = entries.iter().find(|p| p["id"] == archived.as_str()).unwrap();
+    assert_eq!((closed["unavailable"].as_str(), &closed["as_of"]), (Some("已归档"), &Value::Null));
+
+    assert_eq!(read["read"]["as_of"].as_i64(), Some(as_of));
+    assert_eq!(read["read"]["tasks"][0]["id"], task.as_str());
+    assert_eq!(read["read"]["waiting"][0]["kind"], "accept");
+
+    let task_read = &task_read["read"];
+    assert_eq!(
+        (task_read["body"].as_str(), task_read["criteria"].as_str()),
+        (Some("FAKE:done"), Some("work.txt 存在"))
+    );
+    let candidate = &task_read["attempts"][0]["candidate"];
+    assert_eq!(candidate["superseded"], false);
+    assert_eq!(
+        (&candidate["verifications"][0]["state"], &candidate["verifications"][0]["stale"]),
+        (&"passed".into(), &false.into())
+    );
+    assert_eq!(task_read["reports"][0]["status"], "done");
+
+    // Events name their commands in the project; storing her call keeps the reply whole.
+    let events = events["read"]["events"].as_array().unwrap();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0]["caller"], "user");
+    assert_eq!(gone["unavailable"], "已归档");
+    backend.shutdown(Duration::from_secs(5)).await;
 }

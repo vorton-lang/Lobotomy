@@ -1,8 +1,9 @@
 // The project list and 「全部」 against a mocked backend with two projects (frontend.md §2 "M3 的布局").
 // The backend's own rules (registration, failure, the one-unarchived-project rule) have Rust tests;
-// these check what the window makes of the host snapshot.
+// these check what the window makes of the host snapshot. 「全部」 is the conversation with Angela
+// (roadmap.md M4 step 1).
 import { expect, test, type Page } from '@playwright/test';
-import type { Attention, HostSnapshot, Push, Snapshot } from '../src/api/types';
+import type { AngelaStatus, Attention, HostSnapshot, Push, Snapshot } from '../src/api/types';
 import { detail, role, task } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
@@ -24,23 +25,31 @@ const snapshotOf = (id: string): Snapshot => ({
   attention: id === 'alpha' ? [accept] : [],
 });
 
+const angela: AngelaStatus = { error: null, attention: [], busy: false };
+
+/** Angela's snapshot has the shape of a project's, without a repository and tasks. */
+const angelaSnapshot: Snapshot = {
+  seq: 1, quota: [], harnesses: [], live: {}, config: null, project: null, tasks: [], attention: [],
+  roles: [{ ...role(null), name: 'Angela', kind: 'manager', harness: 'claude', slot: null }],
+};
+
 /** Opens the GUI on a backend with the projects `host` lists. */
 async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: string, args: Record<string, unknown>) => unknown) {
   const asked: { method: string; project?: string }[] = [];
   let push!: (push: Push) => void;
   await page.routeWebSocket(/\/gui\?token=ui-test$/, (route) => {
     push = (p) => route.send(JSON.stringify(p));
-    route.onMessage((raw) => {
+    route.onMessage(async (raw) => {
       const { id, method, params } = JSON.parse(String(raw)) as { id: number; method: string; params: Record<string, any> };
       asked.push({ method, project: params.project });
       let result: unknown = null;
       if (method === 'host') result = host;
-      else if (method === 'snapshot') result = snapshotOf(params.project);
+      else if (method === 'snapshot') result = params.project === 'angela' ? angelaSnapshot : snapshotOf(params.project);
       else if (method === 'thread') result = { items: [], has_more: false, turns: {}, messages: [], commands: {}, queued: [] };
       else if (method === 'task') result = detail(exported);
       else if (method === 'trials' || method === 'diff') result = [];
       else if (method === 'disk_usage') result = { raw_output: { files: 0, bytes: 0 } };
-      else if (method === 'command') result = onCommand?.(params.name, params.args) ?? null;
+      else if (method === 'command') result = await onCommand?.(params.name, params.args) ?? null;
       route.send(JSON.stringify({ id, result }));
     });
   });
@@ -52,7 +61,7 @@ async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: strin
 // With several projects the window starts on 「全部」: each project's items, the host's blocked quota
 // once under 「本机」, and the total in the title. 「前往」 shows the project and opens the task.
 test('「全部」 lists every project’s items and goes to one', async ({ page }) => {
-  const host: HostSnapshot = { projects: [entry('alpha', [accept]), entry('beta', [], true)], attention: [quota], harnesses: [] };
+  const host: HostSnapshot = { projects: [entry('alpha', [accept]), entry('beta', [], true)], attention: [quota], harnesses: [], angela };
   const backend = await openHost(page, host);
 
   const list = page.getByRole('navigation', { name: '项目' });
@@ -63,7 +72,8 @@ test('「全部」 lists every project’s items and goes to one', async ({ page
   await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」通过了验证，等你验收');
   await expect(overview.getByRole('region', { name: 'beta' })).toHaveCount(0);
   await expect(page).toHaveTitle('(2) Lobotomy');
-  expect(backend.asked.some((a) => a.method === 'snapshot')).toBe(false);
+  // No project's snapshot: 「全部」 holds Angela's.
+  expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['angela']);
 
   await overview.getByRole('region', { name: 'alpha' }).getByRole('button', { name: '前往' }).click();
   await expect(list.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-current', 'true');
@@ -74,12 +84,46 @@ test('「全部」 lists every project’s items and goes to one', async ({ page
   await list.getByRole('button', { name: /beta/ }).click();
   await expect(page.locator('.topbar')).toContainText('beta · main');
   await expect(page.getByRole('region', { name: '导出报表', exact: true })).toHaveCount(0);
-  expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['alpha', 'beta']);
+  expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['angela', 'alpha', 'beta']);
+});
+
+// 「全部」 is the conversation with Angela (frontend.md §2): the user's message goes to her, and
+// what waits in every project stays beside her.
+test('「全部」 is the conversation with Angela beside every project’s items', async ({ page }) => {
+  const sent: [string, Record<string, unknown>][] = [];
+  const host: HostSnapshot = { projects: [entry('alpha', [accept]), entry('beta')], attention: [], harnesses: [], angela };
+  const backend = await openHost(page, host, (name, args) => {
+    sent.push([name, args]);
+    return { id: 'msg1' };
+  });
+  const conversation = page.getByRole('region', { name: 'Angela', exact: true });
+  await conversation.getByLabel('消息').fill('现在怎么样');
+  await conversation.getByRole('button', { name: '发送' }).click();
+  await expect.poll(() => sent.map(([name, args]) => [name, args.role, args.task_id, args.body]))
+    .toEqual([['send_message', 'Angela', null, '现在怎么样']]);
+  expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['angela']);
+  const overview = page.getByRole('region', { name: '全部项目' });
+  await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」通过了验证，等你验收');
+});
+
+// The projects run without Angela (roles-and-tasks.md §1.4): when she cannot be opened, 「全部」
+// says why and lists what waits, as before her.
+test('without Angela 「全部」 says why and lists what waits', async ({ page }) => {
+  const host: HostSnapshot = {
+    projects: [entry('alpha', [accept]), entry('beta')], attention: [], harnesses: [],
+    angela: { error: '数据库是更新版本的 Lobotomy 写的', attention: [], busy: false },
+  };
+  const backend = await openHost(page, host);
+  const overview = page.getByRole('region', { name: '全部项目' });
+  await expect(overview).toContainText('Angela 没有打开：数据库是更新版本的 Lobotomy 写的');
+  await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('等你验收');
+  await expect(page.getByLabel('消息')).toHaveCount(0);
+  expect(backend.asked.some((a) => a.method === 'snapshot')).toBe(false);
 });
 
 // A new project is connected while the backend runs; the window then shows it.
 test('a new project connects from the list and opens', async ({ page }) => {
-  const host: HostSnapshot = { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [] };
+  const host: HostSnapshot = { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela };
   const created: Record<string, unknown>[] = [];
   await openHost(page, host, (name, args) => {
     if (name !== 'create_project') throw new Error(name);
@@ -103,7 +147,7 @@ test('a project that could not be opened says why; archived ones come back', asy
   const broken = { ...entry('broken'), error: '数据目录不存在：/data/broken' };
   const old = { ...entry('old'), state: 'archived' as const };
   const sent: [string, unknown][] = [];
-  await openHost(page, { projects: [entry('alpha'), broken, old], attention: [], harnesses: [] }, (name, args) => {
+  await openHost(page, { projects: [entry('alpha'), broken, old], attention: [], harnesses: [], angela }, (name, args) => {
     sent.push([name, args.project_id]);
   });
   const list = page.getByRole('navigation', { name: '项目' });
@@ -118,17 +162,125 @@ test('a project that could not be opened says why; archived ones come back', asy
   await expect.poll(() => sent).toEqual([['retry_open', 'broken'], ['archive_project', 'broken'], ['unarchive_project', 'old']]);
 });
 
-// Archiving the project shown stops it; the settings ask once more first.
-test('the settings archive the project after asking', async ({ page }) => {
-  const sent: [string, unknown][] = [];
-  await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [] }, (name, args) => {
-    sent.push([name, args.project_id]);
+
+// The settings are a page of their own (frontend.md §7.8): they open on the page they showed last,
+// wherever the window is, read the project of their page themselves, and leave the window where
+// it was.
+test('the settings are a page of their own, wherever the window is', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const backend = await openHost(page, {
+    projects: [entry('alpha'), entry('beta')], attention: [],
+    harnesses: [{ harness: 'codex', permission: 'auto_review' }], angela,
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '设置' });
-  await settings.getByRole('button', { name: '归档这个项目…' }).click();
+  const settings = page.getByRole('region', { name: '设置' });
+  await expect(settings.getByRole('heading', { name: '权限' })).toBeVisible();
+  await expect(settings.getByRole('radiogroup', { name: 'Codex 的权限' }).getByRole('radio', { name: '自动审批' })).toBeChecked();
+
+  const nav = settings.getByRole('navigation', { name: '设置分类' });
+  await nav.getByRole('button', { name: 'Angela' }).click();
+  await expect(settings.getByRole('radiogroup', { name: 'Angela 使用的 harness' })).toBeVisible();
+  await nav.locator('.settings-nav-group').filter({ hasText: 'beta' }).getByRole('button', { name: '常规' }).click();
+  await expect(settings.getByRole('radiogroup', { name: 'Malkuth 使用的 harness' })).toBeVisible();
+  expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['angela', 'angela', 'beta']);
+
+  await settings.getByRole('button', { name: '← 返回' }).click();
+  await expect(page.locator('.topbar')).toContainText('全部项目');
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
+  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  // From another project, the settings still show beta's page.
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(nav.locator('.settings-nav-group').filter({ hasText: 'beta' }).locator('[aria-current]')).toHaveText('常规');
+  await expect(settings.locator('.settings-header h2')).toHaveText('beta');
+  expect(errors).toEqual([]);
+});
+
+// A form saves explicitly the version it was filled from, to the project of its page.
+test('the project configuration is saved to the settings’ project', async ({ page }) => {
+  const sent: [string, Record<string, unknown>][] = [];
+  const backend = await openHost(page, { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela }, (name, args) => {
+    sent.push([name, args]);
+    return { version: 2 };
+  });
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('region', { name: '设置' });
+  await settings.locator('.settings-nav-group').filter({ hasText: 'beta' }).getByRole('button', { name: '验证与采集' }).click();
+  await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
+  await settings.getByLabel('检查命令').fill('npm test');
+  await expect(settings.locator('.settings-save')).toContainText('有未保存的修改');
+  await settings.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(settings.locator('.settings-save')).toContainText('第 2 版');
+  expect(sent.map(([name, args]) => [name, args.expected_version, (args.config as { checks: { command: string }[] }).checks.map((c) => c.command)]))
+    .toEqual([['edit_project_config', 1, ['npm test']]]);
+  expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['beta']);
+});
+
+// Archiving from the settings asks once more. A host push can announce the archive before the
+// command's reply: the page of the archived project goes, the settings stay usable on the host's
+// page, and the window goes to 「全部」. The reply is held until then, so the order is tested
+// without a timer.
+test('archiving from the settings asks first and leaves them usable', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const host: HostSnapshot = {
+    projects: [entry('alpha', [], true), entry('beta')], attention: [],
+    harnesses: [{ harness: 'codex', permission: 'auto_review' }], angela,
+  };
+  const sent: unknown[] = [];
+  let finish!: () => void;
+  const reply = new Promise<void>((resolve) => { finish = resolve; });
+  const backend = await openHost(page, host, async (name, args) => {
+    if (name !== 'archive_project') return null;
+    sent.push(args.project_id);
+    host.projects[0].state = 'archived';
+    backend.push({ type: 'host' });
+    await reply;
+    return null;
+  });
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
+  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('region', { name: '设置' });
+  await settings.locator('.settings-nav-group').filter({ hasText: 'alpha' }).getByRole('button', { name: '常规' }).click();
+  await settings.getByRole('button', { name: '归档…' }).click();
   expect(sent).toEqual([]);
   await settings.getByRole('button', { name: '归档「alpha」' }).click();
-  await expect(settings).toHaveCount(0);
-  expect(sent).toEqual([['archive_project', 'alpha']]);
+  try {
+    await expect(settings.getByRole('heading', { name: '权限' })).toBeVisible();
+    await expect(settings.locator('.settings-nav-group').filter({ hasText: 'alpha' })).toHaveCount(0);
+    await expect(page.locator('.topbar')).toContainText('全部项目');
+  } finally {
+    finish();
+  }
+  expect(sent).toEqual(['alpha']);
+  await settings.getByRole('button', { name: '← 返回' }).click();
+  await expect(page.getByRole('navigation', { name: '项目' })).toContainText('已归档 1');
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /beta/ }).click();
+  await expect(page.locator('.topbar')).toContainText('beta · main');
+  expect(errors).toEqual([]);
+});
+
+// The side columns and the task panel can be dragged wider or narrower; the width stays after a
+// reload (frontend.md §2). The arrow keys move the edge too.
+test('the right column is dragged wider and keeps its width', async ({ page }) => {
+  await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [], angela });
+  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  const sidebar = page.locator('.sidebar');
+  const sash = page.getByRole('separator', { name: '右侧栏的宽度' });
+  expect((await sidebar.boundingBox())!.width).toBeCloseTo(340, 0);
+  const box = (await sash.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 100, box.y + 200, { steps: 5 });
+  await page.mouse.up();
+  expect((await sidebar.boundingBox())!.width).toBeCloseTo(440, 0);
+  await sash.focus();
+  await page.keyboard.press('ArrowLeft');
+  expect((await sidebar.boundingBox())!.width).toBeCloseTo(456, 0);
+
+  await page.reload();
+  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  expect((await page.locator('.sidebar').boundingBox())!.width).toBeCloseTo(456, 0);
 });

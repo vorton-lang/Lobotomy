@@ -20,6 +20,7 @@ use lobotomy_core::workspace::{AlignIdleSlot, materializing};
 use lobotomy_harness::process;
 use tokio_util::sync::CancellationToken;
 
+use crate::instance::Instance;
 use crate::project::Project;
 use crate::results::{self, spawn_job};
 use crate::runner::{db, launch, runtime};
@@ -79,13 +80,17 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
             ignore_rejection(runtime(project, AlignIdleSlot { role: role.name.clone() }).await)?;
         }
         if let Some(turn) = ignore_rejection(runtime(project, RegisterTurn { role: role.name.clone() }).await)? {
-            launch(project, turn.turn_id);
+            launch(&project.instance, turn.turn_id);
         }
     }
-    // Turns registered by a user command, such as continue, still need a runner.
-    for turn in db(project, |db| db.read(|c| turns_in_state(c, TurnState::Registered))).await? {
-        if !project.host.is_blocked(&turn.harness)? {
-            launch(project, turn.id);
+    launch_registered(&project.instance).await
+}
+
+/// Turns registered by a user command, such as continue, still need a runner.
+pub(crate) async fn launch_registered(instance: &Arc<Instance>) -> anyhow::Result<()> {
+    for turn in db(instance, |db| db.read(|c| turns_in_state(c, TurnState::Registered))).await? {
+        if !instance.host.is_blocked(&turn.harness)? {
+            launch(instance, turn.id);
         }
     }
     Ok(())
@@ -133,15 +138,15 @@ async fn store_work(project: &Arc<Project>) -> anyhow::Result<()> {
 
 /// Ends unknown turns whose CLI has exited (data-model.md §3.3). A CLI that still runs keeps its
 /// turn unknown; the runtime never kills it on its own.
-async fn reconcile(project: &Arc<Project>) -> anyhow::Result<()> {
-    for turn in db(project, |db| db.read(|c| turns_in_state(c, TurnState::Unknown))).await? {
+pub(crate) async fn reconcile(instance: &Instance) -> anyhow::Result<()> {
+    for turn in db(instance, |db| db.read(|c| turns_in_state(c, TurnState::Unknown))).await? {
         let alive = match (turn.pid, turn.process_start) {
             (Some(pid), Some(start)) => process::is_running(pid as u32, start),
             // No pid: the CLI never ran. It is recorded before the process is resumed.
             _ => false,
         };
         if !alive {
-            runtime(project, EndTurn { turn_id: turn.id, outcome: Outcome::Interrupted, failure: None }).await?;
+            runtime(instance, EndTurn { turn_id: turn.id, outcome: Outcome::Interrupted, failure: None }).await?;
         }
     }
     Ok(())

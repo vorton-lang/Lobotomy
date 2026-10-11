@@ -58,6 +58,13 @@ Worker 的实现已经完成并通过验证，检查全部通过。TL 提了一�
   ▸ TL 汇报 · 并发语义疑点 · 10-01 14:20 · 1.2k 字
 ```
 
+**附件写明版本与当前有效性**（用户确认，2026-10-11，[#50](https://github.com/vorton-lang/Lobotomy/issues/50)）：
+
+- 附件指向成果、检查结果这类绑定版本的对象时，运行时在标题行写明它绑定的版本。例如，检查结果写明它跑在哪个候选成果和集成版本头上。
+- 运行时渲染附件时，按当前状态标出它是否已过期。例如，候选成果已被新的取代，或完成条件修改后证据已作废（[data-model.md](data-model.md) §4.5）。
+- 附件的内容不变，仍是 Manager 引用时的内容。
+- 依据：结论要和它的前提一起读，例如"测试通过"与"跑的是旧提交"。这两项由运行时一起渲染，Manager 无法把它们拆开。Manager 较早写的消息，也不会因为之后的变化误导用户。
+
 **引用用户原话**（用户确认，2026-10-11）：Manager 在回复中引用用户说过的话时，写 `[[quote:<msg_id>]]`，由运行时原样渲染那条消息，并标出时间。Manager 不自己写出带引号的"用户原话"。
 
 - 运行时校验 ID 存在，而且是用户本人的消息；否则渲染为错误引用。规则与 §3.2 中 `decision` 的依据相同。
@@ -198,16 +205,22 @@ ask_user(question, attachments?, blocking?: [task_id])
 - 其他情况只更新 GUI，包括进度、采集与集成、CI 通过、部分 role 阻塞而其他 role 仍在工作。
 - 用户正在看 GUI 时不弹系统通知；同一状态只通知一次，状态变化后才会再次通知；短时间内的多条通知合并。
 - 组织空闲时什么都不运行：role 只在收到消息或任务时运行，Manager 只在用户发言或收件箱有新内容时运行。后台不会有 agent 自行扩大范围。
+- **用户回来时看到的消息**（用户确认，2026-10-11，[#50](https://github.com/vorton-lang/Lobotomy/issues/50)）：
+  - 组织进入"全员在等你"或"活干完了"时，运行时把这个状态放进 Manager 的收件箱。Manager 写一条合并的消息，给出可运行的入口、关键变化、同一版本的验证结果和真正待决的分叉。
+  - 常规进度可以等到这时合并，不必逐条告诉用户。这一条写进 Manager 的指令。
+  - 不新增触发条件。消息写完后发生的变化，由附件的当前有效性标出（§2.1）。
+  - 依据：另一种做法是用户回来时再生成。它需要新增触发条件，用户回来后还要等几秒。
 
 ## 7. 工具一览
 
 | 使用方 | 工具 |
 |---|---|
-| Manager | `send_to_role`、`defer`、`ledger_add`、`ask_user`、`propose_meeting`、GitHub 读工具、`request_external_action`；回复中使用 `[[att:<id>]]` 与 `[[quote:<msg_id>]]` |
+| Manager | `send_to_role`、`defer`、`ledger_add`、`ask_user`、`propose_meeting`、GitHub 读工具、`request_external_action`；回复中使用 `[[att:<id>]]` 与 `[[quote:<msg_id>]]`。已实现的只有读取项目的工具：`list_projects`、`read_project`、`read_task`、`read_events`（M4 第 1 步，data-model.md §10.6） |
 | TL / Worker | `org_report(title, body, status)`、`org_checkpoint`、`flag_mismatch`、ledger 只读查询、GitHub 读工具、`request_external_action` |
 | 运行时（不是工具） | 采集、集成、预览物化、对账、冲突与检查失败通知、压缩与用量、会议投递与轮数上限、权限校验、附件渲染、GitHub 轮询 |
 
 ## 8. 未决
 
 - 解读模板的具体措辞；agent 互相 @ 的轮数上限；快照与暂缓条目的保留期。
+- 组织进入"等你"时，系统通知是否等 Manager 写完合并的消息再发（§6）。
 - 任务模型与任务相关工具（`assign`、`accept`、`send_back`、`abandon`）见 [roles-and-tasks.md](roles-and-tasks.md)。

@@ -198,11 +198,15 @@ test('the backend restarts and the GUI catches up', async ({ page }) => {
 
 /** Puts Malkuth on a harness through the settings, as the user does. */
 async function setHarness(page: Page, harness: 'claude' | 'codex') {
+  const name = harness === 'claude' ? 'Claude' : 'Codex';
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: '设置' });
-  await settings.getByLabel('Malkuth 使用的 harness').selectOption(harness);
-  await expect(page.locator('.role-line .badge')).toHaveText(harness === 'claude' ? 'Claude' : 'Codex');
-  await settings.getByRole('button', { name: '关闭' }).click();
+  const settings = page.getByRole('region', { name: '设置' });
+  await settings.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '常规' }).click();
+  const choice = settings.getByRole('radiogroup', { name: 'Malkuth 使用的 harness' }).getByRole('radio', { name });
+  await choice.check();
+  await expect(choice).toBeChecked();
+  await settings.getByRole('button', { name: '← 返回' }).click();
+  await expect(page.locator('.role-line .badge')).toHaveText(name);
 }
 
 // Claude's replies stream in a piece at a time; Codex's arrive whole (perf-baseline.md §2).

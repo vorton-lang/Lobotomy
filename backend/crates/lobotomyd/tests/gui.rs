@@ -439,3 +439,32 @@ async fn admitted_gui_request_shutdown(expires: bool) {
     // The request finishes and records the check, though its client left.
     wait_for("the check to be recorded", || (!host.db.domain("codex").unwrap().is_blocked()).then_some(())).await;
 }
+
+/// Angela is addressed as `angela` instead of a project (data-model.md §10.6): her snapshot has the
+/// shape of a project's, the user's message starts her turn and shows in her thread, and the host
+/// snapshot says she is open. A project's command is not hers.
+#[tokio::test]
+async fn angela_is_read_and_told_as_the_window_does_a_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let mut client = Client::open(backend.addr, &backend.project.host.gui_token, "angela").await;
+    let host = client.call("host", json!({})).await.unwrap();
+    assert_eq!(host["angela"]["error"], Value::Null);
+
+    let snapshot = client.call("snapshot", json!({})).await.unwrap();
+    let roles = snapshot["roles"].as_array().unwrap();
+    assert_eq!((roles.len(), &roles[0]["name"], &roles[0]["kind"]), (1, &json!("Angela"), &json!("manager")));
+    assert_eq!((&snapshot["project"], &snapshot["tasks"]), (&Value::Null, &json!([])));
+
+    let message = json!({ "request_id": "a1", "role": "Angela", "task_id": null, "body": "现在怎么样" });
+    client.command("send_message", message).await.unwrap();
+    client.event("turn.ended").await;
+    let page = client.call("thread", json!({ "role": "Angela" })).await.unwrap();
+    let kinds: Vec<&str> = page["items"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["input", "agent_message", "agent_message"]);
+
+    let task = json!({ "request_id": "t1", "title": "x", "body": "x", "criteria": "x", "executor": "Angela" });
+    let refused = client.command("create_task", task).await.unwrap_err();
+    assert_eq!(refused["code"], "bad_request");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
