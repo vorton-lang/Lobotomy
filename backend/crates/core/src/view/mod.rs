@@ -22,7 +22,7 @@ use crate::project::{Project, ProjectConfig, current_config, load_project};
 use crate::quota::Domain;
 use crate::role::{Role, list_roles};
 use crate::task::{
-    Phase, Task, latest_attempt, list_tasks, load_task, occupant, open_attempt, queued_messages,
+    Phase, Task, latest_attempt, list_tasks, load_task, occupant, open_attempt, queued_messages, reply_queued,
     undelivered_user_messages,
 };
 use crate::turn::{Hold, Outcome, Turn, TurnState, hold, last_turn, unfinished_turn};
@@ -86,6 +86,8 @@ pub struct TaskView {
     pub verification: Option<Verification>,
     /// The user's messages its executor never got; accepting needs the user to let them go (#14).
     pub undelivered_messages: usize,
+    /// A reply from the user or Angela waits for the executor's next turn (#17).
+    pub reply_queued: bool,
 }
 
 /// `mcp_server` is the name Lobotomy's tools have in the harness's configuration: its calls that
@@ -125,6 +127,7 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
             attempt_open: attempt.is_some_and(|a| a.ended_at.is_none()),
             verification: latest_verification(conn, &task.id)?,
             undelivered_messages: undelivered_user_messages(conn, &task.id)?.len(),
+            reply_queued: reply_queued(conn, &task)?,
             task,
         });
     }
@@ -263,10 +266,10 @@ pub fn attention(
     }
     for view in &overview.tasks {
         let t = &view.task;
-        // After the user replies, the reply waits in the queue for the executor's next turn. The
-        // user has nothing more to do; registering the turn clears the question (#17).
+        // After the user or Angela replies, the reply waits in the queue for the executor's next
+        // turn. The user has nothing more to do; registering the turn clears the question (#17).
         if let (Phase::Executing, Some(reason)) = (t.phase, &t.blocked_reason)
-            && view.undelivered_messages == 0
+            && !view.reply_queued
         {
             out.push(Attention::TaskBlocked { task_id: t.id.clone(), title: t.title.clone(), reason: reason.clone() });
         }

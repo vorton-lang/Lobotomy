@@ -10,6 +10,7 @@ use lobotomy_core::task::{
     Action, Assign, CreateTask, EditCriteria, Quote, Reopen, SendToRole, SetPaused, load_task, queued_messages,
 };
 use lobotomy_core::verify::{Accept, SendBack};
+use lobotomy_core::view::overview;
 use lobotomy_core::{Caller, Db};
 
 fn angela() -> Caller {
@@ -141,6 +142,9 @@ fn the_managers_message_quotes_the_user_and_answers_a_question() {
         interpretation: "端口定为 8080，其余照旧".into(),
     };
     db.execute(&angela(), &message).unwrap();
+    // Her reply waits for the next turn: the user has nothing more to do about the question.
+    let overview = db.read(|c| overview(c, "lobotomy")).unwrap();
+    assert!(overview.tasks.iter().find(|t| t.task.id == task).unwrap().reply_queued);
     let t = register(&db);
     let input: String =
         db.read(|c| Ok(c.query_row("SELECT input FROM turn WHERE id = ?1", [&t.turn_id], |r| r.get(0))?)).unwrap();

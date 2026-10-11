@@ -355,6 +355,7 @@ const taskView = (phase: TaskView['phase']): TaskView => ({
   attempt_open: phase === 'executing',
   verification: null,
   undelivered_messages: 0,
+  reply_queued: false,
 });
 
 describe('roleActivity', () => {
@@ -371,7 +372,8 @@ describe('roleActivity', () => {
   it('tells a question waiting for the user from a reply waiting for the next turn (#17)', () => {
     const asked = { ...taskView('executing'), blocked_reason: '空值怎么处理？' };
     expect(roleActivity(role({}), asked, 0)).toBe('提出了问题，等你回答');
-    expect(roleActivity(role({}), { ...asked, undelivered_messages: 1 }, 0)).toBe('你的回复在排队，下一个 turn 交给它');
+    // The reply is the user's or Angela's (roles-and-tasks.md §4).
+    expect(roleActivity(role({}), { ...asked, reply_queued: true }, 0)).toBe('回复在排队，下一个 turn 交给它');
     const registered = { ...turn('t'), state: 'registered' as const, outcome: null };
     expect(roleActivity(role({ unfinished: registered }), asked, 0)).toBe('即将开始 turn');
   });

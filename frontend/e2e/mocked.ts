@@ -19,12 +19,13 @@ export const task = (id: string, title: string, phase: TaskView['phase'], undeli
   id, title, body: '', executor: 'Malkuth', phase, paused: false, paused_by: null, blocked_reason: null, criteria_version: 1,
   queue_pos: null, revision: 1, created_at: 1, closed_at: phase === 'done' ? 9 : null, origin_capture: null, assignment: null,
   attempt_seq: phase === 'queued' ? null : 1, attempt_open: phase === 'executing', verification: null,
-  undelivered_messages: undelivered,
+  undelivered_messages: undelivered, reply_queued: undelivered > 0,
 });
 
 /** A task whose first round's candidate passed verification. */
 export const detail = (view: TaskView, undelivered: TaskDetail['undelivered_messages'] = []): TaskDetail => {
-  const { attempt_seq: _seq, attempt_open: _open, verification: _verification, undelivered_messages: _undelivered, ...task } = view;
+  const { attempt_seq: _seq, attempt_open: _open, verification: _verification, undelivered_messages: _undelivered, reply_queued: _reply, ...task } =
+    view;
   return {
     task,
     criteria: [{ version: 1, text: 'work.txt 存在', created_by: 'user', created_at: 1 }],

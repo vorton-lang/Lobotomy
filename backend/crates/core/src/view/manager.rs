@@ -357,6 +357,7 @@ mod tests {
             attempt_open: false,
             verification: None,
             undelivered_messages: 0,
+            reply_queued: false,
         };
         let mut tasks = vec![task("open", Phase::Executing, None)];
         tasks.extend((0..12).map(|i| task(&format!("done{i}"), Phase::Done, Some(i))));

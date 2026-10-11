@@ -219,9 +219,9 @@ export function roleActivity(role: RoleView, task: TaskView | undefined, now: nu
   if (role.outside) return '任务之外有改动，等你决定';
   if (role.stalled) return 'turn 已结束，任务还没完成，等你发消息';
   if (role.workspace?.state === 'materializing') return '正在准备工作目录';
-  // The question stands until the user's reply is bound to the next turn (#17).
+  // The question stands until a reply from the user or Angela is bound to the next turn (#17).
   if (task?.phase === 'executing' && task.blocked_reason) {
-    return task.undelivered_messages > 0 ? '你的回复在排队，下一个 turn 交给它' : '提出了问题，等你回答';
+    return task.reply_queued ? '回复在排队，下一个 turn 交给它' : '提出了问题，等你回答';
   }
   if (task) return PHASE_LABEL[task.phase];
   return '空闲';

@@ -158,6 +158,8 @@ export interface TaskView extends Task {
   verification: Verification | null;
   /** The user's messages its executor never got; accepting needs the user to let them go. */
   undelivered_messages: number;
+  /** A reply from the user or Angela waits for the executor's next turn. */
+  reply_queued: boolean;
 }
 
 export interface NewFile {

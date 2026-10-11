@@ -325,6 +325,21 @@ pub fn undelivered_user_messages(conn: &Connection, task_id: &str) -> Result<Vec
     messages(conn, "task_id = ?1 AND state = 'queued' AND source = 'user'", task_id)
 }
 
+/// Whether a reply waits for the task's executor: a queued message from the user, or from the
+/// manager who is its user (roles-and-tasks.md §4). Registering the next turn binds it and clears
+/// the executor's question (#17).
+pub fn reply_queued(conn: &Connection, task: &Task) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM message WHERE role = ?1 AND state = 'queued' AND source IN ('user', 'manager')
+             AND (task_id IS NULL OR task_id = ?2) LIMIT 1",
+            params![task.executor, task.id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
 /// A closed task's queued messages are not delivered: its executor no longer works on it
 /// (data-model.md §4.2, #14). The runtime's own, such as a criteria update, lose their point too.
 pub(crate) fn drop_queued(cx: &mut Cx<'_>, task_id: &str) -> Result<()> {
