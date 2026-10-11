@@ -403,7 +403,7 @@ impl Command for Accept {
     }
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<String> {
-        caller.require_user()?;
+        caller.require_user_or_manager()?;
         let task = load_task(cx.tx, &self.task_id)?;
         if task.phase != Phase::Accepting {
             return Err(Error::rejected("not_accepting", format!("task {} is {}", task.id, task.phase.as_str())));
@@ -437,6 +437,17 @@ impl Command for Accept {
         // A message the user sent that the executor never got must not slip away unseen: the
         // user lets go of exactly those there are, or sends the task back with them.
         let undelivered = undelivered_user_messages(cx.tx, &task.id)?;
+        // Only the user lets the user's words go; the manager sends the task back with them, or
+        // asks.
+        if !undelivered.is_empty() && !matches!(caller, Caller::User) {
+            return Err(Error::rejected(
+                "undelivered_messages",
+                format!(
+                    "the executor never got {} message(s) of the user; only the user lets them go",
+                    undelivered.len()
+                ),
+            ));
+        }
         let mut pending: Vec<&str> = undelivered.iter().map(|m| m.id.as_str()).collect();
         let mut letting_go: Vec<&str> = self.dropping.iter().map(String::as_str).collect();
         pending.sort_unstable();
@@ -484,8 +495,8 @@ impl Command for Accept {
     }
 }
 
-/// Sends the candidate back with the user's reason; the next attempt starts (data-model.md §9.2
-/// "退回").
+/// Sends the candidate back with the user's or the manager's reason; the next attempt starts
+/// (data-model.md §9.2 "退回").
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SendBack {
     pub request_id: String,
@@ -502,12 +513,13 @@ impl Command for SendBack {
     }
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
-        caller.require_user()?;
+        caller.require_user_or_manager()?;
         let task = load_task(cx.tx, &self.task_id)?;
         if task.phase != Phase::Accepting {
             return Err(Error::rejected("not_accepting", format!("task {} is {}", task.id, task.phase.as_str())));
         }
         record_decision(cx, "send_back", Some(&task.id), caller, json!({ "reason": self.reason }))?;
+        let by = prompts::sender(&caller.scope()).to_owned();
         let slot = match latest_verification(cx.tx, &task.id)? {
             Some(v) => match &v.commit_id {
                 Some(commit) => rebased_slot(cx.tx, &v, commit)?,
@@ -515,7 +527,7 @@ impl Command for SendBack {
             },
             None => None,
         };
-        reenter(cx, &task, slot, &[], &prompts::sent_back(&self.reason))
+        reenter(cx, &task, slot, &[], &prompts::sent_back(&by, &self.reason))
     }
 }
 

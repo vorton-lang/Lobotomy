@@ -5,6 +5,7 @@
 //! running turns, the host's quota domains and settings, failed store jobs, and whether a process
 //! still runs.
 
+pub mod attachment;
 pub mod manager;
 mod task;
 mod thread;

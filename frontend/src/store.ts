@@ -13,6 +13,7 @@ import type {
   Message,
   Permission,
   Push,
+  Refs,
   RoleView,
   SearchMatch,
   Snapshot,
@@ -89,6 +90,8 @@ interface State {
   taskDetail: TaskDetail | null;
   toasts: Toast[];
   search: SearchState | null;
+  /** The references in Angela's replies, as the runtime renders them (`wantRefs`). */
+  refs: Refs;
 }
 
 /** The role whose thread fills the main area. M1 has one, its executor (frontend.md §2 "M1 的布局"). */
@@ -127,6 +130,7 @@ export const useStore = create<State>(() => ({
   project: null,
   ...emptyProject(),
   toasts: [],
+  refs: { quotes: {}, attachments: {} },
 }));
 
 /** What requests and pushes name instead of a project for Angela (data-model.md §10.6). */
@@ -527,6 +531,25 @@ export function matchRowKey(match: SearchMatch): string {
   return match.seq === null ? `queued-${match.id}` : `msg-${match.id}`;
 }
 
+// ---- references in Angela's replies (manager-actions.md §2.1) ----
+
+/** Every reference a reply on screen has shown; they are read again when any project changes. */
+const wanted = { quotes: new Set<string>(), attachments: new Set<string>() };
+
+/** A reply shows these references: they are read now, and again whenever a project changes. */
+export function wantRefs(quotes: string[], attachments: string[]) {
+  const before = wanted.quotes.size + wanted.attachments.size;
+  quotes.forEach((id) => wanted.quotes.add(id));
+  attachments.forEach((id) => wanted.attachments.add(id));
+  if (wanted.quotes.size + wanted.attachments.size > before) refreshRefs();
+}
+
+async function loadRefs() {
+  if (scope() !== ANGELA || wanted.quotes.size + wanted.attachments.size === 0) return;
+  const refs = await call<Refs>('refs', { quotes: [...wanted.quotes], attachments: [...wanted.attachments] });
+  if (scope() === ANGELA) useStore.setState({ refs });
+}
+
 /** Coalesces bursts of pushes into one reload per kind. */
 function debounced(f: () => Promise<void>, ms: number) {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -548,6 +571,7 @@ const refreshCounts = debounced(async () => {
 }, 300);
 const refreshThread = debounced(catchUp, 80);
 const refreshTurnStates = debounced(refreshTurns, 120);
+const refreshRefs = debounced(loadRefs, 150);
 const refreshDetail = debounced(async () => {
   const selected = useStore.getState().selectedTask;
   if (selected) await loadTaskDetail(selected);
@@ -555,6 +579,8 @@ const refreshDetail = debounced(async () => {
 
 function onPush(push: Push) {
   if (push.type === 'events') refreshCounts();
+  // An attachment says whether it still holds now, whichever project it is in.
+  if ((push.type === 'events' || push.type === 'resync') && wanted.attachments.size > 0) refreshRefs();
   // The settings follow their own page's project, wherever the window is.
   const settings = useStore.getState().settings;
   if (settings && (push.type === 'host' || push.type === 'resync' || ('project' in push && push.type === 'events' && push.project === settingsTarget(settings.page)))) {

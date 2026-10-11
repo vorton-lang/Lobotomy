@@ -324,7 +324,7 @@ async fn call(service: &Service, method: &str, params: Value) -> anyhow::Result<
         }
         _ => match service.scope(params.get("project").and_then(Value::as_str))? {
             Scope::Project(project) => view::answer(&project, method, params).await,
-            Scope::Angela(angela) => view::answer_angela(&angela, method, params).await,
+            Scope::Angela(angela) => view::answer_angela(&angela, &service.projects, method, params).await,
         },
     }
 }

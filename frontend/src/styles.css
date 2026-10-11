@@ -157,6 +157,42 @@ pre {
 .badge.failed {
   color: var(--error);
 }
+.badge.expired {
+  color: var(--error);
+  margin-left: 6px;
+}
+
+/* The references in Angela's reply, which the runtime renders (manager-actions.md §2.1). */
+.ref-quote {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--sunken);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.ref-head {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ref-attachment {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  padding: 4px 8px;
+  text-align: left;
+  font-size: 13px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+.ref-attachment.expired {
+  color: var(--muted);
+}
+.ref-error {
+  color: var(--error);
+  font-size: 13px;
+}
 
 .splash,
 .onboarding {

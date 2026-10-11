@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use common::*;
 use futures::{SinkExt as _, StreamExt as _};
+use lobotomy_core::Caller;
+use lobotomy_core::task::CreateTask;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -466,5 +468,36 @@ async fn angela_is_read_and_told_as_the_window_does_a_project() {
     let task = json!({ "request_id": "t1", "title": "x", "body": "x", "criteria": "x", "executor": "Angela" });
     let refused = client.command("create_task", task).await.unwrap_err();
     assert_eq!(refused["code"], "bad_request");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// The references in Angela's replies are rendered from the records they name
+/// (manager-actions.md §2.1): a quote is the user's own message; an attachment names its project;
+/// an id nothing has is an error, not an empty line.
+#[tokio::test]
+async fn angelas_references_show_the_records_they_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let project = backend.project.clone();
+    let mut client = Client::open(backend.addr, &project.host.gui_token, "angela").await;
+    let message = json!({ "request_id": "a1", "role": "Angela", "task_id": null, "body": "先看启动为什么慢" });
+    let said = client.command("send_message", message).await.unwrap()["id"].as_str().unwrap().to_owned();
+    let task = CreateTask {
+        request_id: "t1".into(),
+        title: "查启动".into(),
+        body: "x".into(),
+        criteria: "x".into(),
+        executor: "Malkuth".into(),
+    };
+    let task = project.db.execute(&Caller::User, &task).unwrap().id;
+
+    let params = json!({ "quotes": [said, "msg_none"], "attachments": [task, "task_none"] });
+    let refs = client.call("refs", params).await.unwrap();
+    assert_eq!(refs["quotes"][&said]["body"], "先看启动为什么慢");
+    assert_eq!(refs["quotes"]["msg_none"]["error"], "没有这条消息");
+    let attached = &refs["attachments"][&task];
+    assert_eq!((&attached["kind"], &attached["title"]), (&json!("task"), &json!("查启动")));
+    assert_eq!(attached["project"], project.id.as_str());
+    assert_eq!(refs["attachments"]["task_none"]["error"], "找不到这个引用");
     backend.shutdown(Duration::from_secs(5)).await;
 }

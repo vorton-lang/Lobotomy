@@ -18,6 +18,8 @@ import type {
 import {
   abnormalEnd,
   asReport,
+  attachmentExpired,
+  attachmentLine,
   attentionKey,
   attentionSummary,
   attentionTask,
@@ -31,6 +33,7 @@ import {
   fits,
   lastLines,
   roleActivity,
+  splitReply,
   stoppedPaths,
   textOf,
   timeline,
@@ -191,7 +194,23 @@ const verification = (seq: number, at: number, state: Verification['state']): Ve
 });
 
 const detail = (patch: Partial<TaskDetail>): TaskDetail => ({
-  task: { id: 't', title: 't', body: '', executor: 'Malkuth', phase: 'executing', paused: false, blocked_reason: null, criteria_version: 1, queue_pos: null, revision: 1, created_at: 1, closed_at: null, origin_capture: null },
+  task: {
+    id: 't',
+    title: 't',
+    body: '',
+    executor: 'Malkuth',
+    phase: 'executing',
+    paused: false,
+    paused_by: null,
+    blocked_reason: null,
+    criteria_version: 1,
+    queue_pos: null,
+    revision: 1,
+    created_at: 1,
+    closed_at: null,
+    origin_capture: null,
+    assignment: null,
+  },
   criteria: [{ version: 1, text: '', created_by: 'user', created_at: 1 }],
   attempts: [],
   captures: [],
@@ -220,6 +239,48 @@ describe('timeline', () => {
       '你退回了：再改改',
       '第 2 轮执行开始',
     ]);
+  });
+
+  it('says which decisions Angela made', () => {
+    const d = detail({ decisions: [{ id: 'd1', kind: 'send_back', actor: 'manager', detail: { reason: '补上行号' }, created_at: 40 }] });
+    d.task.assignment = { actions: ['read_only'], stop_when: '找到原因就停', interpretation: '先定位' };
+    expect(timeline(d).map((e) => e.text)).toEqual(['Angela 派出任务', 'Angela 退回了：补上行号']);
+  });
+});
+
+describe("Angela's reply", () => {
+  it('splits at the references the runtime renders', () => {
+    expect(splitReply('改好了。\n[[att:ver_01]]\n你之前说 [[quote:msg_9]] 现在满足')).toEqual([
+      { kind: 'text', text: '改好了。\n' },
+      { kind: 'att', id: 'ver_01' },
+      { kind: 'text', text: '\n你之前说 ' },
+      { kind: 'quote', id: 'msg_9' },
+      { kind: 'text', text: ' 现在满足' },
+    ]);
+    expect(splitReply('没有引用')).toEqual([{ kind: 'text', text: '没有引用' }]);
+    // A malformed reference stays text.
+    expect(splitReply('[[att: x]]')).toEqual([{ kind: 'text', text: '[[att: x]]' }]);
+  });
+
+  it('writes the version an attachment is bound to and whether it still holds', () => {
+    const v = {
+      project: 'p1',
+      project_name: 'alpha',
+      kind: 'verification' as const,
+      task_id: 't',
+      title: '加行号',
+      seq: 2,
+      state: 'passed' as const,
+      base: 'abcdef0123',
+      config_version: 3,
+      at: 0,
+      superseded: false,
+      stale: false,
+    };
+    expect(attachmentLine(v)).toContain('alpha · 「加行号」第 2 轮的验证 · 通过 · 基于集成版本 abcdef01 · 检查设置第 3 版');
+    expect(attachmentExpired(v)).toBeNull();
+    expect(attachmentExpired({ ...v, stale: true })).toMatch(/^已过期/);
+    expect(attachmentExpired({ ...v, superseded: true })).toBe('已被新的验证取代');
   });
 });
 

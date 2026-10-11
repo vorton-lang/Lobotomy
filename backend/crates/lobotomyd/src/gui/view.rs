@@ -11,7 +11,7 @@ use lobotomy_core::host::ProjectEntry;
 use lobotomy_core::quota::Domain;
 use lobotomy_core::view::{self, Attention, Overview, SearchQuery, ThreadQuery};
 use lobotomy_harness::{Harness, MCP_SERVER};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -51,11 +51,110 @@ pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyh
 
 /// Answers a read method about Angela (data-model.md §10.6). Her snapshot has the shape of a
 /// project's, without a repository and tasks, so the window shows her as it shows an executor.
-pub async fn answer_angela(angela: &Instance, method: &str, params: Value) -> anyhow::Result<Value> {
+pub async fn answer_angela(
+    angela: &Instance,
+    projects: &Projects,
+    method: &str,
+    params: Value,
+) -> anyhow::Result<Value> {
     match method {
         "snapshot" => Ok(serde_json::to_value(angela_snapshot(angela).await?)?),
+        "refs" => Ok(serde_json::to_value(refs(angela, projects, serde_json::from_value(params)?).await?)?),
         _ => transcript(angela, method, params).await,
     }
+}
+
+#[derive(Deserialize)]
+struct RefsParams {
+    #[serde(default)]
+    quotes: Vec<String>,
+    #[serde(default)]
+    attachments: Vec<String>,
+}
+
+/// What a reference in Angela's reply shows, or why it shows nothing.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Resolved<T> {
+    Found(T),
+    Error { error: String },
+}
+
+#[derive(Serialize)]
+struct QuotedMessage {
+    at: i64,
+    body: String,
+}
+
+#[derive(Serialize)]
+struct ProjectAttachment {
+    project: String,
+    project_name: String,
+    #[serde(flatten)]
+    attachment: view::attachment::Attachment,
+}
+
+#[derive(Serialize)]
+struct Refs {
+    quotes: HashMap<String, Resolved<QuotedMessage>>,
+    attachments: HashMap<String, Resolved<ProjectAttachment>>,
+}
+
+/// The references in Angela's replies, rendered by the runtime (manager-actions.md §2.1):
+/// `[[quote:<msg_id>]]` is the user's own message in her database; `[[att:<id>]]` is a record of
+/// one of the projects, with whether it still holds. A reference into a project that cannot be
+/// read now says so, rather than that nothing has the id (data-model.md §10.6 "读取带边界").
+async fn refs(angela: &Instance, projects: &Projects, params: RefsParams) -> anyhow::Result<Refs> {
+    let ids = params.quotes;
+    let quotes = db(angela, move |db| {
+        db.read(|c| {
+            let mut out = HashMap::new();
+            for id in ids {
+                let row: Option<(String, i64, String)> = c
+                    .query_row("SELECT source, created_at, body FROM message WHERE id = ?1", [&id], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                    })
+                    .optional()?;
+                let resolved = match row {
+                    Some((source, at, body)) if source == "user" => Resolved::Found(QuotedMessage { at, body }),
+                    Some(_) => Resolved::Error { error: "这条消息不是你说的".into() },
+                    None => Resolved::Error { error: "没有这条消息".into() },
+                };
+                out.insert(id, resolved);
+            }
+            Ok(out)
+        })
+    })
+    .await?;
+
+    let mut open = Vec::new();
+    let mut unreadable = Vec::new();
+    for entry in angela.host.db.projects()? {
+        match projects.get(&entry.id) {
+            Some(project) => open.push((entry.name, project)),
+            None => unreadable.push(entry.name),
+        }
+    }
+    let mut attachments = HashMap::new();
+    for id in params.attachments {
+        let mut found = None;
+        for (name, project) in &open {
+            let key = id.clone();
+            if let Some(attachment) = db(project, move |db| db.read(|c| view::attachment::attachment(c, &key))).await? {
+                found = Some(ProjectAttachment { project: project.id.clone(), project_name: name.clone(), attachment });
+                break;
+            }
+        }
+        let resolved = match found {
+            Some(found) => Resolved::Found(found),
+            None if unreadable.is_empty() => Resolved::Error { error: "找不到这个引用".into() },
+            None => Resolved::Error {
+                error: format!("在打开的项目中找不到；读不到的项目：{}", unreadable.join("、"))
+            },
+        };
+        attachments.insert(id, resolved);
+    }
+    Ok(Refs { quotes, attachments })
 }
 
 /// The reads every instance answers: its transcript, searches in it and its blobs.

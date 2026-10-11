@@ -14,6 +14,10 @@ pub enum Caller {
     Runtime,
     /// A role calling through MCP, identified by the token of the turn it runs in.
     Role { role: String, turn_id: String },
+    /// Angela, the user's manager, in a project (data-model.md §10.6). Her turn is in her own
+    /// database, not this one: the host's MCP entry checks there that it is unfinished before it
+    /// runs her command here.
+    Manager { turn_id: String },
 }
 
 impl Caller {
@@ -22,13 +26,14 @@ impl Caller {
             Caller::User => "user".into(),
             Caller::Runtime => "runtime".into(),
             Caller::Role { role, .. } => format!("role:{role}"),
+            Caller::Manager { .. } => "manager".into(),
         }
     }
 
-    /// The turn a role command came from.
+    /// The turn a role's or the manager's command came from.
     pub fn turn_id(&self) -> Option<&str> {
         match self {
-            Caller::Role { turn_id, .. } => Some(turn_id),
+            Caller::Role { turn_id, .. } | Caller::Manager { turn_id } => Some(turn_id),
             _ => None,
         }
     }
@@ -36,16 +41,36 @@ impl Caller {
     pub fn require_user(&self) -> Result<()> {
         match self {
             Caller::User => Ok(()),
-            other => Err(Error::rejected("forbidden", format!("{} may not run this command", other.scope()))),
+            other => Err(forbidden(other)),
+        }
+    }
+
+    /// The control commands the manager runs for the user (data-model.md §10.6 跨库操作第 2 条).
+    /// Without her, the user runs them all (roles-and-tasks.md §1.4).
+    pub fn require_user_or_manager(&self) -> Result<()> {
+        match self {
+            Caller::User | Caller::Manager { .. } => Ok(()),
+            other => Err(forbidden(other)),
+        }
+    }
+
+    pub fn require_manager(&self) -> Result<()> {
+        match self {
+            Caller::Manager { .. } => Ok(()),
+            other => Err(forbidden(other)),
         }
     }
 
     pub fn require_runtime(&self) -> Result<()> {
         match self {
             Caller::Runtime => Ok(()),
-            other => Err(Error::rejected("forbidden", format!("{} may not run this command", other.scope()))),
+            other => Err(forbidden(other)),
         }
     }
+}
+
+fn forbidden(caller: &Caller) -> Error {
+    Error::rejected("forbidden", format!("{} may not run this command", caller.scope()))
 }
 
 /// A domain command (data-model.md §1).

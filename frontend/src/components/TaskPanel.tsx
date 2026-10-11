@@ -5,7 +5,19 @@
 
 import { useState } from 'react';
 import type { CheckRun, TaskDetail } from '../api/types';
-import { checkPassed, checkSummary, clock, deliveryReport, PHASE_LABEL, shortSha, taskNow, timeline, VERIFICATION_LABEL, workRange } from '../format';
+import {
+  ACTION_LABEL,
+  checkPassed,
+  checkSummary,
+  clock,
+  deliveryReport,
+  PHASE_LABEL,
+  shortSha,
+  taskNow,
+  timeline,
+  VERIFICATION_LABEL,
+  workRange,
+} from '../format';
 import { run, selectTask, useStore } from '../store';
 import { Markdown, Modal, Output } from './common';
 import { DiffPool, DiffView } from './DiffView';
@@ -82,6 +94,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           </>
         )}
       </div>
+      {task.paused && (
+        <p className="muted">{task.paused_by === 'manager' ? 'Angela 暂停了这个任务。' : '你暂停了这个任务，只有你能恢复。'}</p>
+      )}
       {current && (
         <p className="now-running">
           {task.executor} 现在做的是「{current.title}」（{PHASE_LABEL[current.phase]}）。
@@ -123,10 +138,29 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             ) : <p className="muted">本轮还没有交付说明。</p>}
           </section>
           <TrialControls key={task.id} detail={loaded} />
-          <section>
-            <h3>你的原话</h3>
-            <Markdown text={loaded.task.body || '（无）'} />
-          </section>
+          {loaded.task.assignment ? (
+            // Angela's task: the user's words she quoted, then her own (roles-and-tasks.md §4).
+            <>
+              <section>
+                <h3>你的原话 <span className="muted">Angela 引用</span></h3>
+                <Markdown text={loaded.task.body || '（Angela 没有引用你的原话）'} />
+              </section>
+              <section>
+                <h3>Angela 的解读</h3>
+                <Markdown text={loaded.task.assignment.interpretation} />
+                <p>
+                  允许的动作：{loaded.task.assignment.actions.map((a) => ACTION_LABEL[a]).join('、')}
+                  <br />
+                  停止条件：{loaded.task.assignment.stop_when}
+                </p>
+              </section>
+            </>
+          ) : (
+            <section>
+              <h3>你的原话</h3>
+              <Markdown text={loaded.task.body || '（无）'} />
+            </section>
+          )}
           <section>
             <h3>
               完成条件 <span className="muted">第 {criteria?.version} 版</span>

@@ -87,6 +87,8 @@ export interface Task {
   executor: string;
   phase: Phase;
   paused: boolean;
+  /** Who paused it. Only the user lifts the user's pause (roles-and-tasks.md §4). */
+  paused_by: 'user' | 'manager' | null;
   blocked_reason: string | null;
   criteria_version: number;
   queue_pos: number | null;
@@ -95,6 +97,58 @@ export interface Task {
   closed_at: number | null;
   /** For a task made from changes outside any task: their capture. */
   origin_capture: string | null;
+  /** For a task Angela assigned: what she allowed and when to stop. Its body is the user's words she quoted. */
+  assignment: Assignment | null;
+}
+
+export type Action = 'read_only' | 'edit_docs' | 'edit_code';
+
+export interface Assignment {
+  actions: Action[];
+  stop_when: string;
+  interpretation: string;
+}
+
+/** What `[[att:<id>]]` in Angela's reply shows (manager-actions.md §2.1). */
+export type AttachmentView = { project: string; project_name: string } & (
+  | { kind: 'task'; task_id: string; title: string; executor: string; phase: Phase; paused: boolean }
+  | { kind: 'candidate'; task_id: string; title: string; seq: number; commit: string | null; at: number; superseded: boolean }
+  | {
+      kind: 'verification';
+      task_id: string;
+      title: string;
+      seq: number;
+      state: Verification['state'];
+      base: string;
+      config_version: number;
+      at: number;
+      superseded: boolean;
+      stale: boolean;
+    }
+  | {
+      kind: 'report';
+      task_id: string | null;
+      title: string | null;
+      role: string;
+      report_title: string;
+      status: string;
+      at: number;
+      chars: number;
+      effect: ReportEffect | null;
+    }
+);
+
+/** A reference the runtime rendered, or why it shows nothing. */
+export type Resolved<T> = T | { error: string };
+
+export interface QuotedMessage {
+  at: number;
+  body: string;
+}
+
+export interface Refs {
+  quotes: Record<string, Resolved<QuotedMessage>>;
+  attachments: Record<string, Resolved<AttachmentView>>;
 }
 
 /** A task in the snapshot: the record and where its work stands. */
@@ -269,7 +323,7 @@ export interface Message {
   id: string;
   seq: number;
   role: string;
-  /** The caller that sent it: `user`, `runtime` or `role:<name>`. */
+  /** The caller that sent it: `user`, `runtime`, `manager` (Angela) or `role:<name>`. */
   source: string;
   task_id: string | null;
   body: string;

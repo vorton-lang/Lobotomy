@@ -3,7 +3,9 @@
 
 import type { CommandRecord, Item, LiveItem, Text } from '../api/types';
 import { asReport, commandSummary, elapsed, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
+import { useStore } from '../store';
 import { Markdown, Output, useNow } from './common';
+import { Reply } from './Reply';
 
 /** `fold`: the item is a report whose body a later message repeats; the body starts folded (#18). */
 export function ItemView({
@@ -19,12 +21,7 @@ export function ItemView({
 }) {
   switch (item.kind) {
     case 'agent_message':
-      return (
-        <div className="message other">
-          <div className="who">{role}</div>
-          <Markdown text={textOf(item.content.text)} />
-        </div>
-      );
+      return <AgentMessage role={role} text={textOf(item.content.text)} />;
     case 'reasoning':
       return (
         <details className="item reasoning">
@@ -108,6 +105,17 @@ export function ItemView({
         </details>
       );
   }
+}
+
+/** A reply. On 「全部」 it is Angela's, whose references the runtime renders. */
+function AgentMessage({ role, text }: { role: string; text: string }) {
+  const angela = useStore((s) => s.project === null);
+  return (
+    <div className="message other">
+      <div className="who">{role}</div>
+      {angela ? <Reply text={text} /> : <Markdown text={text} />}
+    </div>
+  );
 }
 
 /**

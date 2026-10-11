@@ -1,6 +1,8 @@
-//! Angela's tools (data-model.md §10.6; roadmap.md M4 step 1): she reads every project. A read
-//! says what it covers and up to which event; a project it could not read is named with the
-//! reason, never left out, so "没有" and "不可用" stay apart (data-model.md §10.6 "读取带边界").
+//! Angela's tools (data-model.md §10.6; roadmap.md M4). She reads every project: a read says what
+//! it covers and up to which event; a project it could not read is named with the reason, never
+//! left out, so "没有" and "不可用" stay apart (data-model.md §10.6 "读取带边界"). She acts in a
+//! project as the caller `manager`: assigning, forwarding the user's words, accepting, sending
+//! back, abandoning and pausing (roadmap.md M4 step 2).
 //!
 //! Her URL is `/mcp/angela/{token}`: the token finds her turn in her own database.
 
@@ -12,9 +14,13 @@ use axum::{
     response::IntoResponse,
     routing::any,
 };
+use lobotomy_core::Caller;
 use lobotomy_core::host::ProjectState;
+use lobotomy_core::id::new_id;
 use lobotomy_core::quota::Domain;
-use lobotomy_core::turn::turn_by_token;
+use lobotomy_core::task::{Abandon, Action, Assign, Quote, SendToRole, SetPaused};
+use lobotomy_core::turn::{TurnState, turn_by_token};
+use lobotomy_core::verify::{Accept, SendBack, task_verifications};
 use lobotomy_core::view::manager::{events_read, project_read, task_read};
 use lobotomy_core::view::{last_event, overview};
 use lobotomy_harness::{Harness, MCP_SERVER};
@@ -26,6 +32,7 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -105,6 +112,95 @@ pub struct EventsArgs {
 const EVENTS_DEFAULT: usize = 100;
 const EVENTS_MAX: usize = 500;
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionArg {
+    /// 只读调查：不改文件
+    ReadOnly,
+    /// 改文档
+    EditDocs,
+    /// 改代码
+    EditCode,
+}
+
+impl From<ActionArg> for Action {
+    fn from(arg: ActionArg) -> Self {
+        match arg {
+            ActionArg::ReadOnly => Action::ReadOnly,
+            ActionArg::EditDocs => Action::EditDocs,
+            ActionArg::EditCode => Action::EditCode,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AssignArgs {
+    /// 项目 ID，来自 list_projects
+    pub project_id: String,
+    /// 执行者的名字，来自 read_project 的 roles
+    pub role: String,
+    /// 一句话标题
+    pub title: String,
+    /// 要原样转给执行者的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。运行时按时间顺序插入原文。没有可引用的原话时留空
+    #[serde(default)]
+    pub quote: Vec<String>,
+    /// 你的解读：你理解的目标、推断的边界、不确定的地方、希望何时回报什么。原话以外的内容都是你的推断
+    pub interpretation: String,
+    /// 执行者可以做的事，可以多选
+    pub actions: Vec<ActionArg>,
+    /// 停止条件：做到哪里就停下来汇报，不再扩大范围，例如"得到第一个可用结果就汇报""最多测量一次"
+    pub stop_when: String,
+    /// 完成条件：成果要满足什么，要能验证
+    pub done_when: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SendToRoleArgs {
+    /// 项目 ID，来自 list_projects
+    pub project_id: String,
+    /// 收信的 role 的名字
+    pub role: String,
+    /// 消息关于哪个任务；不关于任务时不填
+    pub task_id: Option<String>,
+    /// 要原样转给它的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。没有时留空
+    #[serde(default)]
+    pub quote: Vec<String>,
+    /// 你的话。转发原话时写你的解读；没有原话时就是你要说的话
+    pub interpretation: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AcceptArgs {
+    /// 项目 ID，来自 list_projects
+    pub project_id: String,
+    /// 任务 ID
+    pub task_id: String,
+    /// 你看过的验证的 ID，来自 read_task；必须是这个任务当前通过的验证
+    pub verification_id: String,
+    /// 你对照的完成条件版本，来自 read_task 的 criteria_version
+    pub criteria_version: i64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReasonArgs {
+    /// 项目 ID，来自 list_projects
+    pub project_id: String,
+    /// 任务 ID
+    pub task_id: String,
+    /// 理由，会原样记下；退回时也会原样发给执行者
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PauseArgs {
+    /// 项目 ID，来自 list_projects
+    pub project_id: String,
+    /// 任务 ID
+    pub task_id: String,
+    /// true 暂停，false 恢复。用户暂停的任务只有用户能恢复
+    pub paused: bool,
+}
+
 #[tool_router]
 impl AngelaTools {
     #[tool(description = "列出所有登记的项目：每个项目的状态、截至的事件序号、进行中的任务数和等用户决定的条数；\
@@ -176,14 +272,155 @@ impl AngelaTools {
         })
         .await
     }
+
+    #[tool(description = "派一项任务给项目中的 role。必须写明允许的动作（actions）和停止条件（stop_when）。\
+                       要转达的用户原话用 quote 引用消息 ID，由运行时原样插入，不要自己复述成原话。")]
+    async fn assign(
+        &self,
+        Parameters(args): Parameters<AssignArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        act(&context, &args.project_id.clone(), |reach, project, caller| async move {
+            let quotes = quotes(&reach.angela, args.quote).await?;
+            let cmd = Assign {
+                request_id: new_id("req"),
+                executor: args.role,
+                title: args.title,
+                quotes,
+                interpretation: args.interpretation,
+                actions: args.actions.into_iter().map(Action::from).collect(),
+                stop_when: args.stop_when,
+                done_when: args.done_when,
+            };
+            let created = db(&project, move |db| db.execute(&caller, &cmd)).await?;
+            Ok(format!("已派出任务 {}，排进执行者的队列。", created.id))
+        })
+        .await
+    }
+
+    #[tool(description = "给项目中的 role 发消息，可以附上任务。要转达的用户原话用 quote 引用消息 ID，\
+                       由运行时原样插入，你的话附在后面。")]
+    async fn send_to_role(
+        &self,
+        Parameters(args): Parameters<SendToRoleArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        act(&context, &args.project_id.clone(), |reach, project, caller| async move {
+            let quotes = quotes(&reach.angela, args.quote).await?;
+            let cmd = SendToRole {
+                request_id: new_id("req"),
+                role: args.role,
+                task_id: args.task_id,
+                quotes,
+                interpretation: args.interpretation,
+            };
+            let created = db(&project, move |db| db.execute(&caller, &cmd)).await?;
+            Ok(format!("已放进收件箱（{}）；它下一个 turn 收到。", created.id))
+        })
+        .await
+    }
+
+    #[tool(description = "验收一个等待验收的任务：成果发布进集成版本，任务完成。写明你看过的验证和完成条件版本；\
+                       它们之后有变化时验收被拒绝，先重新读任务。")]
+    async fn accept(
+        &self,
+        Parameters(args): Parameters<AcceptArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        act(&context, &args.project_id.clone(), |_, project, caller| async move {
+            let commit = db(&project, move |db| {
+                // The integration version is the one the verification ran on: that is what she
+                // judged. The command still checks it is the current one.
+                let task_id = args.task_id.clone();
+                let base = db
+                    .read(|c| task_verifications(c, &task_id))?
+                    .into_iter()
+                    .find_map(|v| (v.id == args.verification_id).then_some(v.base));
+                let cmd = Accept {
+                    request_id: new_id("req"),
+                    task_id: args.task_id,
+                    verification_id: args.verification_id,
+                    criteria_version: args.criteria_version,
+                    expected_integration: base.unwrap_or_default(),
+                    dropping: Vec::new(),
+                };
+                db.execute(&caller, &cmd)
+            })
+            .await?;
+            Ok(format!("已验收，成果发布为集成版本 {commit}。"))
+        })
+        .await
+    }
+
+    #[tool(description = "退回一个等待验收的任务，执行者开始新一轮。理由原样发给执行者。")]
+    async fn send_back(
+        &self,
+        Parameters(args): Parameters<ReasonArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        act(&context, &args.project_id.clone(), |_, project, caller| async move {
+            let cmd = SendBack { request_id: new_id("req"), task_id: args.task_id, reason: args.reason };
+            db(&project, move |db| db.execute(&caller, &cmd)).await?;
+            Ok("已退回，执行者开始新一轮。".to_owned())
+        })
+        .await
+    }
+
+    #[tool(description = "放弃一个任务：不再推进，成果与记录保留。")]
+    async fn abandon(
+        &self,
+        Parameters(args): Parameters<ReasonArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        act(&context, &args.project_id.clone(), |_, project, caller| async move {
+            let cmd = Abandon { request_id: new_id("req"), task_id: args.task_id, reason: args.reason };
+            db(&project, move |db| db.execute(&caller, &cmd)).await?;
+            Ok("已放弃。".to_owned())
+        })
+        .await
+    }
+
+    #[tool(description = "暂停或恢复一个任务。用户暂停的任务只有用户能恢复；你暂停的任务你可以恢复。")]
+    async fn set_paused(
+        &self,
+        Parameters(args): Parameters<PauseArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        act(&context, &args.project_id.clone(), |_, project, caller| async move {
+            let paused = args.paused;
+            let cmd = SetPaused { request_id: new_id("req"), task_id: args.task_id, paused };
+            db(&project, move |db| db.execute(&caller, &cmd)).await?;
+            Ok(if paused { "已暂停。" } else { "已恢复。" }.to_owned())
+        })
+        .await
+    }
 }
 
 #[tool_handler]
 impl ServerHandler for AngelaTools {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("Lobotomy：读取所有项目的现状。每次读取写明截至哪个事件，读不到的项目写明原因。")
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "Lobotomy：读取所有项目的现状，并在项目中派活、转达用户原话、验收、退回、放弃、暂停。\
+             每次读取写明截至哪个事件，读不到的项目写明原因。",
+        )
     }
+}
+
+/// The request's reach and the turn of Angela its token names, if any.
+async fn caller_turn(
+    context: &RequestContext<RoleServer>,
+) -> Result<(Reach, Option<lobotomy_core::turn::Turn>), ErrorData> {
+    let reach = context
+        .extensions
+        .get::<http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<Reach>().cloned())
+        .ok_or_else(|| ErrorData::internal_error("the request did not come through Angela's route", None))?;
+    let token = turn_token(context).map(str::to_owned);
+    let turn = match token {
+        Some(token) => db(&reach.angela, move |db| db.read(|c| turn_by_token(c, &token))).await.ok().flatten(),
+        None => None,
+    };
+    Ok((reach, turn))
 }
 
 /// Runs a read for Angela's turn and returns it as JSON text. A call whose token is not one of her
@@ -193,23 +430,94 @@ where
     F: FnOnce(Reach) -> Fut,
     Fut: Future<Output = anyhow::Result<Value>>,
 {
-    let reach = context
-        .extensions
-        .get::<http::request::Parts>()
-        .and_then(|parts| parts.extensions.get::<Reach>().cloned())
-        .ok_or_else(|| ErrorData::internal_error("the request did not come through Angela's route", None))?;
-    let token = turn_token(context).map(str::to_owned);
-    let known = match token {
-        Some(token) => db(&reach.angela, move |db| db.read(|c| turn_by_token(c, &token))).await.ok().flatten(),
-        None => None,
-    };
-    if known.is_none() {
+    let (reach, turn) = caller_turn(context).await?;
+    if turn.is_none() {
         return Ok(CallToolResult::error(vec![ContentBlock::text("读取被拒绝：这个 URL 不属于 Angela 的 turn")]));
     }
     match read(reach).await {
         Ok(value) => Ok(CallToolResult::success(vec![ContentBlock::text(value.to_string())])),
         Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!("读取失败：{e:#}"))])),
     }
+}
+
+/// Runs Angela's command in a project as `manager` (data-model.md §10.6 跨库操作第 2 条). Her
+/// turn must still be running in her database; the command then writes the project's database
+/// only (第 5 条), and the project's scheduler wakes for what it changed.
+async fn act<F, Fut>(
+    context: &RequestContext<RoleServer>,
+    project_id: &str,
+    run: F,
+) -> Result<CallToolResult, ErrorData>
+where
+    F: FnOnce(Reach, Arc<Project>, Caller) -> Fut,
+    Fut: Future<Output = anyhow::Result<String>>,
+{
+    let refused = |text: String| Ok(CallToolResult::error(vec![ContentBlock::text(format!("被拒绝：{text}"))]));
+    let (reach, turn) = caller_turn(context).await?;
+    let Some(turn) = turn else {
+        return refused("这个 URL 不属于 Angela 的 turn".into());
+    };
+    if turn.state != TurnState::Running {
+        return refused("这个 turn 已经结束".into());
+    }
+    let project = match find(&reach, project_id) {
+        Ok(Ok(project)) => project,
+        Ok(Err(unavailable)) => return refused(format!("项目不可用：{}", unavailable["unavailable"])),
+        Err(e) => return refused(format!("{e:#}")),
+    };
+    let caller = Caller::Manager { turn_id: turn.id };
+    match run(reach, project.clone(), caller).await {
+        Ok(text) => {
+            project.wake.notify_one();
+            Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+        }
+        Err(e) => refused(why(&e)),
+    }
+}
+
+/// A refusal in the words Angela acts on.
+fn why(e: &anyhow::Error) -> String {
+    match e.downcast_ref::<lobotomy_core::Error>().and_then(lobotomy_core::Error::code) {
+        Some("paused_by_user") => "用户暂停了这个任务，只有用户能恢复。".into(),
+        Some("undelivered_messages") => "执行者还没收到用户发给这个任务的消息，只有用户能放弃它们。\
+                                          可以退回任务，让执行者收到这些消息；或者问用户。"
+            .into(),
+        Some("stale_verification" | "stale_criteria" | "integration_moved") => {
+            format!("你看到的已经不是当前状态（{e:#}）。先重新读取这个任务。")
+        }
+        _ => format!("{e:#}"),
+    }
+}
+
+/// The user's messages Angela quotes, from her database, in the order they were sent. Each must
+/// exist and be the user's own (manager-actions.md §2.1 "引用用户原话").
+async fn quotes(angela: &Instance, ids: Vec<String>) -> anyhow::Result<Vec<Quote>> {
+    let found = db(angela, move |db| {
+        db.read(|c| {
+            let mut found = Vec::new();
+            for id in &ids {
+                let row: Option<(String, i64, String, i64)> = c
+                    .query_row("SELECT source, created_at, body, seq FROM message WHERE id = ?1", [id], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    })
+                    .optional()?;
+                found.push((id.clone(), row));
+            }
+            Ok(found)
+        })
+    })
+    .await?;
+    let mut quotes = Vec::new();
+    for (id, row) in found {
+        match row {
+            None => anyhow::bail!("没有消息 {id}"),
+            Some((source, ..)) if source != Caller::User.scope() => anyhow::bail!("{id} 不是用户的消息"),
+            Some((_, said_at, body, seq)) => quotes.push((seq, Quote { source_id: id, said_at, body })),
+        }
+    }
+    quotes.sort_by_key(|(seq, _)| *seq);
+    quotes.dedup_by(|a, b| a.0 == b.0);
+    Ok(quotes.into_iter().map(|(_, quote)| quote).collect())
 }
 
 /// An open project, or what to say instead: no such project, or why it is not open.

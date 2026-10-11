@@ -33,8 +33,16 @@ const angelaSnapshot: Snapshot = {
   roles: [{ ...role(null), name: 'Angela', kind: 'manager', harness: 'claude', slot: null }],
 };
 
-/** Opens the GUI on a backend with the projects `host` lists. */
-async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: string, args: Record<string, unknown>) => unknown) {
+/**
+ * Opens the GUI on a backend with the projects `host` lists. `answers` replaces what a read method
+ * returns.
+ */
+async function openHost(
+  page: Page,
+  host: HostSnapshot,
+  onCommand?: (name: string, args: Record<string, unknown>) => unknown,
+  answers: Record<string, unknown> = {},
+) {
   const asked: { method: string; project?: string }[] = [];
   let push!: (push: Push) => void;
   await page.routeWebSocket(/\/gui\?token=ui-test$/, (route) => {
@@ -43,7 +51,8 @@ async function openHost(page: Page, host: HostSnapshot, onCommand?: (name: strin
       const { id, method, params } = JSON.parse(String(raw)) as { id: number; method: string; params: Record<string, any> };
       asked.push({ method, project: params.project });
       let result: unknown = null;
-      if (method === 'host') result = host;
+      if (method in answers) result = answers[method];
+      else if (method === 'host') result = host;
       else if (method === 'snapshot') result = params.project === 'angela' ? angelaSnapshot : snapshotOf(params.project);
       else if (method === 'thread') result = { items: [], has_more: false, turns: {}, messages: [], commands: {}, queued: [] };
       else if (method === 'task') result = detail(exported);
@@ -104,6 +113,39 @@ test('「全部」 is the conversation with Angela beside every project’s item
   expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['angela']);
   const overview = page.getByRole('region', { name: '全部项目' });
   await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」通过了验证，等你验收');
+});
+
+// Angela's reply shows what the runtime renders for her references (manager-actions.md §2.1): the
+// user's own words with their time, and one line per attachment with the version it is bound to and
+// whether it still holds. An attachment opens its task in its project.
+test('Angela’s references show the user’s words and attachments that open the task', async ({ page }) => {
+  const host: HostSnapshot = { projects: [entry('alpha', [accept]), entry('beta')], attention: [], harnesses: [], angela };
+  const text = '你之前说的是：\n[[quote:msg_1]]\n现在的结果：\n[[att:ver_1]]\n[[att:task_gone]]';
+  const reply = { id: 'i1', seq: 1, turn_id: 'turn1', kind: 'agent_message', content: { text }, command_id: null, created_at: 1 };
+  const refs = {
+    quotes: { msg_1: { at: 1, body: '导出要带表头' } },
+    attachments: {
+      ver_1: {
+        project: 'alpha', project_name: 'alpha', kind: 'verification', task_id: 'task1', title: '导出报表', seq: 1,
+        state: 'passed', base: 'base0000aaaa', config_version: 2, at: 1, superseded: false, stale: true,
+      },
+      task_gone: { error: '在打开的项目中找不到；读不到的项目：gamma' },
+    },
+  };
+  const thread = { items: [reply], has_more: false, turns: {}, messages: [], commands: {}, queued: [] };
+  const backend = await openHost(page, host, undefined, { thread, refs });
+
+  const conversation = page.getByRole('region', { name: 'Angela', exact: true });
+  await expect(conversation.getByLabel('你的原话')).toContainText('导出要带表头');
+  const attachment = conversation.getByRole('button', { name: /第 1 轮的验证/ });
+  await expect(attachment).toContainText('alpha · 「导出报表」第 1 轮的验证 · 通过 · 基于集成版本 base0000 · 检查设置第 2 版');
+  await expect(attachment).toContainText('已过期');
+  await expect(conversation).toContainText('附件无效（task_gone）：在打开的项目中找不到；读不到的项目：gamma');
+  expect(backend.asked.filter((a) => a.method === 'refs').map((a) => a.project)).toEqual(['angela']);
+
+  await attachment.click();
+  await expect(page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-current', 'true');
+  await expect(page.getByRole('region', { name: '导出报表', exact: true })).toBeVisible();
 });
 
 // The projects run without Angela (roles-and-tasks.md §1.4): when she cannot be opened, 「全部」

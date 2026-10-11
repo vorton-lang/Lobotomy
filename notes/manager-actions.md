@@ -64,6 +64,7 @@ Worker 的实现已经完成并通过验证，检查全部通过。TL 提了一�
 - 运行时渲染附件时，按当前状态标出它是否已过期。例如，候选成果已被新的取代，或完成条件修改后证据已作废（[data-model.md](data-model.md) §4.5）。
 - 附件的内容不变，仍是 Manager 引用时的内容。
 - 依据：结论要和它的前提一起读，例如"测试通过"与"跑的是旧提交"。这两项由运行时一起渲染，Manager 无法把它们拆开。Manager 较早写的消息，也不会因为之后的变化误导用户。
+- 现状（M4 第 2 步，2026-10-11）：可以引用任务、候选成果、验证和执行者的汇报。附件渲染为一行，写明项目、来源、绑定的版本和时间；已被取代或已过期时另外标出。点开是那个项目中的任务面板。项目中有新事件时，GUI 重新读取附件的当前有效性。
 
 **引用用户原话**（用户确认，2026-10-11）：Manager 在回复中引用用户说过的话时，写 `[[quote:<msg_id>]]`，由运行时原样渲染那条消息，并标出时间。Manager 不自己写出带引号的"用户原话"。
 
@@ -215,7 +216,7 @@ ask_user(question, attachments?, blocking?: [task_id])
 
 | 使用方 | 工具 |
 |---|---|
-| Manager | `send_to_role`、`defer`、`ledger_add`、`ask_user`、`propose_meeting`、GitHub 读工具、`request_external_action`；回复中使用 `[[att:<id>]]` 与 `[[quote:<msg_id>]]`。已实现的只有读取项目的工具：`list_projects`、`read_project`、`read_task`、`read_events`（M4 第 1 步，data-model.md §10.6） |
+| Manager | `send_to_role`、`defer`、`ledger_add`、`ask_user`、`propose_meeting`、GitHub 读工具、`request_external_action`；回复中使用 `[[att:<id>]]` 与 `[[quote:<msg_id>]]`。已实现：读取项目的 `list_projects`、`read_project`、`read_task`、`read_events`（M4 第 1 步）；`assign`、`send_to_role`（没有 `context` 与 `ledger`）、`accept`、`send_back`、`abandon`、`set_paused`，以及回复中的两种引用（M4 第 2 步）。见 data-model.md §10.6 |
 | TL / Worker | `org_report(title, body, status)`、`org_checkpoint`、`flag_mismatch`、ledger 只读查询、GitHub 读工具、`request_external_action` |
 | 运行时（不是工具） | 采集、集成、预览物化、对账、冲突与检查失败通知、压缩与用量、会议投递与轮数上限、权限校验、附件渲染、GitHub 轮询 |
 

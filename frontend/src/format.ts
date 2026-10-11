@@ -2,6 +2,8 @@
 // says is tested without rendering (#16).
 
 import type {
+  Action,
+  AttachmentView,
   Attempt,
   Attention,
   BlobRef,
@@ -134,7 +136,57 @@ export function toolSubject(input: unknown): string {
 export function sourceLabel(source: string): string {
   if (source === 'user') return '你';
   if (source === 'runtime') return 'Lobotomy';
+  if (source === 'manager') return 'Angela';
   return source.replace(/^role:/, '');
+}
+
+export const ACTION_LABEL: Record<Action, string> = { read_only: '只读调查', edit_docs: '改文档', edit_code: '改代码' };
+
+/** A piece of Angela's reply: her own text, or a reference the runtime renders (manager-actions.md §2.1). */
+export type ReplyPart = { kind: 'text'; text: string } | { kind: 'quote' | 'att'; id: string };
+
+const REFERENCE = /\[\[(quote|att):([A-Za-z0-9_]+)\]\]/g;
+
+/** Splits Angela's reply at its `[[quote:…]]` and `[[att:…]]` references. */
+export function splitReply(text: string): ReplyPart[] {
+  const parts: ReplyPart[] = [];
+  let last = 0;
+  for (const match of text.matchAll(REFERENCE)) {
+    const before = text.slice(last, match.index);
+    if (before.trim()) parts.push({ kind: 'text', text: before });
+    parts.push({ kind: match[1] as 'quote' | 'att', id: match[2] });
+    last = match.index + match[0].length;
+  }
+  const rest = text.slice(last);
+  if (rest.trim() || parts.length === 0) parts.push({ kind: 'text', text: rest });
+  return parts;
+}
+
+/**
+ * An attachment's line: its project, what it is, its source and the version it is bound to. The
+ * runtime's record says all of it; Angela cannot write it.
+ */
+export function attachmentLine(a: AttachmentView): string {
+  const where = `${a.project_name} · `;
+  switch (a.kind) {
+    case 'task':
+      return `${where}任务「${a.title}」 · ${a.executor} · ${PHASE_LABEL[a.phase]}${a.paused ? ' · 已暂停' : ''}`;
+    case 'candidate':
+      return `${where}「${a.title}」第 ${a.seq} 轮的候选成果 · 提交 ${shortSha(a.commit)} · ${clock(a.at)}`;
+    case 'verification':
+      return `${where}「${a.title}」第 ${a.seq} 轮的验证 · ${VERIFICATION_LABEL[a.state]} · 基于集成版本 ${shortSha(a.base)} · 检查设置第 ${a.config_version} 版 · ${clock(a.at)}`;
+    case 'report':
+      return `${where}${a.role} 的汇报 · ${a.report_title} · ${clock(a.at)} · ${a.chars} 字`;
+  }
+}
+
+/** Why an attachment no longer holds now, or `null` while it does. */
+export function attachmentExpired(a: AttachmentView): string | null {
+  if (a.kind === 'candidate' && a.superseded) return '已被新的候选成果取代';
+  if (a.kind === 'verification' && a.superseded) return '已被新的验证取代';
+  if (a.kind === 'verification' && a.stale) return '已过期：集成版本或检查设置在它之后变了';
+  if (a.kind === 'report' && a.effect && VOID_REPORT[a.effect]) return '没有生效';
+  return null;
 }
 
 /** A turn's end says nothing about its task: a turn can end normally with the task unfinished. */
@@ -393,6 +445,12 @@ const DECISION_LABEL: Record<string, string> = {
   adopt_outside_changes: '你用任务之外的改动建立了这个任务',
 };
 
+/** A decision in the task's history, said of who made it: the user or Angela. */
+function decisionLabel(kind: string, actor: string): string {
+  const label = DECISION_LABEL[kind] ?? kind;
+  return actor === 'manager' ? `Angela ${label.replace(/^你/, '')}` : label;
+}
+
 /** What a closing decision let go: the user's messages the executor never got (#14). */
 function droppedNote(detail: Record<string, unknown>): string {
   const dropped = Array.isArray(detail.dropped_messages) ? (detail.dropped_messages as { body: string }[]) : [];
@@ -415,11 +473,11 @@ export function timeline(detail: TaskDetail): TimelineEntry[] {
   const entries: (TimelineEntry & { rank: number })[] = [];
   const add = (at: number | null, rank: number, text: string) => at && entries.push({ at, rank, text });
   const round = (attemptId: string) => detail.attempts.find((a) => a.id === attemptId)?.seq;
-  add(detail.task.created_at, 0, '建立任务');
+  add(detail.task.created_at, 0, detail.task.assignment ? 'Angela 派出任务' : '建立任务');
   for (const c of detail.criteria) if (c.version > 1) add(c.created_at, 0, `完成条件改为第 ${c.version} 版`);
   for (const d of detail.decisions) {
     const reason = typeof d.detail.reason === 'string' && d.detail.reason ? `：${d.detail.reason}` : '';
-    add(d.created_at, 0, `${DECISION_LABEL[d.kind] ?? d.kind}${reason}${droppedNote(d.detail)}`);
+    add(d.created_at, 0, `${decisionLabel(d.kind, d.actor)}${reason}${droppedNote(d.detail)}`);
   }
   for (const v of detail.verifications) {
     add(v.created_at, 0, `第 ${round(v.attempt_id)} 轮的候选成果开始验证，基于集成版本 ${shortSha(v.base)}`);

@@ -4,14 +4,25 @@
 //! opening of the runtime's note (frontend `continueNote`).
 
 use crate::capture::{NewFile, UncoveredPath};
+use crate::task::Assignment;
 use crate::turn::FailureKind;
 
 /// How many paths a note lists before it summarizes.
 const LISTED: usize = 50;
 
+/// The manager's name, as messages and briefs name her (roles-and-tasks.md §1.1).
+pub const MANAGER: &str = "Angela";
+
 fn bullets(lines: impl IntoIterator<Item = String>) -> String {
     lines.into_iter().map(|line| format!("- {line}")).collect::<Vec<_>>().join("\n")
 }
+
+const HOW_TO_REPORT: &str = "完成后调用 org_report，status 为 done。若有适合用户体验成果的命令，可附带 trial：\
+     command 是从候选成果根目录运行的具体命令，Windows 上由 Windows PowerShell 执行，\
+     Linux 上由 sh 执行；purpose 说明体验目的。\
+     trial 只提供建议，用户明确点击后才会运行；它不会自动执行，也不属于自动验证检查。\
+     遇到需要用户决定的问题时，调用 org_report，status 为 blocked，\
+     并在 blocked_on 中写明问题。";
 
 /// The task as the executor first sees it: the user's words and the current criteria. The first
 /// line doubles as its summary in the GUI.
@@ -20,13 +31,55 @@ pub(crate) fn brief(title: &str, body: &str, seq: i64, version: i64, criteria: &
         "任务：{title}（第 {seq} 轮执行）\n\n\
          用户原话：\n{body}\n\n\
          完成条件（第 {version} 版）：\n{criteria}\n\n\
-         完成后调用 org_report，status 为 done。若有适合用户体验成果的命令，可附带 trial：\
-         command 是从候选成果根目录运行的具体命令，Windows 上由 Windows PowerShell 执行，\
-         Linux 上由 sh 执行；purpose 说明体验目的。\
-         trial 只提供建议，用户明确点击后才会运行；它不会自动执行，也不属于自动验证检查。\
-         遇到需要用户决定的问题时，调用 org_report，status 为 blocked，\
-         并在 blocked_on 中写明问题。"
+         {HOW_TO_REPORT}"
     )
+}
+
+/// The brief of a task the manager assigned: the user's words she quoted, her interpretation, what
+/// she allows and when to stop (roles-and-tasks.md §4), then the criteria.
+pub(crate) fn assigned_brief(
+    title: &str,
+    quoted: &str,
+    assignment: &Assignment,
+    seq: i64,
+    version: i64,
+    criteria: &str,
+) -> String {
+    let actions: Vec<&str> = assignment.actions.iter().map(|a| a.label()).collect();
+    let words = match quoted {
+        "" => format!("【{MANAGER}】\n{}", assignment.interpretation),
+        quoted => forwarded(quoted, &assignment.interpretation),
+    };
+    format!(
+        "任务：{title}（第 {seq} 轮执行，由 {MANAGER} 派出）\n\n\
+         {words}\n\n\
+         允许的动作：{}\n\
+         停止条件：{}\n\n\
+         完成条件（第 {version} 版）：\n{criteria}\n\n\
+         只做允许的动作。到了停止条件就停下来汇报，不再扩大范围。{QUOTES_FIRST}\n\n\
+         {HOW_TO_REPORT}",
+        actions.join("、"),
+        assignment.stop_when,
+    )
+}
+
+/// What the executor does when the user's words and the manager's reading of them differ
+/// (manager-actions.md §1).
+const QUOTES_FIRST: &str =
+    "【用户原话】由运行时原样插入，其余是 Angela 的解读。两者冲突时，以原话为准，并在汇报中指出。";
+
+/// One quoted message of the user, under the runtime's header (manager-actions.md §1).
+pub(crate) fn quoted(at: &str, body: &str) -> String {
+    format!("【用户原话】{at}\n{body}")
+}
+
+/// The manager's words after the user's she quotes. Without quotes her words are all there is, and
+/// the message's header already names her.
+pub(crate) fn forwarded(quoted: &str, interpretation: &str) -> String {
+    if quoted.is_empty() {
+        return interpretation.to_owned();
+    }
+    format!("{quoted}\n\n【{MANAGER} 解读】\n{interpretation}")
 }
 
 /// Added to the brief of a task made from changes outside any task (#14).
@@ -53,6 +106,7 @@ pub(crate) fn sender(source: &str) -> &str {
     match source {
         "user" => "用户",
         "runtime" => "Lobotomy",
+        "manager" => MANAGER,
         other => other.strip_prefix("role:").unwrap_or(other),
     }
 }
@@ -63,6 +117,12 @@ pub(crate) fn header(from: &str, task: Option<&str>) -> String {
         Some(task) => format!("【来自 {from} · 任务 {task}】"),
         None => format!("【来自 {from}】"),
     }
+}
+
+/// The header of the user's message in the manager's input: it names the message, so that she can
+/// quote it by its id (manager-actions.md §1, §2.1).
+pub(crate) fn header_with_id(from: &str, id: &str) -> String {
+    format!("【来自 {from} · {id}】")
 }
 
 /// The runtime's note at the start of a turn that continues one which did not end normally.
@@ -149,8 +209,8 @@ pub(crate) fn verification_incomplete(moved: bool) -> String {
     format!("候选成果没有通过验证：检查命令没有全部运行。{moved}\n\n请再次报告 done。")
 }
 
-/// The user sent the candidate back. The reason starts on the first line, which the GUI shows as
-/// the message's summary.
-pub(crate) fn sent_back(reason: &str) -> String {
-    format!("用户退回了候选成果：{reason}\n\n请修改后再次报告 done。")
+/// The user or the manager (`by`) sent the candidate back. The reason starts on the first line,
+/// which the GUI shows as the message's summary.
+pub(crate) fn sent_back(by: &str, reason: &str) -> String {
+    format!("{by}退回了候选成果：{reason}\n\n请修改后再次报告 done。")
 }

@@ -36,6 +36,9 @@ pub struct Task {
     pub executor: String,
     pub phase: Phase,
     pub paused: bool,
+    /// Who paused it, as a caller scope: only the user lifts the user's pause (roles-and-tasks.md
+    /// §4).
+    pub paused_by: Option<String>,
     pub blocked_reason: Option<String>,
     pub criteria_version: i64,
     pub queue_pos: Option<i64>,
@@ -44,12 +47,58 @@ pub struct Task {
     pub closed_at: Option<i64>,
     /// For a task made from changes outside any task: their capture, where its work starts (#14).
     pub origin_capture: Option<String>,
+    /// For a task the manager assigned: what she allowed and when to stop. Its body is the user's
+    /// words she quoted.
+    pub assignment: Option<Assignment>,
+}
+
+/// What an executor may do on a task the manager assigns (roles-and-tasks.md §4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    /// 只读调查
+    ReadOnly,
+    /// 改文档
+    EditDocs,
+    /// 改代码
+    EditCode,
+}
+
+impl Action {
+    pub fn label(self) -> &'static str {
+        match self {
+            Action::ReadOnly => "只读调查",
+            Action::EditDocs => "改文档",
+            Action::EditCode => "改代码",
+        }
+    }
+}
+
+/// What the manager's `assign` writes besides the title, the user's words and the criteria: the
+/// actions it allows, when to stop and report instead of going further, and her interpretation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Assignment {
+    pub actions: Vec<Action>,
+    pub stop_when: String,
+    pub interpretation: String,
+}
+
+/// A user's message the manager quotes, copied from her database (data-model.md §10.6 跨库操作
+/// 第 1 条). The runtime looks it up there by id and checks that the user wrote it; the manager
+/// only names the id (manager-actions.md §1).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Quote {
+    /// The message's id in the manager's database.
+    pub source_id: String,
+    pub said_at: i64,
+    pub body: String,
 }
 
 const TASK_COLUMNS: &str = "id, title, body, executor, phase, paused, blocked_reason, criteria_version, \
-                            queue_pos, revision, created_at, closed_at, origin_capture";
+                            queue_pos, revision, created_at, closed_at, origin_capture, paused_by, assignment";
 
 fn task_from_row(r: &Row<'_>) -> rusqlite::Result<Task> {
+    let assignment: Option<String> = r.get(14)?;
     Ok(Task {
         id: r.get(0)?,
         title: r.get(1)?,
@@ -57,6 +106,7 @@ fn task_from_row(r: &Row<'_>) -> rusqlite::Result<Task> {
         executor: r.get(3)?,
         phase: r.get(4)?,
         paused: r.get::<_, i64>(5)? != 0,
+        paused_by: r.get(13)?,
         blocked_reason: r.get(6)?,
         criteria_version: r.get(7)?,
         queue_pos: r.get(8)?,
@@ -64,6 +114,11 @@ fn task_from_row(r: &Row<'_>) -> rusqlite::Result<Task> {
         created_at: r.get(10)?,
         closed_at: r.get(11)?,
         origin_capture: r.get(12)?,
+        assignment: assignment
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(14, rusqlite::types::Type::Text, Box::new(e)))?,
     })
 }
 
@@ -189,7 +244,37 @@ pub fn criteria_text(conn: &Connection, task_id: &str, version: i64) -> Result<S
 /// doubles as its summary in the GUI; the task id is in the message header (`compose_input`).
 pub fn brief(conn: &Connection, task: &Task, attempt_seq: i64) -> Result<String> {
     let criteria = criteria_text(conn, &task.id, task.criteria_version)?;
-    Ok(prompts::brief(&task.title, &task.body, attempt_seq, task.criteria_version, &criteria))
+    let (title, version) = (&task.title, task.criteria_version);
+    Ok(match &task.assignment {
+        None => prompts::brief(title, &task.body, attempt_seq, version, &criteria),
+        Some(a) => prompts::assigned_brief(title, &task.body, a, attempt_seq, version, &criteria),
+    })
+}
+
+/// The quoted words as the executor and the GUI read them, each under the runtime's header with
+/// the local time it was said (manager-actions.md §1).
+fn render_quotes(conn: &Connection, quotes: &[Quote]) -> Result<String> {
+    let mut parts = Vec::new();
+    for quote in quotes {
+        let at: String = conn.query_row(
+            "SELECT strftime('%m-%d %H:%M', ?1 / 1000, 'unixepoch', 'localtime')",
+            [quote.said_at],
+            |r| r.get(0),
+        )?;
+        parts.push(prompts::quoted(&at, &quote.body));
+    }
+    Ok(parts.join("\n\n"))
+}
+
+fn store_quotes(cx: &Cx<'_>, quotes: &[Quote], task_id: Option<&str>, message_id: Option<&str>) -> Result<()> {
+    for (pos, quote) in quotes.iter().enumerate() {
+        cx.tx.execute(
+            "INSERT INTO quote (id, source_id, said_at, body, task_id, message_id, pos)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![new_id("quo"), quote.source_id, quote.said_at, quote.body, task_id, message_id, pos as i64],
+        )?;
+    }
+    Ok(())
 }
 
 /// What the executor is told when an attempt starts, and again when a new native session takes
@@ -552,8 +637,97 @@ impl Command for SendMessage {
     }
 }
 
-/// User pause. Kept separate from phase and blocking reason; quota recovery never clears it
-/// (roles-and-tasks.md §2.2).
+// ---- manager commands (data-model.md §10.6; roles-and-tasks.md §4) ----
+
+/// The manager assigns a task. Unlike a task the user creates, it must say which actions it allows
+/// and when to stop (roles-and-tasks.md §4). The user's words it quotes become the task's body;
+/// her interpretation goes with them, under its own header.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Assign {
+    pub request_id: String,
+    pub executor: String,
+    pub title: String,
+    pub quotes: Vec<Quote>,
+    pub interpretation: String,
+    pub actions: Vec<Action>,
+    pub stop_when: String,
+    pub done_when: String,
+}
+
+impl Command for Assign {
+    const NAME: &'static str = "assign";
+    type Output = Created;
+
+    fn idem_key(&self) -> Option<&str> {
+        Some(&self.request_id)
+    }
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<Created> {
+        caller.require_manager()?;
+        if self.actions.is_empty() {
+            return Err(Error::rejected("no_actions", "an assignment names the actions it allows"));
+        }
+        for (field, value) in
+            [("stop_when", &self.stop_when), ("done_when", &self.done_when), ("interpretation", &self.interpretation)]
+        {
+            if value.trim().is_empty() {
+                return Err(Error::rejected("missing_field", format!("an assignment needs {field}")));
+            }
+        }
+        let body = render_quotes(cx.tx, &self.quotes)?;
+        let id = create_task(cx, caller, &self.title, &body, &self.done_when, &self.executor)?;
+        let mut actions = self.actions.clone();
+        actions.dedup();
+        let assignment =
+            Assignment { actions, stop_when: self.stop_when.clone(), interpretation: self.interpretation.clone() };
+        cx.tx.execute(
+            "UPDATE task SET assignment = ?2 WHERE id = ?1",
+            params![id, serde_json::to_string(&assignment)?],
+        )?;
+        store_quotes(cx, &self.quotes, Some(&id), None)?;
+        Ok(Created { id })
+    }
+}
+
+/// The manager's message to a role: the user's words she quotes, as they were said, then her
+/// interpretation (manager-actions.md §1).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SendToRole {
+    pub request_id: String,
+    pub role: String,
+    pub task_id: Option<String>,
+    pub quotes: Vec<Quote>,
+    pub interpretation: String,
+}
+
+impl Command for SendToRole {
+    const NAME: &'static str = "send_to_role";
+    type Output = Created;
+
+    fn idem_key(&self) -> Option<&str> {
+        Some(&self.request_id)
+    }
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<Created> {
+        caller.require_manager()?;
+        require_role(cx, &self.role)?;
+        if let Some(task_id) = &self.task_id {
+            load_task(cx.tx, task_id)?;
+        }
+        if self.interpretation.trim().is_empty() {
+            return Err(Error::rejected("missing_field", "a message needs the manager's own words"));
+        }
+        let quoted = render_quotes(cx.tx, &self.quotes)?;
+        let body = prompts::forwarded(&quoted, &self.interpretation);
+        let id = queue_message(cx, &self.role, caller, self.task_id.as_deref(), &body)?;
+        store_quotes(cx, &self.quotes, None, Some(&id))?;
+        Ok(Created { id })
+    }
+}
+
+/// Pauses or resumes a task. Kept separate from phase and blocking reason; quota recovery never
+/// clears it (roles-and-tasks.md §2.2). Only the user lifts the user's pause: the manager acting on
+/// an older picture must not restart what the user stopped (roles-and-tasks.md §4, #50).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SetPaused {
     pub request_id: String,
@@ -570,10 +744,25 @@ impl Command for SetPaused {
     }
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
-        caller.require_user()?;
+        caller.require_user_or_manager()?;
         let task = load_task(cx.tx, &self.task_id)?;
         require_open(&task)?;
-        cx.tx.execute("UPDATE task SET paused = ?2 WHERE id = ?1", params![task.id, self.paused])?;
+        let user = Caller::User.scope();
+        let by = match (self.paused, caller) {
+            // The manager pausing what the user paused leaves it the user's pause.
+            (true, Caller::Manager { .. }) if task.paused => task.paused_by.clone(),
+            (true, _) => Some(caller.scope()),
+            (false, Caller::User) => None,
+            (false, _) if task.paused_by.as_deref() == Some(user.as_str()) => {
+                return Err(Error::rejected(
+                    "paused_by_user",
+                    format!("the user paused task {}; only the user resumes it", task.id),
+                ));
+            }
+            (false, _) => None,
+        };
+        cx.tx
+            .execute("UPDATE task SET paused = ?2, paused_by = ?3 WHERE id = ?1", params![task.id, self.paused, by])?;
         bump_revision(cx, &task.id)?;
         cx.emit("task.paused_changed", &task.id, json!({ "paused": self.paused }))?;
         Ok(())
@@ -649,7 +838,7 @@ impl Command for Abandon {
     }
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
-        caller.require_user()?;
+        caller.require_user_or_manager()?;
         let task = load_task(cx.tx, &self.task_id)?;
         require_open(&task)?;
         let dropped = undelivered_user_messages(cx.tx, &task.id)?;

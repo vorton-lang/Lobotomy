@@ -238,11 +238,19 @@ fn is_abnormal(turn: &Turn) -> bool {
     turn.state == TurnState::Ended && matches!(turn.outcome, Some(Outcome::Interrupted | Outcome::Failed))
 }
 
-/// The text written to the CLI's stdin: the bound messages in arrival order.
-pub fn compose_input(messages: &[Message]) -> String {
+/// The text written to the CLI's stdin: the bound messages in arrival order. The manager's input
+/// names each of the user's messages, so that she can quote it (manager-actions.md §1).
+pub fn compose_input(messages: &[Message], manager: bool) -> String {
     messages
         .iter()
-        .map(|m| format!("{}\n{}", prompts::header(prompts::sender(&m.source), m.task_id.as_deref()), m.body))
+        .map(|m| {
+            let from = prompts::sender(&m.source);
+            let header = match m.source == Caller::User.scope() && manager {
+                true => prompts::header_with_id(from, &m.id),
+                false => prompts::header(from, m.task_id.as_deref()),
+            };
+            format!("{header}\n{}", m.body)
+        })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -410,7 +418,8 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
         parts.push(turn.input.clone());
     }
     if !messages.is_empty() {
-        parts.push(compose_input(&messages));
+        let kind: String = cx.tx.query_row("SELECT kind FROM role WHERE name = ?1", [role], |r| r.get(0))?;
+        parts.push(compose_input(&messages, kind == "manager"));
     }
     if parts.is_empty() {
         return Err(Error::rejected("nothing_to_deliver", format!("{role} has no queued messages")));
@@ -436,11 +445,13 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     for m in &messages {
         cx.tx.execute("UPDATE message SET state = 'bound', turn_id = ?2 WHERE id = ?1", params![m.id, turn_id])?;
     }
-    // The executor's question stands until a message from the user goes to it. Once the message is
-    // bound, the executor gets it; if it still needs an answer, it asks again (#17).
+    // The executor's question stands until a message from the user, or from the manager who is its
+    // user (manager-actions.md §0), goes to it. Once the message is bound, the executor gets it; if
+    // it still needs an answer, it asks again (#17).
+    let answerers = [Caller::User.scope(), "manager".to_owned()];
     if let Some(task) = &task
         && task.blocked_reason.is_some()
-        && messages.iter().any(|m| m.source == Caller::User.scope())
+        && messages.iter().any(|m| answerers.contains(&m.source))
     {
         crate::report::set_blocked(cx, task, None)?;
     }

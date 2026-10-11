@@ -11,7 +11,7 @@ use common::*;
 use lobotomy_core::capture::stopped_capture;
 use lobotomy_core::id::now_ms;
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, current_config, load_project};
-use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, load_task, open_attempt};
+use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, SetPaused, load_task, open_attempt};
 use lobotomy_core::turn::{
     Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, SetRoleHarness, TurnState, hold, load_turn,
 };
@@ -21,7 +21,7 @@ use lobotomyd::host::Host;
 use lobotomyd::instance::Instance;
 use lobotomyd::project::Project;
 use lobotomyd::results::{failures, retry_failed};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The M1 chain: the user creates a task, Malkuth works in its slot and reports done, the runtime
 /// captures and verifies the candidate, the user accepts it, and the user's repository is
@@ -1179,12 +1179,25 @@ async fn a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown() {
 
 // ---- Angela (roadmap.md M4 step 1), on the fake Claude ----
 
-/// The user's message to Angela, as the window sends it.
-fn tell_angela(angela: &Instance, body: &str) {
+/// The user's message to Angela, as the window sends it; its id.
+fn tell_angela(angela: &Instance, body: &str) -> String {
     let message =
         SendMessage { request_id: format!("a-{body}"), role: "Angela".into(), task_id: None, body: body.into() };
-    angela.db.execute(&Caller::User, &message).unwrap();
+    let id = angela.db.execute(&Caller::User, &message).unwrap().id;
     angela.wake.notify_one();
+    id
+}
+
+/// Angela's turn after `previous`, once it ended.
+async fn angela_turn_after(angela: &Instance, previous: Option<&str>) -> lobotomy_core::turn::Turn {
+    wait_for("Angela's turn to end", || {
+        angela
+            .db
+            .read(|c| lobotomy_core::turn::last_turn(c, "Angela"))
+            .unwrap()
+            .filter(|t| t.state == TurnState::Ended && Some(t.id.as_str()) != previous)
+    })
+    .await
 }
 
 /// The replies of the Lobotomy tools Angela called in a turn, in order, as JSON.
@@ -1228,10 +1241,7 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
         format!(r#"FAKE:call=read_project{{"project_id":"{archived}"}}"#),
     ];
     tell_angela(&angela, &calls.join("\n"));
-    let turn = wait_for("Angela's turn to end", || {
-        angela.db.read(|c| lobotomy_core::turn::last_turn(c, "Angela")).unwrap().filter(|t| t.state == TurnState::Ended)
-    })
-    .await;
+    let turn = angela_turn_after(&angela, None).await;
     assert_eq!((turn.outcome, turn.workspace_id.as_deref()), (Some(Outcome::Completed), None));
     let args = last_args(&host_dir(dir.path()).join("angela").join("work"));
     assert!(after(&args, "--append-system-prompt").contains("你是 Angela"), "she runs in her own directory");
@@ -1267,5 +1277,65 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
     assert_eq!(events.len(), 3);
     assert_eq!(events[0]["caller"], "user");
     assert_eq!(gone["unavailable"], "已归档");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// The texts of the Lobotomy tools' replies in a turn, in order.
+fn reply_texts(db: &Db, turn: &str) -> Vec<String> {
+    db.read(|c| {
+        let mut stmt = c.prepare("SELECT content FROM item WHERE turn_id = ?1 AND kind = 'mcp_call' ORDER BY seq")?;
+        let rows = stmt.query_map([turn], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })
+    .unwrap()
+    .into_iter()
+    .map(|content| serde_json::from_str::<Value>(&content).unwrap()["result_text"].as_str().unwrap().to_owned())
+    .collect()
+}
+
+/// Angela acts in a project as `manager` (roadmap.md M4 step 2): her task carries the user's words
+/// she quoted by id, copied from her database with that id (data-model.md §10.6 跨库操作第 1 条);
+/// the user's pause stays until the user lifts it (roles-and-tasks.md §4).
+#[tokio::test]
+async fn angela_assigns_with_the_users_words_and_leaves_the_users_pause_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().expect("Angela opened");
+    let project = backend.project.clone();
+    let said = tell_angela(&angela, "启动太慢了，先看看为什么");
+    let first = angela_turn_after(&angela, None).await;
+    let held = create_task(&project.db, "先别动");
+    project
+        .db
+        .execute(&Caller::User, &SetPaused { request_id: "p1".into(), task_id: held.clone(), paused: true })
+        .unwrap();
+
+    let assign = json!({
+        "project_id": project.id, "role": "Malkuth", "title": "查清启动慢的原因", "quote": [said],
+        "interpretation": "先定位，不改代码", "actions": ["read_only"],
+        "stop_when": "找到第一个确定的原因就汇报", "done_when": "说明原因和证据",
+    });
+    let resume = json!({ "project_id": project.id, "task_id": held, "paused": false });
+    tell_angela(&angela, &format!("FAKE:call=assign{assign}\nFAKE:call=set_paused{resume}"));
+    let turn = angela_turn_after(&angela, Some(&first.id)).await;
+    let [assigned, refused] = reply_texts(&angela.db, &turn.id).try_into().expect("two replies");
+    assert!(assigned.starts_with("已派出任务 task_"), "{assigned}");
+    assert!(refused.contains("只有用户能恢复"), "{refused}");
+    assert!(project.db.read(|c| load_task(c, &held)).unwrap().paused);
+
+    let tasks = project.db.read(lobotomy_core::task::list_tasks).unwrap();
+    let task = tasks.iter().find(|t| t.assignment.is_some()).expect("her task");
+    assert!(task.body.contains("启动太慢了，先看看为什么"), "{}", task.body);
+    let (source, caller): (String, String) = project
+        .db
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT q.source_id, r.caller FROM quote q, command_record r WHERE q.task_id = ?1 AND r.name = 'assign'",
+                [&task.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!((source.as_str(), caller.as_str()), (said.as_str(), "manager"));
     backend.shutdown(Duration::from_secs(5)).await;
 }

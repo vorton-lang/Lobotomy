@@ -13,7 +13,7 @@ use super::{Attention, Overview, last_event};
 use crate::error::Result;
 use crate::project::load_project;
 use crate::report::{OrgReport, ReportEffect};
-use crate::task::{AttemptEnd, Phase, Task, Trial, list_attempts, load_task, undelivered_user_messages};
+use crate::task::{Assignment, AttemptEnd, Phase, Task, Trial, list_attempts, load_task, undelivered_user_messages};
 use crate::turn::{Hold, TurnState};
 use crate::verify::{VerificationState, evidence_is_stale, task_verifications};
 
@@ -56,8 +56,11 @@ pub struct TaskLine {
     pub title: String,
     pub executor: String,
     pub phase: Phase,
-    /// Paused by the user; the runtime does not move it on (roles-and-tasks.md §2.2).
+    /// Paused; the runtime does not move it on (roles-and-tasks.md §2.2).
     pub paused: bool,
+    /// Who paused it: `user` or `manager`. Only the user resumes what the user paused
+    /// (roles-and-tasks.md §4).
+    pub paused_by: Option<String>,
     /// The executor's question to the user.
     pub blocked_on: Option<String>,
     pub criteria_version: i64,
@@ -73,6 +76,7 @@ impl TaskLine {
             executor: task.executor.clone(),
             phase: task.phase,
             paused: task.paused,
+            paused_by: task.paused_by.clone(),
             blocked_on: task.blocked_reason.clone(),
             criteria_version: task.criteria_version,
             created_at: task.created_at,
@@ -156,8 +160,10 @@ pub struct TaskRead {
     pub as_of: i64,
     #[serde(flatten)]
     pub line: TaskLine,
-    /// The user's words that started it.
+    /// The user's words that started it; for a task the manager assigned, the words she quoted.
     pub body: String,
+    /// What the manager allowed and when to stop, for a task she assigned.
+    pub assignment: Option<Assignment>,
     /// The current completion criteria (data-model.md §4.4).
     pub criteria: String,
     pub attempts: Vec<AttemptRead>,
@@ -211,6 +217,8 @@ pub struct CheckLine {
 
 #[derive(Serialize)]
 pub struct ReportRead {
+    /// The report's id, for `[[att:…]]` (manager-actions.md §2.1).
+    pub id: String,
     pub at: i64,
     pub role: String,
     #[serde(flatten)]
@@ -268,6 +276,7 @@ pub fn task_read(conn: &Connection, task_id: &str) -> Result<TaskRead> {
         as_of: last_event(conn)?,
         line: TaskLine::of(&task),
         body: task.body.clone(),
+        assignment: task.assignment.clone(),
         criteria,
         attempts: reads,
         reports: reports(conn, task_id)?,
@@ -286,7 +295,7 @@ fn checks(conn: &Connection, verification_id: &str) -> Result<Vec<CheckLine>> {
 
 fn reports(conn: &Connection, task_id: &str) -> Result<Vec<ReportRead>> {
     let mut stmt = conn.prepare(
-        "SELECT c.created_at, t.role, c.args, c.result FROM command_record c JOIN turn t ON t.id = c.turn_id
+        "SELECT c.created_at, t.role, c.args, c.result, c.id FROM command_record c JOIN turn t ON t.id = c.turn_id
          WHERE c.name = 'org_report' AND t.task_id = ?1 ORDER BY c.created_at, c.id",
     )?;
     let rows = stmt.query_and_then([task_id], |r| -> Result<ReportRead> {
@@ -295,6 +304,7 @@ fn reports(conn: &Connection, task_id: &str) -> Result<Vec<ReportRead>> {
         // The report as the executor sent it, read back as the command took it.
         let report: OrgReport = serde_json::from_str(&args)?;
         Ok(ReportRead {
+            id: r.get(4)?,
             at: r.get(0)?,
             role: r.get(1)?,
             report: serde_json::to_value(report)?,
@@ -333,6 +343,7 @@ mod tests {
                 executor: "Malkuth".into(),
                 phase,
                 paused: false,
+                paused_by: None,
                 blocked_reason: None,
                 criteria_version: 1,
                 queue_pos: None,
@@ -340,6 +351,7 @@ mod tests {
                 created_at: 0,
                 closed_at,
                 origin_capture: None,
+                assignment: None,
             },
             attempt_seq: None,
             attempt_open: false,

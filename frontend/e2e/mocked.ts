@@ -16,17 +16,17 @@ export const role = (taskId: string | null): RoleView => ({
 });
 
 export const task = (id: string, title: string, phase: TaskView['phase'], undelivered = 0): TaskView => ({
-  id, title, body: '', executor: 'Malkuth', phase, paused: false, blocked_reason: null, criteria_version: 1,
-  queue_pos: null, revision: 1, created_at: 1, closed_at: phase === 'done' ? 9 : null, origin_capture: null,
+  id, title, body: '', executor: 'Malkuth', phase, paused: false, paused_by: null, blocked_reason: null, criteria_version: 1,
+  queue_pos: null, revision: 1, created_at: 1, closed_at: phase === 'done' ? 9 : null, origin_capture: null, assignment: null,
   attempt_seq: phase === 'queued' ? null : 1, attempt_open: phase === 'executing', verification: null,
   undelivered_messages: undelivered,
 });
 
 /** A task whose first round's candidate passed verification. */
 export const detail = (view: TaskView, undelivered: TaskDetail['undelivered_messages'] = []): TaskDetail => {
-  const { id, title, body, executor, phase, paused, blocked_reason, criteria_version, queue_pos, revision, created_at, closed_at, origin_capture } = view;
+  const { attempt_seq: _seq, attempt_open: _open, verification: _verification, undelivered_messages: _undelivered, ...task } = view;
   return {
-    task: { id, title, body, executor, phase, paused, blocked_reason, criteria_version, queue_pos, revision, created_at, closed_at, origin_capture },
+    task,
     criteria: [{ version: 1, text: 'work.txt 存在', created_by: 'user', created_at: 1 }],
     attempts: [{
       id: `a-${view.id}`, task_id: view.id, seq: 1, started_at: 1, ended_at: 2, end_reason: 'candidate', code_start: null,
