@@ -8,6 +8,7 @@ import type { ProjectStatus } from '../api/types';
 import { act, selectProject, totalAttention, useStore } from '../store';
 import { Modal } from './common';
 import { ConnectRepo } from './ConnectRepo';
+import { StatusPill } from './Status';
 
 function Count({ n }: { n: number }) {
   return n > 0 ? <span className="count">{n}</span> : null;
@@ -60,7 +61,7 @@ function ProjectItem({ project: p, selected }: { project: ProjectStatus; selecte
     return (
       <div className="project-item failed" title={p.repo_path}>
         <span className="project-name">{p.name}</span>
-        <span className="badge">打不开</span>
+        <StatusPill look="fail">打不开</StatusPill>
         <p className="muted failure">{p.error}</p>
         <div className="actions">
           <button className="small" onClick={() => act('retry_open', { project_id: p.id })}>

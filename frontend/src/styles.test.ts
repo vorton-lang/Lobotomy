@@ -37,6 +37,7 @@ const TEXT: [string, string[]][] = [
   ['fail', ['bg', 'bg-rail', 'panel', 'fail-soft']],
   ['done', ['bg', 'bg-rail', 'panel', 'done-soft']],
 ];
+for (let i = 0; i < 6; i++) TEXT.push([`role-${i}`, ['bg', 'bg-rail', 'panel']], ['on-role', [`role-${i}`]]);
 const MARKS: [string, string[]][] = [
   ['focus', ['bg', 'bg-rail', 'panel']],
   ['run-solid', ['bg', 'bg-rail', 'panel']],

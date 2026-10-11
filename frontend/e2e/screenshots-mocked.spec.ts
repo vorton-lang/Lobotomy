@@ -3,7 +3,7 @@
 // without the variable it is skipped. screenshots.spec.ts covers flows with the real backend.
 
 import { expect, test, type Page } from '@playwright/test';
-import type { AngelaStatus, Attention, HostSnapshot, Snapshot } from '../src/api/types';
+import type { AngelaStatus, Attention, HostSnapshot, Snapshot, Turn } from '../src/api/types';
 import { detail, role, task } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
@@ -38,20 +38,24 @@ const angelaSnapshot: Snapshot = {
     },
   },
 };
+// Binah's turn has run 14 minutes and shown nothing new for 12.
 const projectSnapshot = (id: string): Snapshot => ({
-  seq: 1, quota: [], harnesses: [], live: {},
+  seq: 1, quota: [], harnesses: [],
+  live: { p2: { role: 'Binah', started_at: ago(14), items: { x: { kind: 'agent_message', started_at: ago(12), content: { text: '先看登录表单的校验……' } } } } },
   config: { version: 1, config: { checks: [{ command: 'npm test', timeout_secs: 600 }], excluded: [], force_tracked: [], max_new_files: 1000, max_new_bytes: 50 << 20 } },
   project: { id, repo_path: `C:\\code\\${id}`, branch: 'main', author_name: 'Test', author_email: 'test@example.com', integration: 'base0000', integration_rev: 3, previewed: 'base0000' },
-  roles: [role('task1'), { ...role('task2'), name: 'Binah', harness: 'claude' }],
-  tasks: [exported, login, queued],
+  roles: [role('task1'), { ...role('task2'), name: 'Binah', harness: 'claude', unfinished: turn('p2', 'Binah', 14, null, 'task2') }],
+  tasks: [exported, { ...login, executor: 'Binah' }, queued],
   attention: [accept],
 });
 
-const turn = (id: string, who: string, started: number, ended: number | null, taskId: string | null = null) => ({
-  id, role: who, harness: 'claude', task_id: taskId, attempt_id: null, input: '', state: ended === null ? 'running' : 'ended',
-  outcome: ended === null ? null : 'completed', failure: null, pid: null, done_at: null,
-  registered_at: ago(started), started_at: ago(started), ended_at: ended === null ? null : ago(ended),
-});
+function turn(id: string, who: string, started: number, ended: number | null, taskId: string | null = null): Turn {
+  return {
+    id, role: who, harness: 'claude', task_id: taskId, attempt_id: null, input: '', state: ended === null ? 'running' : 'ended',
+    outcome: ended === null ? null : 'completed', failure: null, pid: null, done_at: null,
+    registered_at: ago(started), started_at: ago(started), ended_at: ended === null ? null : ago(ended),
+  };
+}
 const message = (id: string, who: string, source: string, turnId: string | null, minutes: number, body: string, replyTo: string | null = null) => ({
   id, seq: 0, role: who, source, task_id: null, body, turn_id: turnId, created_at: ago(minutes), reply_to: replyTo,
 });

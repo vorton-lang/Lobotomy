@@ -41,7 +41,15 @@
   --done-line: #94ce9a;
 
   --mine: #edf2fe; /* indigo 3: the user's own messages */
-  --agent: #21201c;
+  /* Roles (§3 "角色身份"): step 11 of plum, teal (darkened to read on sand 2), brown, violet,
+     pink and cyan; a role's name in its color, its initial on it. */
+  --role-0: #953ea3;
+  --role-1: #00796a;
+  --role-2: #815e46;
+  --role-3: #6550b9;
+  --role-4: #c2298a;
+  --role-5: #107d98;
+  --on-role: #ffffff;
   --scrim: rgb(17 17 16 / 0.32);
   --highlight: rgb(255 197 61 / 0.45);
   --highlight-current: rgb(255 138 0 / 0.65);
@@ -113,7 +121,13 @@
     --done-line: #366740;
 
     --mine: #182449;
-    --agent: #eeeeec;
+    --role-0: #e796f3;
+    --role-1: #0bd8b6;
+    --role-2: #dbb594;
+    --role-3: #baa7ff;
+    --role-4: #ff8dcc;
+    --role-5: #4ccce6;
+    --on-role: #111110;
     --scrim: rgb(0 0 0 / 0.5);
     --highlight: rgb(255 197 61 / 0.35);
     --highlight-current: rgb(255 138 0 / 0.6);
@@ -696,9 +710,10 @@ button.project-item.selected:hover:not(:disabled) {
   background: var(--panel);
   border: 1px solid var(--line);
 }
-.message.other .who {
-  color: var(--agent);
-  font-weight: 600;
+.message .who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .message.queued {
   opacity: 0.65;
@@ -979,16 +994,145 @@ button.project-item.selected:hover:not(:disabled) {
 
 .role-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 4px 0 8px;
+  gap: 4px 6px;
+  padding: 4px 0 6px;
 }
-.role-line > .muted {
+.role-line > .status-text {
   margin-left: auto;
+  font-size: var(--text-sm);
+}
+/* A role's color, its initial and its name (components/Status.tsx). */
+.role-0 {
+  --role: var(--role-0);
+}
+.role-1 {
+  --role: var(--role-1);
+}
+.role-2 {
+  --role: var(--role-2);
+}
+.role-3 {
+  --role: var(--role-3);
+}
+.role-4 {
+  --role: var(--role-4);
+}
+.role-5 {
+  --role: var(--role-5);
 }
 .role-name {
-  color: var(--agent);
+  color: var(--role, var(--text));
   font-weight: 600;
+}
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--role, var(--faint));
+  color: var(--on-role);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+.role-group + .role-group {
+  margin-top: 4px;
+}
+/* The tasks a role works on line up under its name, past its avatar. */
+.role-group .task-line {
+  margin-left: 26px;
+}
+
+/* The five looks of a state (format.ts `Look`): a pill for a short state, a mark and words for a
+   sentence. Each look has its own mark, so the state reads without color; only `run` moves. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: var(--text-xs);
+  line-height: 18px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  user-select: none;
+  color: var(--muted);
+  background: var(--sunken);
+}
+.pill.run {
+  color: var(--run);
+  background: var(--run-soft);
+}
+.pill.wait {
+  color: var(--text);
+  background: var(--wait-soft);
+}
+.pill.fail {
+  color: var(--fail);
+  background: var(--fail-soft);
+}
+.pill.done {
+  color: var(--done);
+  background: var(--done-soft);
+}
+.status-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+}
+.status-text.fail {
+  color: var(--fail);
+}
+span.mark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+svg.mark {
+  flex: none;
+}
+.run > span.mark {
+  background: var(--run-solid);
+  animation: pulse 2s ease-in-out infinite;
+}
+.wait > span.mark {
+  background: none;
+  border: 2px solid var(--wait);
+}
+.done > svg.mark {
+  color: var(--done);
+}
+.fail > svg.mark {
+  color: var(--fail);
+}
+.dot.running {
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run > span.mark,
+  .dot.running {
+    animation: none;
+  }
+}
+.quiet-note {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: 2px 12px;
 }
 .task-line {
   display: flex;
@@ -1024,16 +1168,6 @@ button.project-item.selected:hover:not(:disabled) {
 }
 .reorder button {
   padding: 2px;
-}
-.phase.executing {
-  color: var(--run);
-}
-.phase.accepting {
-  color: var(--done);
-}
-.phase.abandoned,
-.phase.done {
-  color: var(--muted);
 }
 
 .task-panel {

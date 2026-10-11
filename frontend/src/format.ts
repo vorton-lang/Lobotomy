@@ -40,6 +40,74 @@ export const PHASE_LABEL: Record<Phase, string> = {
   abandoned: '已放弃',
 };
 
+/**
+ * The five looks of a state (ui-ux-plan.md §3 "状态"): each has its own shape, color and words,
+ * so the state reads without color. Only `run` moves.
+ */
+export type Look = 'run' | 'wait' | 'fail' | 'done' | 'idle';
+
+export const PHASE_LOOK: Record<Phase, Look> = {
+  queued: 'idle',
+  executing: 'run',
+  verifying: 'run',
+  accepting: 'wait',
+  done: 'done',
+  abandoned: 'idle',
+};
+
+/** The look of what `roleActivity` says, case by case. */
+export function roleLook(role: RoleView, task: TaskView | undefined): Look {
+  const turn = role.unfinished;
+  if (turn) return turn.state === 'unknown' ? 'wait' : 'run';
+  if (role.hold) return role.hold.kind === 'abnormal' ? 'fail' : 'wait';
+  if (role.outside || role.stalled) return 'wait';
+  if (role.workspace?.state === 'materializing') return 'run';
+  if (task?.phase === 'executing' && task.blocked_reason) return task.reply_queued ? 'idle' : 'wait';
+  return task ? PHASE_LOOK[task.phase] : 'idle';
+}
+
+export function turnLook(turn: Turn): Look {
+  if (turn.state === 'registered' || turn.state === 'running') return 'run';
+  if (turn.state === 'unknown') return 'wait';
+  return turn.outcome === 'completed' ? 'idle' : 'fail';
+}
+
+/** Roles with a color of their own; any other role gets one by its name. Six colors in all. */
+const ROLE_HUE: Record<string, number> = { Angela: 0, Malkuth: 1, Binah: 2, Yesod: 3 };
+
+export function roleHue(name: string): number {
+  if (name in ROLE_HUE) return ROLE_HUE[name];
+  let hash = 0;
+  for (const c of name) hash = (hash * 31 + c.codePointAt(0)!) >>> 0;
+  return hash % 6;
+}
+
+/**
+ * How long a running turn has shown nothing new, said once it is two minutes or more. A fact, not
+ * a verdict that the turn is stuck: a model may think that long (ui-ux-plan.md §8 第 1 条).
+ */
+export function quietFor(lastAt: number | undefined, now: number): string | null {
+  if (lastAt === undefined) return null;
+  const minutes = Math.floor((now - lastAt) / 60_000);
+  return minutes >= 2 ? `${minutes} 分钟没有新输出` : null;
+}
+
+/** What changes as a live item grows: its kind, the size of its texts, and its status. */
+export function liveSize(item: LiveItem): string {
+  const content = item.content as Record<string, unknown>;
+  let size = 0;
+  for (const value of Object.values(content)) {
+    if (typeof value === 'string') size += value.length;
+    else if (isBlob(value)) size += value.size;
+  }
+  return `${item.kind}:${size}:${content.status ?? ''}`;
+}
+
+/** A command or tool of the running turn is still at work; it shows its own running time. */
+export function toolRunning(turn: LiveTurn | undefined): boolean {
+  return Object.values(turn?.items ?? {}).some((item) => (item.content as { status?: string }).status === 'in_progress');
+}
+
 export const VERIFICATION_LABEL: Record<Verification['state'], string> = { running: '进行中', passed: '通过', failed: '未通过' };
 
 export const PERMISSION_LABEL: Record<Permission, string> = { full: '完全放开', auto_review: '自动审批' };
@@ -433,7 +501,8 @@ export type Row =
   | { key: string; kind: 'input'; turn: Turn; note: string }
   /** `fold`: a done report that the turn's last message sums up again; its body starts folded (#18). */
   | { key: string; kind: 'item'; item: Item; fold: boolean }
-  | { key: string; kind: 'live'; turnId: string; itemId: string; item: LiveItem }
+  /** `last`: the running turn's newest item, under which a quiet turn says so. */
+  | { key: string; kind: 'live'; turnId: string; itemId: string; item: LiveItem; last: boolean }
   | { key: string; kind: 'running'; turnId: string; role: string; since: number }
   | { key: string; kind: 'queued'; message: Message };
 
@@ -469,7 +538,9 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
     if (turn.role !== thread.role) continue;
     const items = Object.entries(turn.items);
     if (items.length === 0) rows.push({ key: `running-${turnId}`, kind: 'running', turnId, role: turn.role, since: turn.started_at });
-    for (const [itemId, item] of items) rows.push({ key: `live-${turnId}-${itemId}`, kind: 'live', turnId, itemId, item });
+    items.forEach(([itemId, item], i) =>
+      rows.push({ key: `live-${turnId}-${itemId}`, kind: 'live', turnId, itemId, item, last: i === items.length - 1 }),
+    );
   }
   for (const message of thread.queued) rows.push({ key: `queued-${message.id}`, kind: 'queued', message });
   return rows;

@@ -33,8 +33,14 @@ import {
   firstLines,
   fits,
   lastLines,
+  liveSize,
   previewLine,
+  quietFor,
   roleActivity,
+  roleHue,
+  roleLook,
+  toolRunning,
+  turnLook,
   splitReply,
   stoppedPaths,
   textOf,
@@ -412,6 +418,48 @@ describe('roleActivity', () => {
     expect(roleActivity(role({}), { ...asked, reply_queued: true }, 0)).toBe('回复在排队，下一个 turn 交给它');
     const registered = { ...turn('t'), state: 'registered' as const, outcome: null };
     expect(roleActivity(role({ unfinished: registered }), asked, 0)).toBe('即将开始 turn');
+  });
+
+  it('has a look for each case: only work in progress runs, only what needs the user waits', () => {
+    const running = { ...turn('t'), state: 'running' as const, outcome: null };
+    expect(roleLook(role({ unfinished: running }), undefined)).toBe('run');
+    expect(roleLook(role({ unfinished: { ...running, state: 'unknown' } }), undefined)).toBe('wait');
+    const ended = { ...turn('t'), state: 'ended' as const, outcome: 'failed' as const };
+    expect(roleLook(role({ hold: { kind: 'abnormal', turn: ended } }), undefined)).toBe('fail');
+    expect(roleLook(role({ hold: { kind: 'session_unidentified', session_id: 's' } }), undefined)).toBe('wait');
+    const asked = { ...taskView('executing'), blocked_reason: '空值怎么处理？' };
+    expect(roleLook(role({}), asked)).toBe('wait');
+    expect(roleLook(role({}), { ...asked, reply_queued: true })).toBe('idle');
+    expect(roleLook(role({}), taskView('accepting'))).toBe('wait');
+    expect(roleLook(role({}), taskView('verifying'))).toBe('run');
+    expect(roleLook(role({}), undefined)).toBe('idle');
+    expect(turnLook(ended)).toBe('fail');
+    expect(turnLook({ ...ended, outcome: 'completed' })).toBe('idle');
+  });
+});
+
+describe('who a role is and how long its turn is quiet', () => {
+  it('gives each named role its color and any other role one by its name', () => {
+    expect([roleHue('Angela'), roleHue('Malkuth'), roleHue('Binah'), roleHue('Yesod')]).toEqual([0, 1, 2, 3]);
+    expect(roleHue('Hod')).toBe(roleHue('Hod'));
+    expect(roleHue('Hod')).toBeGreaterThanOrEqual(0);
+    expect(roleHue('Hod')).toBeLessThan(6);
+  });
+
+  it('says a turn is quiet only after two minutes without anything new', () => {
+    expect(quietFor(undefined, 1e9)).toBeNull();
+    expect(quietFor(0, 119_000)).toBeNull();
+    expect(quietFor(0, 12 * 60_000 + 5_000)).toBe('12 分钟没有新输出');
+  });
+
+  it('tells a live item that grew from one that did not, and a running tool', () => {
+    const text = (t: string, status?: string) => ({ kind: 'agent_message' as const, started_at: 1, content: { text: t, ...(status && { status }) } });
+    expect(liveSize(text('ab'))).not.toBe(liveSize(text('abc')));
+    expect(liveSize(text('ab'))).toBe(liveSize(text('xy')));
+    const command = { kind: 'command' as const, started_at: 1, content: { command: 'npm test', output: null, status: 'in_progress' } };
+    expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: text('hi'), b: command } })).toBe(true);
+    expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: text('hi') } })).toBe(false);
+    expect(toolRunning(undefined)).toBe(false);
   });
 });
 

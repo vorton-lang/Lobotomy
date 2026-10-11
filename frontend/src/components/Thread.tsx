@@ -13,6 +13,7 @@ import { loadOlder, matchRowKey, setFollowing, useStore } from '../store';
 import { ICON, Markdown } from './common';
 import { ItemView, LiveItemView, RunningView } from './ItemView';
 import { ForwardTags, ReplyLine } from './Reply';
+import { Author, QuietNote } from './Status';
 
 const AT_END_SLACK = 48;
 
@@ -170,9 +171,19 @@ function RowView({
     case 'item':
       return <ItemView item={row.item} role={role} commands={commands} fold={row.fold} />;
     case 'live':
-      return <LiveItemView item={row.item} role={role} />;
+      return (
+        <>
+          <LiveItemView item={row.item} role={role} />
+          {row.last && <QuietNote turnId={row.turnId} />}
+        </>
+      );
     case 'running':
-      return <RunningView role={row.role} since={row.since} />;
+      return (
+        <>
+          <RunningView role={row.role} since={row.since} />
+          <QuietNote turnId={row.turnId} />
+        </>
+      );
   }
 }
 
@@ -197,7 +208,7 @@ function MessageView({ source, body, message, queued }: { source: string; body: 
   return (
     <div className={`message ${source === 'user' ? 'mine' : 'other'} ${queued ? 'queued' : ''}`}>
       <div className="who">
-        {sourceLabel(source)}
+        {source === 'user' ? sourceLabel(source) : <Author name={sourceLabel(source)} />}
         {queued && <span className="muted"> · 排队中，下一个 turn 投递</span>}
       </div>
       {message?.reply_to && <ReplyLine id={message.reply_to} />}

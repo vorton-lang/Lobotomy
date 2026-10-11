@@ -6,6 +6,7 @@ import { asReport, commandSummary, elapsed, previewLine, REPORT_LABEL, textOf, t
 import { setReplyTo, useStore } from '../store';
 import { Markdown, Output, useNow } from './common';
 import { Reply } from './Reply';
+import { Author } from './Status';
 
 /** `fold`: the item is a report whose body a later message repeats; the body starts folded (#18). */
 export function ItemView({
@@ -116,7 +117,7 @@ function AgentMessage({ id, role, text }: { id: string; role: string; text: stri
   return (
     <div className="message other">
       <div className="who">
-        {role}
+        <Author name={role} />
         {angela && (
           <button className="link reply-to" onClick={() => setReplyTo({ id, text: previewLine(text) })}>
             回复
@@ -204,7 +205,9 @@ export function LiveItemView({ item, role }: { item: LiveItem; role: string }) {
     case 'agent_message':
       return (
         <div className="message other live">
-          <div className="who">{role}</div>
+          <div className="who">
+            <Author name={role} />
+          </div>
           <Markdown text={textOf(item.content.text)} streaming />
         </div>
       );

@@ -4,10 +4,11 @@
 import { useState } from 'react';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import type { RoleView, TaskView } from '../api/types';
-import { harnessName, PHASE_LABEL, roleActivity } from '../format';
+import { harnessName, PHASE_LABEL, PHASE_LOOK, roleActivity, roleLook } from '../format';
 import { run, selectTask, useMainRole, useStore } from '../store';
 import { ICON, useNow } from './common';
 import { NewTask } from './NewTask';
+import { RoleAvatar, RoleName, StatusPill, StatusText, useQuiet } from './Status';
 
 export function Workboard() {
   const roles = useStore((s) => s.snapshot?.roles ?? []);
@@ -26,12 +27,22 @@ export function Workboard() {
           + 新任务
         </button>
       </h3>
+      {/* The tasks in work sit under the role that works on them. */}
       {roles.map((role) => (
-        <RoleLine key={role.name} role={role} task={tasks.find((t) => t.id === role.task_id)} />
+        <div key={role.name} className="role-group">
+          <RoleLine role={role} task={tasks.find((t) => t.id === role.task_id)} />
+          {active
+            .filter((t) => t.executor === role.name)
+            .map((t) => (
+              <TaskLine key={t.id} task={t} />
+            ))}
+        </div>
       ))}
-      {active.map((t) => (
-        <TaskLine key={t.id} task={t} />
-      ))}
+      {active
+        .filter((t) => !roles.some((r) => r.name === t.executor))
+        .map((t) => (
+          <TaskLine key={t.id} task={t} />
+        ))}
       {queued.length > 0 && <h4>排队</h4>}
       {queued.map((t, i) => (
         <TaskLine key={t.id} task={t} queue={{ index: i, length: queued.length }} />
@@ -48,14 +59,20 @@ export function Workboard() {
 }
 
 function RoleLine({ role, task }: { role: RoleView; task: TaskView | undefined }) {
-  const now = useNow(role.unfinished?.state === 'running');
+  const running = role.unfinished?.state === 'running';
+  const now = useNow(running);
+  const quiet = useQuiet(running ? role.unfinished!.id : undefined);
   return (
     <div className="role-line">
-      <span className="role-name">{role.name}</span>
+      <RoleAvatar name={role.name} />
+      <RoleName name={role.name} />
       <span className="badge" title="这个角色使用的 harness，可在 ⚙ 设置中切换">
         {harnessName(role.harness)}
       </span>
-      <span className="muted">{roleActivity(role, task, now)}</span>
+      <StatusText look={roleLook(role, task)}>
+        {roleActivity(role, task, now)}
+        {quiet && ` · ${quiet}`}
+      </StatusText>
     </div>
   );
 }
@@ -67,7 +84,9 @@ function TaskLine({ task, queue }: { task: TaskView; queue?: { index: number; le
   return (
     <div className={`task-line ${selected ? 'selected' : ''}`}>
       <button className="task-open" onClick={() => selectTask(task.id)} aria-current={selected || undefined}>
-        <span className={`badge phase ${task.phase}`}>{PHASE_LABEL[task.phase]}</span>
+        <StatusPill look={PHASE_LOOK[task.phase]} className={`phase ${task.phase}`}>
+          {PHASE_LABEL[task.phase]}
+        </StatusPill>
         <span className="task-title">{task.title}</span>
         {task.paused && <span className="badge">已暂停</span>}
         {task.attempt_seq && task.attempt_seq > 1 && <span className="muted">第 {task.attempt_seq} 轮</span>}

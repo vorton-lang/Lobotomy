@@ -13,6 +13,7 @@ import {
   clock,
   deliveryReport,
   PHASE_LABEL,
+  PHASE_LOOK,
   shortSha,
   taskNow,
   timeline,
@@ -24,6 +25,7 @@ import { run, selectTask, useStore } from '../store';
 import { ICON, Markdown, Modal, Output } from './common';
 import { DiffPool, DiffView } from './DiffView';
 import { Sash, useWidth } from './Sash';
+import { StatusPill } from './Status';
 import { TrialControls } from './TrialControls';
 
 export function TaskPanel({ taskId }: { taskId: string }) {
@@ -73,7 +75,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
     <section className="task-panel" aria-label={task.title} style={{ width: `min(${column.width}px, 100%)` }}>
       <Sash label="任务面板的宽度" edge="left" column={column} />
       <header>
-        <span className={`badge phase ${task.phase}`}>{PHASE_LABEL[task.phase]}</span>
+        <StatusPill look={PHASE_LOOK[task.phase]} className={`phase ${task.phase}`}>
+          {PHASE_LABEL[task.phase]}
+        </StatusPill>
         <h2>{task.title}</h2>
         <button className="icon" onClick={close} aria-label="关闭">
           <X {...ICON} />

@@ -23,6 +23,7 @@ import type {
   ThreadPage,
   Turn,
 } from './api/types';
+import { liveSize } from './format';
 
 export interface ThreadState {
   role: string;
@@ -414,7 +415,29 @@ async function loadSnapshot() {
   const snapshot = await call<Snapshot>('snapshot');
   if (request < appliedSnapshot || !showing(project)) return;
   appliedSnapshot = request;
-  useStore.setState({ snapshot, live: snapshot.live });
+  useStore.setState({ snapshot });
+  setLive(snapshot.live);
+}
+
+/**
+ * When each running turn last showed something new, for "N 分钟没有新输出" (`quietFor`). A turn
+ * first seen is dated by its newest item; after that, by when this window saw its items change.
+ */
+const liveSeen = new Map<string, { size: string; at: number }>();
+
+export const lastOutputAt = (turnId: string): number | undefined => liveSeen.get(turnId)?.at;
+
+function setLive(live: Record<string, LiveTurn>) {
+  const now = Date.now();
+  for (const [id, turn] of Object.entries(live)) {
+    const items = Object.values(turn.items);
+    const size = items.map(liveSize).join(',');
+    const seen = liveSeen.get(id);
+    if (!seen) liveSeen.set(id, { size, at: Math.max(turn.started_at, ...items.map((i) => i.started_at)) });
+    else if (seen.size !== size) liveSeen.set(id, { size, at: now });
+  }
+  for (const id of liveSeen.keys()) if (!(id in live)) liveSeen.delete(id);
+  useStore.setState({ live });
 }
 
 /** The newest page replaces the thread; the list follows its end again. */
@@ -665,7 +688,7 @@ function onPush(push: Push) {
       if (push.role === useStore.getState().thread.role) refreshThread();
       break;
     case 'live':
-      useStore.setState({ live: push.live });
+      setLive(push.live);
       break;
     // A host setting or the project list changed; neither has an event of its own.
     case 'host':
