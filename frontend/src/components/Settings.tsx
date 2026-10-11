@@ -141,8 +141,9 @@ const lines = (text: string) =>
 
 export function Settings({ onClose }: { onClose: () => void }) {
   const current = useStore((s) => (s.project === null ? undefined : s.snapshot?.config));
-  const harnesses = useStore((s) => s.host?.harnesses ?? []);
-  const roles = useStore((s) => s.snapshot?.roles ?? []);
+  // Keep selector results stable when 「全部」 or archiving leaves no project snapshot.
+  const harnesses = useStore((s) => s.host?.harnesses) ?? [];
+  const roles = useStore((s) => s.snapshot?.roles) ?? [];
   // The version the form was filled from. A version saved meanwhile, in another window, makes the
   // backend refuse this save instead of being written over (#16).
   const [version] = useState(() => current?.version ?? 0);
