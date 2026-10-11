@@ -12,6 +12,8 @@ import type {
   CommandRecord,
   Domain,
   Item,
+  LedgerEntry,
+  LedgerKind,
   LiveItem,
   LiveTurn,
   Message,
@@ -141,6 +143,18 @@ export function sourceLabel(source: string): string {
 }
 
 export const ACTION_LABEL: Record<Action, string> = { read_only: '只读调查', edit_docs: '改文档', edit_code: '改代码' };
+
+export const LEDGER_LABEL: Record<LedgerKind, string> = {
+  goal: '目标',
+  phase: '阶段',
+  decision: '决定',
+  constraint: '约束',
+  open_question: '待定',
+  hypothesis: '推测',
+};
+
+/** An entry still holds: no newer one superseded it, and its task's constraint has not lapsed. */
+export const ledgerHolds = (e: LedgerEntry): boolean => e.superseded_by === null && !e.lapsed;
 
 /** A piece of Angela's reply: her own text, or a reference the runtime renders (manager-actions.md §2.1). */
 export type ReplyPart = { kind: 'text'; text: string } | { kind: 'quote' | 'att'; id: string };

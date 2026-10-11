@@ -149,6 +149,31 @@ export type AttachmentView = { project: string; project_name: string } & (
     }
 );
 
+export type LedgerKind = 'goal' | 'phase' | 'decision' | 'constraint' | 'open_question' | 'hypothesis';
+
+/** An entry of Angela's ledger (manager-actions.md §3) and whether it still holds. */
+export interface LedgerEntry {
+  id: string;
+  kind: LedgerKind;
+  statement: string;
+  task_id: string | null;
+  task_title: string | null;
+  confidence: string | null;
+  supersedes: string | null;
+  superseded_by: string | null;
+  /** A constraint of a task that has closed. */
+  lapsed: boolean;
+  /** The user's words it rests on. */
+  evidence: { source_id: string; said_at: number; body: string }[];
+  created_at: number;
+}
+
+/** Her ledger by scope: the user's, and each project's with its tasks'. */
+export interface Ledgers {
+  user: LedgerEntry[];
+  projects: { id: string; name: string; entries: LedgerEntry[]; unavailable: string | null }[];
+}
+
 /** A reference the runtime rendered, or why it shows nothing. */
 export type Resolved<T> = T | { error: string };
 

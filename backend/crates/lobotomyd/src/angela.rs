@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use lobotomy_core::ledger::ledger_lines;
 use lobotomy_core::manager::{Cursor, TellManager, cursors};
 use lobotomy_core::task::queued_messages;
-use lobotomy_core::turn::{MarkUnfinishedUnknown, RegisterTurn, unfinished_turn};
+use lobotomy_core::turn::{MarkUnfinishedUnknown, RegisterTurn, current_session, unfinished_turn};
 use lobotomy_core::view::manager::{ChangesRead, changes_since, project_read, settled};
 use lobotomy_core::view::overview;
 use lobotomy_harness::{Harness, MCP_SERVER};
@@ -165,8 +166,23 @@ struct Seen {
 /// for the first time starts her cursor at its present. Nothing is told while her turn runs: it
 /// comes with her next one.
 async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
-    let (inbox, running, cursors) = db(instance, |db| {
-        db.read(|c| Ok((!queued_messages(c, ROLE)?.is_empty(), unfinished_turn(c, ROLE)?.is_some(), cursors(c)?)))
+    let (inbox, running, fresh, cursors) = db(instance, |db| {
+        db.read(|c| {
+            Ok((
+                !queued_messages(c, ROLE)?.is_empty(),
+                unfinished_turn(c, ROLE)?.is_some(),
+                // Her next turn starts a session: none yet, or a new one without turns.
+                match current_session(c, ROLE, None)? {
+                    None => true,
+                    Some(s) => {
+                        !c.query_row("SELECT EXISTS (SELECT 1 FROM turn WHERE native_session_id = ?1)", [&s.id], |r| {
+                            r.get::<_, bool>(0)
+                        })?
+                    }
+                },
+                cursors(c)?,
+            ))
+        })
     })
     .await?;
     if running {
@@ -236,10 +252,15 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
         }
         moved.push(Cursor { project_id: s.id.clone(), seq: changes.as_of });
     }
-    if moved.is_empty() {
+    // A new session of hers starts from her ledger: what holds, for her to resume from
+    // (manager-actions.md §3.4).
+    let runs = !woken.is_empty() || inbox;
+    let recalled = if runs && fresh { recall(instance, projects).await? } else { None };
+    if moved.is_empty() && recalled.is_none() {
         return Ok(());
     }
     let summary = match woken.as_slice() {
+        [] if sections.is_empty() => "你的记录".to_owned(),
         [] => "各项目自上次以来的变化".to_owned(),
         woken => {
             let states: Vec<String> =
@@ -247,9 +268,35 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
             states.join("；")
         }
     };
+    sections.splice(0..0, recalled);
     let body = (!sections.is_empty()).then(|| format!("{summary}\n\n{}", sections.join("\n\n")));
     runtime(instance, TellManager { role: ROLE.into(), body, cursors: moved }).await?;
     Ok(())
+}
+
+/// Her ledger in the first input of a new session: the entries that hold, by scope, hypotheses
+/// apart (manager-actions.md §3.4). `None` when it is empty.
+async fn recall(instance: &Instance, projects: &Projects) -> anyhow::Result<Option<String>> {
+    let ledgers = crate::mcp::angela::ledgers(instance, projects, None, true).await?;
+    let mut scopes = Vec::new();
+    let user = ledger_lines(&ledgers.user);
+    if !user.is_empty() {
+        scopes.push(format!("用户范围：\n{}", bullets(&user)));
+    }
+    for p in &ledgers.projects {
+        let lines = ledger_lines(&p.entries);
+        match &p.unavailable {
+            Some(why) => scopes.push(format!("{}（{}）：读不到，{why}", p.name, p.id)),
+            None if !lines.is_empty() => scopes.push(format!("{}（{}）：\n{}", p.name, p.id, bullets(&lines))),
+            None => {}
+        }
+    }
+    Ok((!scopes.is_empty())
+        .then(|| format!("## 你的记录（新会话开始，由运行时放入；用 read_ledger 查看全部）\n{}", scopes.join("\n"))))
+}
+
+fn bullets(lines: &[String]) -> String {
+    lines.iter().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n")
 }
 
 #[cfg(test)]

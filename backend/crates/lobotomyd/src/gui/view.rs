@@ -60,6 +60,8 @@ pub async fn answer_angela(
     match method {
         "snapshot" => Ok(serde_json::to_value(angela_snapshot(angela).await?)?),
         "refs" => Ok(serde_json::to_value(refs(angela, projects, serde_json::from_value(params)?).await?)?),
+        // The read-only "共识" view: her ledger without her hypotheses (manager-actions.md §3.3).
+        "ledger" => Ok(serde_json::to_value(crate::mcp::angela::ledgers(angela, projects, None, false).await?)?),
         _ => transcript(angela, method, params).await,
     }
 }

@@ -11,6 +11,7 @@ import type {
   Item,
   LiveTurn,
   Message,
+  Ledgers,
   Permission,
   Push,
   Refs,
@@ -92,6 +93,8 @@ interface State {
   search: SearchState | null;
   /** The references in Angela's replies, as the runtime renders them (`wantRefs`). */
   refs: Refs;
+  /** Angela's ledger while the "共识" view shows it (`watchLedger`). */
+  ledger: Ledgers | null;
 }
 
 /** The role whose thread fills the main area. M1 has one, its executor (frontend.md §2 "M1 的布局"). */
@@ -131,6 +134,7 @@ export const useStore = create<State>(() => ({
   ...emptyProject(),
   toasts: [],
   refs: { quotes: {}, attachments: {} },
+  ledger: null,
 }));
 
 /** What requests and pushes name instead of a project for Angela (data-model.md §10.6). */
@@ -550,6 +554,25 @@ async function loadRefs() {
   if (scope() === ANGELA) useStore.setState({ refs });
 }
 
+// ---- Angela's ledger, read-only (manager-actions.md §3.3) ----
+
+let ledgerViews = 0;
+
+/** The "共识" view shows the ledger: it is read now, and again whenever anything changes. */
+export function watchLedger(): () => void {
+  ledgerViews += 1;
+  refreshLedger();
+  return () => {
+    ledgerViews -= 1;
+  };
+}
+
+async function loadLedger() {
+  if (scope() !== ANGELA || ledgerViews === 0) return;
+  const ledger = await call<Ledgers>('ledger');
+  if (scope() === ANGELA) useStore.setState({ ledger });
+}
+
 /** Coalesces bursts of pushes into one reload per kind. */
 function debounced(f: () => Promise<void>, ms: number) {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -572,6 +595,7 @@ const refreshCounts = debounced(async () => {
 const refreshThread = debounced(catchUp, 80);
 const refreshTurnStates = debounced(refreshTurns, 120);
 const refreshRefs = debounced(loadRefs, 150);
+const refreshLedger = debounced(loadLedger, 300);
 const refreshDetail = debounced(async () => {
   const selected = useStore.getState().selectedTask;
   if (selected) await loadTaskDetail(selected);
@@ -581,6 +605,8 @@ function onPush(push: Push) {
   if (push.type === 'events') refreshCounts();
   // An attachment says whether it still holds now, whichever project it is in.
   if ((push.type === 'events' || push.type === 'resync') && wanted.attachments.size > 0) refreshRefs();
+  // An entry lands in her database or a project's; a task's constraint lapses when it closes.
+  if ((push.type === 'events' || push.type === 'resync') && ledgerViews > 0) refreshLedger();
   // The settings follow their own page's project, wherever the window is.
   const settings = useStore.getState().settings;
   if (settings && (push.type === 'host' || push.type === 'resync' || ('project' in push && push.type === 'events' && push.project === settingsTarget(settings.page)))) {

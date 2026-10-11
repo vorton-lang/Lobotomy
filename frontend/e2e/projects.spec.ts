@@ -167,6 +167,31 @@ test('Angela’s question waits in 「全部」 and the reply goes to her', asyn
   expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['angela']);
 });
 
+// "共识" beside Angela lists what she recorded and still holds, each with the user's words it rests
+// on; a superseded entry is not listed (manager-actions.md §3.3, read-only in M4).
+test('共识 lists what Angela recorded and still holds, with the user’s words', async ({ page }) => {
+  const host: HostSnapshot = { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela };
+  const said = { source_id: 'msg_1', said_at: 1, body: '导出先做 CSV 吧' };
+  const base = { task_id: null, task_title: null, confidence: null, supersedes: null, superseded_by: null, lapsed: false, created_at: 1 };
+  const ledger = {
+    user: [
+      { ...base, id: 'led_1', kind: 'decision', statement: '导出先做 Excel', superseded_by: 'led_2', evidence: [said] },
+      { ...base, id: 'led_2', kind: 'decision', statement: '导出先做 CSV', supersedes: 'led_1', evidence: [said] },
+    ],
+    projects: [
+      { id: 'alpha', name: 'alpha', unavailable: null, entries: [{ ...base, id: 'led_3', kind: 'constraint', statement: '不改公共接口', task_title: '导出报表', evidence: [said] }] },
+      { id: 'beta', name: 'beta', unavailable: null, entries: [] },
+    ],
+  };
+  await openHost(page, host, undefined, { ledger });
+  const consensus = page.getByRole('region', { name: '共识' });
+  await expect(consensus.getByRole('region', { name: '全局' })).toContainText('决定 导出先做 CSV');
+  await expect(consensus).not.toContainText('导出先做 Excel');
+  await expect(consensus.getByRole('region', { name: 'alpha' })).toContainText('约束 不改公共接口 · 任务「导出报表」');
+  await expect(consensus.getByRole('region', { name: 'beta' })).toHaveCount(0);
+  await expect(consensus.locator('.ref-head').first()).toContainText('你的原话');
+});
+
 // The projects run without Angela (roles-and-tasks.md §1.4): when she cannot be opened, 「全部」
 // says why and lists what waits, as before her.
 test('without Angela 「全部」 says why and lists what waits', async ({ page }) => {

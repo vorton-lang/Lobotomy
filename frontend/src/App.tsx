@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import { backendUrl, inElectron } from './bridge';
 import { Composer } from './components/Composer';
+import { Consensus } from './components/Consensus';
 import { Onboarding } from './components/Onboarding';
 import { Overview } from './components/Overview';
 import { ProjectList } from './components/ProjectList';
@@ -112,6 +113,7 @@ export function App() {
                 <Sash label="右侧栏的宽度" edge="left" column={rightColumn} />
                 <aside className="sidebar" style={{ width: rightColumn.width }}>
                   <Overview />
+                  <Consensus />
                 </aside>
               </>
             ) : !opened ? (

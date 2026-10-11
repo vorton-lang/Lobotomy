@@ -9,6 +9,7 @@ pub mod error;
 pub mod host;
 pub mod id;
 pub mod item;
+pub mod ledger;
 pub mod manager;
 pub mod project;
 mod prompts;

@@ -1312,6 +1312,50 @@ async fn angelas_question_waits_for_the_users_next_message() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// Angela's ledger (manager-actions.md §3): each entry in the database of its scope, a decision
+/// only on the user's words, and a new session of hers starts from what holds.
+#[tokio::test]
+async fn angelas_ledger_is_kept_by_scope_and_starts_her_next_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().expect("Angela opened");
+    let project = backend.project.clone();
+    let said = tell_angela(&angela, "导出先做 CSV，别动公共接口");
+    angela_turn_for(&angela, &said).await;
+
+    let decision = json!({ "kind": "decision", "statement": "导出先做 CSV", "evidence": [said] });
+    let constraint = json!({
+        "kind": "constraint", "statement": "不改公共接口", "evidence": [said], "project_id": project.id,
+    });
+    let bare = json!({ "kind": "decision", "statement": "没有原话的决定" });
+    let calls = [
+        format!("FAKE:call=ledger_add{decision}"),
+        format!("FAKE:call=ledger_add{constraint}"),
+        format!("FAKE:call=ledger_add{bare}"),
+        "FAKE:call=read_ledger{}".to_owned(),
+    ];
+    let acts = tell_angela(&angela, &calls.join("\n"));
+    let turn = angela_turn_for(&angela, &acts).await;
+    let [user, theirs, refused, read] = reply_texts(&angela.db, &turn.id).try_into().expect("four replies");
+    assert!(user.starts_with("已记下（led_") && theirs.starts_with("已记下（led_"), "{user} / {theirs}");
+    assert!(refused.contains("被拒绝"), "{refused}");
+    let read: Value = serde_json::from_str(&read).unwrap();
+    assert_eq!(read["user"][0]["statement"], "导出先做 CSV");
+    assert_eq!(read["projects"][0]["entries"][0]["statement"], "不改公共接口");
+    assert_eq!(read["projects"][0]["entries"][0]["evidence"][0]["source_id"], said.as_str());
+    assert_eq!(angela.db.read(lobotomy_core::ledger::ledger).unwrap().len(), 1, "the user's scope is hers");
+    assert_eq!(project.db.read(lobotomy_core::ledger::ledger).unwrap().len(), 1, "the project's is the project's");
+
+    let new_session = lobotomy_core::turn::NewNativeSession { request_id: "n1".into(), role: "Angela".into() };
+    angela.db.execute(&Caller::User, &new_session).unwrap();
+    let next = tell_angela(&angela, "现在怎么样");
+    let turn = angela_turn_for(&angela, &next).await;
+    for part in ["## 你的记录", "[决定] 导出先做 CSV", "[约束] 不改公共接口"] {
+        assert!(turn.input.contains(part), "{part} is missing from:\n{}", turn.input);
+    }
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// A project that settles wakes Angela (manager-actions.md §6 "Manager 什么时候运行"): the runtime
 /// tells her it waits for the user, with what changed since her cursor, and she runs. The project
 /// she saw first at startup, settling after its slot was written, did not wake her.

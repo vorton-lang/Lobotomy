@@ -17,6 +17,7 @@ use axum::{
 use lobotomy_core::Caller;
 use lobotomy_core::host::ProjectState;
 use lobotomy_core::id::new_id;
+use lobotomy_core::ledger::{AddLedgerEntry, LedgerEntry, LedgerKind, ledger};
 use lobotomy_core::manager::AskUser;
 use lobotomy_core::quota::Domain;
 use lobotomy_core::task::{Abandon, Action, Assign, Quote, SendToRole, SetPaused};
@@ -190,6 +191,60 @@ pub struct ReasonArgs {
     pub task_id: String,
     /// 理由，会原样记下；退回时也会原样发给执行者
     pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LedgerKindArg {
+    /// 目标
+    Goal,
+    /// 阶段：探索、设计、执行、审查
+    Phase,
+    /// 已定的事，默认不再重开；必须引用用户原话
+    Decision,
+    /// 约束，写明范围；必须引用用户原话
+    Constraint,
+    /// 待定的事，以及在等谁
+    OpenQuestion,
+    /// 对用户状态的推测，写上把握；不给下层看
+    Hypothesis,
+}
+
+impl From<LedgerKindArg> for LedgerKind {
+    fn from(arg: LedgerKindArg) -> Self {
+        match arg {
+            LedgerKindArg::Goal => LedgerKind::Goal,
+            LedgerKindArg::Phase => LedgerKind::Phase,
+            LedgerKindArg::Decision => LedgerKind::Decision,
+            LedgerKindArg::Constraint => LedgerKind::Constraint,
+            LedgerKindArg::OpenQuestion => LedgerKind::OpenQuestion,
+            LedgerKindArg::Hypothesis => LedgerKind::Hypothesis,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LedgerAddArgs {
+    pub kind: LedgerKindArg,
+    /// 一句话写清这一条
+    pub statement: String,
+    /// 依据的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。决定和约束必须有；运行时原样存下原文
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    /// 项目 ID：这一条属于某个项目时填写。不填是用户范围，跨所有项目
+    pub project_id: Option<String>,
+    /// 任务 ID：这一条只在某个任务里有效时填写，同时填 project_id。任务关闭后，约束失效
+    pub task_id: Option<String>,
+    /// 推测的把握，例如"低""中""高"
+    pub confidence: Option<String>,
+    /// 被这一条取代的旧条目的 ID；必须在同一范围，而且是最新的那一条
+    pub supersedes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LedgerReadArgs {
+    /// 只读这个项目的记录（和用户范围的记录）；不填时读所有项目
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -409,6 +464,70 @@ impl AngelaTools {
         }
     }
 
+    #[tool(
+        description = "在记录中加一条：目标、阶段、决定、约束、待定或推测。只能追加；要改，就加一条新的并用 supersedes \
+                       取代旧的。决定和约束必须用 evidence 引用用户原话，没有原话依据的判断记为推测。"
+    )]
+    async fn ledger_add(
+        &self,
+        Parameters(args): Parameters<LedgerAddArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (reach, turn) = caller_turn(&context).await?;
+        let refused = |text: String| Ok(CallToolResult::error(vec![ContentBlock::text(format!("被拒绝：{text}"))]));
+        let Some(turn) = turn.filter(|t| t.state == TurnState::Running) else {
+            return refused("这个 URL 不属于 Angela 正在运行的 turn".into());
+        };
+        let evidence = match quotes(&reach.angela, args.evidence).await {
+            Ok(evidence) => evidence,
+            Err(e) => return refused(format!("{e:#}")),
+        };
+        let entry = AddLedgerEntry {
+            kind: args.kind.into(),
+            statement: args.statement,
+            evidence,
+            task_id: args.task_id,
+            confidence: args.confidence,
+            supersedes: args.supersedes,
+        };
+        let added = match &args.project_id {
+            // A project's or a task's entry is in the project's database (data-model.md §10.6).
+            Some(project_id) => {
+                let project = match find(&reach, project_id) {
+                    Ok(Ok(project)) => project,
+                    Ok(Err(unavailable)) => return refused(format!("项目不可用：{}", unavailable["unavailable"])),
+                    Err(e) => return refused(format!("{e:#}")),
+                };
+                let caller = Caller::Manager { turn_id: turn.id };
+                db(&project, move |db| db.execute(&caller, &entry)).await
+            }
+            None if entry.task_id.is_some() => return refused("任务范围的条目要同时写 project_id".into()),
+            None => {
+                let caller = Caller::Role { role: turn.role, turn_id: turn.id };
+                db(&reach.angela, move |db| db.execute(&caller, &entry)).await
+            }
+        };
+        match added {
+            Ok(id) => Ok(CallToolResult::success(vec![ContentBlock::text(format!("已记下（{id}）。"))])),
+            Err(e) => refused(why(&e)),
+        }
+    }
+
+    #[tool(
+        description = "读记录：用户范围的条目，以及各项目和任务范围的条目。每条写明是否仍然有效：被取代的写明被谁取代，\
+                       任务关闭后失效的约束标为 lapsed。读不到的项目写明原因。"
+    )]
+    async fn read_ledger(
+        &self,
+        Parameters(args): Parameters<LedgerReadArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        answer(&context, |reach| async move {
+            Ok(serde_json::to_value(ledgers(&reach.angela, &reach.projects, args.project_id.as_deref(), true).await?)?)
+        })
+        .await
+    }
+
     #[tool(description = "暂停或恢复一个任务。用户暂停的任务只有用户能恢复；你暂停的任务你可以恢复。")]
     async fn set_paused(
         &self,
@@ -516,6 +635,50 @@ fn why(e: &anyhow::Error) -> String {
         }
         _ => format!("{e:#}"),
     }
+}
+
+/// Her ledger across the scopes (manager-actions.md §3; data-model.md §10.6 "记录按作用域存放"):
+/// the user's scope from her database, and each project's, with its tasks', from the project's. A
+/// project that cannot be read is named with the reason.
+#[derive(Serialize)]
+pub struct Ledgers {
+    pub user: Vec<LedgerEntry>,
+    pub projects: Vec<ProjectLedger>,
+}
+
+#[derive(Serialize)]
+pub struct ProjectLedger {
+    pub id: String,
+    pub name: String,
+    pub entries: Vec<LedgerEntry>,
+    /// Why it could not be read; its entries are then empty.
+    pub unavailable: Option<String>,
+}
+
+/// Her ledger, of one project (`only`) or of all; `guesses` keeps her hypotheses, which the user's
+/// view leaves out (manager-actions.md §3.3).
+pub async fn ledgers(
+    angela: &Instance,
+    projects: &Projects,
+    only: Option<&str>,
+    guesses: bool,
+) -> anyhow::Result<Ledgers> {
+    let keep = move |entries: Vec<LedgerEntry>| -> Vec<LedgerEntry> {
+        entries.into_iter().filter(|e| guesses || e.kind != LedgerKind::Hypothesis).collect()
+    };
+    let user = keep(db(angela, |db| db.read(ledger)).await?);
+    let mut out = Vec::new();
+    for entry in angela.host.db.projects()? {
+        if only.is_some_and(|id| id != entry.id) || (only.is_none() && entry.state == ProjectState::Archived) {
+            continue;
+        }
+        let (entries, unavailable) = match projects.get(&entry.id) {
+            Some(project) => (keep(db(&project, |db| db.read(ledger)).await?), None),
+            None => (Vec::new(), Some(unavailable(projects, &entry.id, Some(entry.state)))),
+        };
+        out.push(ProjectLedger { id: entry.id, name: entry.name, entries, unavailable });
+    }
+    Ok(Ledgers { user, projects: out })
 }
 
 /// The user's messages Angela quotes, from her database, in the order they were sent. Each must
