@@ -273,6 +273,16 @@ fn render_quotes(conn: &Connection, quotes: &[Quote]) -> Result<String> {
     Ok(parts.join("\n\n"))
 }
 
+/// The user's words, then the ledger entries the manager cites: what the runtime inserts as it was
+/// recorded, before her interpretation.
+fn with_cited(quoted: String, ledger: &[crate::ledger::CitedEntry]) -> String {
+    match (quoted.is_empty(), prompts::cited(ledger)) {
+        (_, cited) if cited.is_empty() => quoted,
+        (true, cited) => cited,
+        (false, cited) => format!("{quoted}\n\n{cited}"),
+    }
+}
+
 fn store_quotes(cx: &Cx<'_>, quotes: &[Quote], task_id: Option<&str>, message_id: Option<&str>) -> Result<()> {
     for (pos, quote) in quotes.iter().enumerate() {
         cx.tx.execute(
@@ -670,6 +680,9 @@ pub struct Assign {
     pub executor: String,
     pub title: String,
     pub quotes: Vec<Quote>,
+    /// Her ledger entries she cites, as the runtime looked them up.
+    #[serde(default)]
+    pub ledger: Vec<crate::ledger::CitedEntry>,
     pub interpretation: String,
     pub actions: Vec<Action>,
     pub stop_when: String,
@@ -696,7 +709,7 @@ impl Command for Assign {
                 return Err(Error::rejected("missing_field", format!("an assignment needs {field}")));
             }
         }
-        let body = render_quotes(cx.tx, &self.quotes)?;
+        let body = with_cited(render_quotes(cx.tx, &self.quotes)?, &self.ledger);
         let id = create_task(cx, caller, &self.title, &body, &self.done_when, &self.executor)?;
         let mut actions = self.actions.clone();
         actions.dedup();
@@ -719,6 +732,9 @@ pub struct SendToRole {
     pub role: String,
     pub task_id: Option<String>,
     pub quotes: Vec<Quote>,
+    /// Her ledger entries she cites, as the runtime looked them up.
+    #[serde(default)]
+    pub ledger: Vec<crate::ledger::CitedEntry>,
     pub interpretation: String,
 }
 
@@ -739,7 +755,7 @@ impl Command for SendToRole {
         if self.interpretation.trim().is_empty() {
             return Err(Error::rejected("missing_field", "a message needs the manager's own words"));
         }
-        let quoted = render_quotes(cx.tx, &self.quotes)?;
+        let quoted = with_cited(render_quotes(cx.tx, &self.quotes)?, &self.ledger);
         let body = prompts::forwarded(&quoted, &self.interpretation);
         let id = queue_message(cx, &self.role, caller, self.task_id.as_deref(), &body)?;
         store_quotes(cx, &self.quotes, None, Some(&id))?;

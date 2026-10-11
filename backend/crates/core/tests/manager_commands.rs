@@ -6,6 +6,7 @@ mod common;
 
 use common::*;
 use lobotomy_core::capture::{CaptureResult, FinishCapture, pending_captures};
+use lobotomy_core::ledger::{CitedEntry, LedgerKind};
 use lobotomy_core::report::ReportStatus;
 use lobotomy_core::task::{
     Action, Assign, CreateTask, EditCriteria, Phase, Quote, Reopen, SendToRole, SetPaused, load_task, queued_messages,
@@ -30,6 +31,7 @@ fn assign(request_id: &str) -> Assign {
         executor: ROLE.into(),
         title: "查清启动慢的原因".into(),
         quotes: vec![quote("msg_user1", "启动太慢了，先看看为什么")],
+        ledger: vec![],
         interpretation: "先定位，不改代码".into(),
         actions: vec![Action::ReadOnly],
         stop_when: "找到第一个确定的原因就汇报".into(),
@@ -165,6 +167,12 @@ fn the_managers_message_quotes_the_user_and_answers_a_question() {
         role: ROLE.into(),
         task_id: Some(task.clone()),
         quotes: vec![quote("msg_user2", "用 8080")],
+        ledger: vec![CitedEntry {
+            id: "led_1".into(),
+            kind: LedgerKind::Constraint,
+            statement: "不改公共接口".into(),
+            evidence: vec![quote("msg_user1", "别动接口")],
+        }],
         interpretation: "端口定为 8080，其余照旧".into(),
     };
     db.execute(&angela(), &message).unwrap();
@@ -175,7 +183,10 @@ fn the_managers_message_quotes_the_user_and_answers_a_question() {
     let input: String =
         db.read(|c| Ok(c.query_row("SELECT input FROM turn WHERE id = ?1", [&t.turn_id], |r| r.get(0))?)).unwrap();
     assert!(input.contains("【来自 Angela · 任务") && input.contains("【用户原话】"), "{input}");
-    assert!(input.contains("用 8080\n\n【Angela 解读】\n端口定为 8080"), "{input}");
+    // Her ledger entry comes as recorded, between the user's words and hers.
+    let cited =
+        "用 8080\n\n【记录】\n- [约束] 不改公共接口（led_1；用户原话：「别动接口」）\n\n【Angela 解读】\n端口定为 8080";
+    assert!(input.contains(cited), "{input}");
     assert_eq!(db.read(|c| load_task(c, &task)).unwrap().blocked_reason, None);
 }
 

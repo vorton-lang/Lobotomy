@@ -1346,6 +1346,24 @@ async fn angelas_ledger_is_kept_by_scope_and_starts_her_next_session() {
     assert_eq!(angela.db.read(lobotomy_core::ledger::ledger).unwrap().len(), 1, "the user's scope is hers");
     assert_eq!(project.db.read(lobotomy_core::ledger::ledger).unwrap().len(), 1, "the project's is the project's");
 
+    // She cites a decision to a role as recorded; a hypothesis never goes down (§3.4).
+    let id_in = |reply: &str| reply.split(['（', '）']).nth(1).unwrap().to_owned();
+    let guess = json!({ "kind": "hypothesis", "statement": "用户更在意速度", "confidence": "中" });
+    let guessed = tell_angela(&angela, &format!("FAKE:call=ledger_add{guess}"));
+    let turn = angela_turn_for(&angela, &guessed).await;
+    let [guess] = reply_texts(&angela.db, &turn.id).try_into().expect("one reply");
+    let cite = |ledger: String| json!({ "project_id": project.id, "role": "Malkuth", "interpretation": "按记录做", "ledger": [ledger] });
+    let cites = format!("FAKE:call=send_to_role{}\nFAKE:call=send_to_role{}", cite(id_in(&user)), cite(id_in(&guess)));
+    let cited = tell_angela(&angela, &cites);
+    let turn = angela_turn_for(&angela, &cited).await;
+    let [sent, refused] = reply_texts(&angela.db, &turn.id).try_into().expect("two replies");
+    assert!(sent.starts_with("已放进收件箱") && refused.contains("是推测，不传给下层"), "{sent} / {refused}");
+    let body: String = project
+        .db
+        .read(|c| Ok(c.query_row("SELECT body FROM message WHERE source = 'manager'", [], |r| r.get(0))?))
+        .unwrap();
+    assert!(body.starts_with("【记录】\n- [决定] 导出先做 CSV（led_"), "{body}");
+
     let new_session = lobotomy_core::turn::NewNativeSession { request_id: "n1".into(), role: "Angela".into() };
     angela.db.execute(&Caller::User, &new_session).unwrap();
     let session = angela.db.read(|c| lobotomy_core::turn::current_session(c, "Angela", None)).unwrap().unwrap();

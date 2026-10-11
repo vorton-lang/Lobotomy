@@ -73,6 +73,24 @@ pub(crate) fn quoted(at: &str, body: &str) -> String {
     format!("【用户原话】{at}\n{body}")
 }
 
+/// The manager's ledger entries she cites, as recorded, each with the user's words it rests on
+/// (manager-actions.md §1 `ledger`, §3.4).
+pub(crate) fn cited(entries: &[crate::ledger::CitedEntry]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            let words: Vec<String> = e.evidence.iter().map(|q| format!("「{}」", q.body)).collect();
+            let because =
+                if words.is_empty() { String::new() } else { format!("；用户原话：{}", words.join("、")) };
+            format!("- [{}] {}（{}{because}）", e.kind.label(), e.statement, e.id)
+        })
+        .collect();
+    format!("【记录】\n{}", lines.join("\n"))
+}
+
 /// The manager's words after the user's she quotes. Without quotes her words are all there is, and
 /// the message's header already names her.
 pub(crate) fn forwarded(quoted: &str, interpretation: &str) -> String {

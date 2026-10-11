@@ -17,7 +17,7 @@ use axum::{
 use lobotomy_core::Caller;
 use lobotomy_core::host::ProjectState;
 use lobotomy_core::id::new_id;
-use lobotomy_core::ledger::{AddLedgerEntry, LedgerEntry, LedgerKind, ledger};
+use lobotomy_core::ledger::{AddLedgerEntry, CitedEntry, LedgerEntry, LedgerKind, ledger};
 use lobotomy_core::manager::AskUser;
 use lobotomy_core::quota::Domain;
 use lobotomy_core::task::{Abandon, Action, Assign, Quote, SendToRole, SetPaused};
@@ -146,6 +146,9 @@ pub struct AssignArgs {
     /// 要原样转给执行者的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。运行时按时间顺序插入原文。没有可引用的原话时留空
     #[serde(default)]
     pub quote: Vec<String>,
+    /// 要原样转给执行者的记录条目的 ID（led_…），例如相关的决定和约束。推测不能转给下层
+    #[serde(default)]
+    pub ledger: Vec<String>,
     /// 你的解读：你理解的目标、推断的边界、不确定的地方、希望何时回报什么。原话以外的内容都是你的推断
     pub interpretation: String,
     /// 执行者可以做的事，可以多选
@@ -167,6 +170,9 @@ pub struct SendToRoleArgs {
     /// 要原样转给它的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。没有时留空
     #[serde(default)]
     pub quote: Vec<String>,
+    /// 要原样转给它的记录条目的 ID（led_…）。推测不能转给下层
+    #[serde(default)]
+    pub ledger: Vec<String>,
     /// 你的话。转发原话时写你的解读；没有原话时就是你要说的话
     pub interpretation: String,
 }
@@ -344,11 +350,13 @@ impl AngelaTools {
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |reach, project, caller| async move {
             let quotes = quotes(&reach.angela, args.quote).await?;
+            let ledger = cite(&reach.angela, &project, args.ledger).await?;
             let cmd = Assign {
                 request_id: new_id("req"),
                 executor: args.role,
                 title: args.title,
                 quotes,
+                ledger,
                 interpretation: args.interpretation,
                 actions: args.actions.into_iter().map(Action::from).collect(),
                 stop_when: args.stop_when,
@@ -369,11 +377,13 @@ impl AngelaTools {
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |reach, project, caller| async move {
             let quotes = quotes(&reach.angela, args.quote).await?;
+            let ledger = cite(&reach.angela, &project, args.ledger).await?;
             let cmd = SendToRole {
                 request_id: new_id("req"),
                 role: args.role,
                 task_id: args.task_id,
                 quotes,
+                ledger,
                 interpretation: args.interpretation,
             };
             let created = db(&project, move |db| db.execute(&caller, &cmd)).await?;
@@ -679,6 +689,38 @@ pub async fn ledgers(
         out.push(ProjectLedger { id: entry.id, name: entry.name, entries, unavailable });
     }
     Ok(Ledgers { user, projects: out })
+}
+
+/// The ledger entries she cites to a role, looked up in her database and the project's: each must
+/// still hold, and a hypothesis is never passed on (manager-actions.md §3.4).
+async fn cite(angela: &Instance, project: &Project, ids: Vec<String>) -> anyhow::Result<Vec<CitedEntry>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut all = db(angela, |db| db.read(ledger)).await?;
+    all.extend(db(project, |db| db.read(ledger)).await?);
+    ids.iter()
+        .map(|id| {
+            let Some(e) = all.iter().find(|e| &e.id == id) else {
+                anyhow::bail!("没有记录 {id}：只能引用用户范围和这个项目的记录");
+            };
+            if e.kind == LedgerKind::Hypothesis {
+                anyhow::bail!("{id} 是推测，不传给下层");
+            }
+            if let Some(newer) = &e.superseded_by {
+                anyhow::bail!("{id} 已被 {newer} 取代");
+            }
+            if e.lapsed {
+                anyhow::bail!("{id} 所属的任务已关闭，它已失效");
+            }
+            Ok(CitedEntry {
+                id: e.id.clone(),
+                kind: e.kind,
+                statement: e.statement.clone(),
+                evidence: e.evidence.clone(),
+            })
+        })
+        .collect()
 }
 
 /// The user's messages Angela quotes, from her database, in the order they were sent. Each must

@@ -107,6 +107,16 @@ impl Command for AddLedgerEntry {
     }
 }
 
+/// An entry the manager cites to a role, copied as recorded (manager-actions.md §1 `ledger`). The
+/// runtime looks it up by id in its scope; a hypothesis is never cited (§3.4).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CitedEntry {
+    pub id: String,
+    pub kind: LedgerKind,
+    pub statement: String,
+    pub evidence: Vec<Quote>,
+}
+
 /// An entry as it reads now: whether it still holds.
 #[derive(Clone, Debug, Serialize)]
 pub struct LedgerEntry {
