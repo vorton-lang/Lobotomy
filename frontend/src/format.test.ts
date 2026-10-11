@@ -82,6 +82,7 @@ const message = (id: string, turnId: string | null): Message => ({
   body: id,
   turn_id: turnId,
   created_at: 1,
+  reply_to: null,
 });
 
 const thread = (patch: Partial<ThreadState>): ThreadState => ({

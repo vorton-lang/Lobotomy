@@ -156,6 +156,12 @@ export const LEDGER_LABEL: Record<LedgerKind, string> = {
 /** An entry still holds: no newer one superseded it, and its task's constraint has not lapsed. */
 export const ledgerHolds = (e: LedgerEntry): boolean => e.superseded_by === null && !e.lapsed;
 
+/** A text's first non-empty line, cut to `max` characters. */
+export function firstLine(text: string, max = 60): string {
+  const line = text.split('\n').find((l) => l.trim()) ?? '';
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
 /** A piece of Angela's reply: her own text, or a reference the runtime renders (manager-actions.md §2.1). */
 export type ReplyPart = { kind: 'text'; text: string } | { kind: 'quote' | 'att'; id: string };
 

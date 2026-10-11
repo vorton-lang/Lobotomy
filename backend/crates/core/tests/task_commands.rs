@@ -154,7 +154,13 @@ fn messages_keep_arrival_order() {
     for (i, body) in ["一", "二", "三"].iter().enumerate() {
         db.execute(
             &Caller::User,
-            &SendMessage { request_id: format!("m{i}"), role: "Malkuth".into(), task_id: None, body: (*body).into() },
+            &SendMessage {
+                request_id: format!("m{i}"),
+                role: "Malkuth".into(),
+                task_id: None,
+                body: (*body).into(),
+                reply_to: None,
+            },
         )
         .unwrap();
     }

@@ -8,7 +8,7 @@ use common::*;
 use lobotomy_core::Caller;
 use lobotomy_core::manager::{AskUser, Cursor, TellManager, cursors, open_questions};
 use lobotomy_core::report::{FlagMismatch, ReportStatus};
-use lobotomy_core::task::{SetPaused, queued_messages};
+use lobotomy_core::task::{SendMessage, SetPaused, queued_messages};
 use lobotomy_core::view::manager::{changes_since, settled};
 use lobotomy_core::view::{Attention, attention, last_event, overview};
 
@@ -120,6 +120,31 @@ fn a_mismatch_is_told_apart_from_the_changes() {
     assert!(read.lines.iter().all(|l| !l.contains("原话说先别大改")), "{:?}", read.lines);
     end_turn(&db, &t.turn_id);
     assert_eq!(common::rejection(db.execute(&role, &flag)), "turn_ended");
+}
+
+/// The user chose what a message replies to: it must exist, and the reader's input says what it is
+/// (manager-actions.md §1.1).
+#[test]
+fn a_reply_says_what_it_replies_to() {
+    let db = db();
+    idle_slot(&db);
+    let earlier = send(&db, "m1", None, "导出要不要带表头？\n第二行");
+    let reply = |request_id: &str, reply_to: &str| SendMessage {
+        request_id: request_id.into(),
+        role: ROLE.into(),
+        task_id: None,
+        body: "要".into(),
+        reply_to: Some(reply_to.into()),
+    };
+    assert_eq!(common::rejection(db.execute(&Caller::User, &reply("r0", "item_none"))), "not_found");
+    db.execute(&Caller::User, &reply("r1", &earlier)).unwrap();
+    let t = register(&db);
+    let input: String =
+        db.read(|c| Ok(c.query_row("SELECT input FROM turn WHERE id = ?1", [&t.turn_id], |r| r.get(0))?)).unwrap();
+    assert!(
+        input.contains(&format!("【来自 用户】\n（回复 用户 的 {earlier}：「导出要不要带表头？」）\n要")),
+        "{input}"
+    );
 }
 
 /// Her inbox and her cursors are written together, in her database only (data-model.md §10.6

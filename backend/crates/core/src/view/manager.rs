@@ -482,6 +482,68 @@ fn change_line(
     }))
 }
 
+/// Where the manager forwarded one of the user's messages in this project (manager-actions.md §1:
+/// "已转给 …"): a task she assigned with it, or a message to a role, with the context she attached.
+#[derive(Debug, Serialize)]
+pub struct Forward {
+    /// `task` or `message`.
+    pub kind: &'static str,
+    pub role: String,
+    pub task_id: Option<String>,
+    pub task_title: Option<String>,
+    pub at: i64,
+    pub contexts: Vec<ForwardedContext>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ForwardedContext {
+    pub header: String,
+    /// The user chose it.
+    pub chosen: bool,
+}
+
+/// Where the user's message `source_id`, of the manager's database, was forwarded in this project.
+pub fn forwards(conn: &Connection, source_id: &str) -> Result<Vec<Forward>> {
+    let contexts = |column: &str, id: &str| -> Result<Vec<ForwardedContext>> {
+        let mut stmt =
+            conn.prepare(&format!("SELECT header, chosen FROM forward_context WHERE {column} = ?1 ORDER BY pos"))?;
+        let rows = stmt.query_map([id], |r| Ok(ForwardedContext { header: r.get(0)?, chosen: r.get(1)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    };
+    let mut out = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.title, t.executor, t.created_at FROM quote q JOIN task t ON t.id = q.task_id
+         WHERE q.source_id = ?1 ORDER BY t.created_at",
+    )?;
+    let tasks = stmt.query_map([source_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))
+    })?;
+    for row in tasks {
+        let (id, title, role, at) = row?;
+        let contexts = contexts("task_id", &id)?;
+        out.push(Forward { kind: "task", role, task_id: Some(id), task_title: Some(title), at, contexts });
+    }
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.role, m.task_id, t.title, m.created_at FROM quote q JOIN message m ON m.id = q.message_id
+         LEFT JOIN task t ON t.id = m.task_id WHERE q.source_id = ?1 ORDER BY m.created_at",
+    )?;
+    let messages = stmt.query_map([source_id], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, i64>(4)?,
+        ))
+    })?;
+    for row in messages {
+        let (id, role, task_id, task_title, at) = row?;
+        let contexts = contexts("message_id", &id)?;
+        out.push(Forward { kind: "message", role, task_id, task_title, at, contexts });
+    }
+    Ok(out)
+}
+
 #[derive(Serialize)]
 pub struct EventsRead {
     /// The last event of the project when it was read; events after the last one listed are

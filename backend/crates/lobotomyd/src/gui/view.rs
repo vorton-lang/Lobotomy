@@ -60,10 +60,58 @@ pub async fn answer_angela(
     match method {
         "snapshot" => Ok(serde_json::to_value(angela_snapshot(angela).await?)?),
         "refs" => Ok(serde_json::to_value(refs(angela, projects, serde_json::from_value(params)?).await?)?),
+        "forwards" => {
+            let ForwardsParams { messages } = serde_json::from_value(params)?;
+            Ok(serde_json::to_value(forwards(angela, projects, messages).await?)?)
+        }
         // The read-only "共识" view: her ledger without her hypotheses (manager-actions.md §3.3).
         "ledger" => Ok(serde_json::to_value(crate::mcp::angela::ledgers(angela, projects, None, false).await?)?),
         _ => transcript(angela, method, params).await,
     }
+}
+
+#[derive(Deserialize)]
+struct ForwardsParams {
+    messages: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ProjectForward {
+    project: String,
+    project_name: String,
+    #[serde(flatten)]
+    forward: view::manager::Forward,
+}
+
+/// Where Angela forwarded each of the user's messages, in every open project ("已转给 …",
+/// manager-actions.md §1).
+async fn forwards(
+    angela: &Instance,
+    projects: &Projects,
+    messages: Vec<String>,
+) -> anyhow::Result<HashMap<String, Vec<ProjectForward>>> {
+    let mut out: HashMap<String, Vec<ProjectForward>> = messages.iter().map(|m| (m.clone(), Vec::new())).collect();
+    for entry in angela.host.db.projects()? {
+        let Some(project) = projects.get(&entry.id) else { continue };
+        let ids = messages.clone();
+        let found = db(&project, move |db| {
+            db.read(|c| {
+                ids.iter()
+                    .map(|id| Ok((id.clone(), view::manager::forwards(c, id)?)))
+                    .collect::<lobotomy_core::Result<Vec<_>>>()
+            })
+        })
+        .await?;
+        for (id, list) in found {
+            let into = out.entry(id).or_default();
+            into.extend(list.into_iter().map(|forward| ProjectForward {
+                project: entry.id.clone(),
+                project_name: entry.name.clone(),
+                forward,
+            }));
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Deserialize)]

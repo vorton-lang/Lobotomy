@@ -263,24 +263,48 @@ pub fn brief(conn: &Connection, task: &Task, attempt_seq: i64) -> Result<String>
 fn render_quotes(conn: &Connection, quotes: &[Quote]) -> Result<String> {
     let mut parts = Vec::new();
     for quote in quotes {
-        let at: String = conn.query_row(
-            "SELECT strftime('%m-%d %H:%M', ?1 / 1000, 'unixepoch', 'localtime')",
-            [quote.said_at],
-            |r| r.get(0),
-        )?;
-        parts.push(prompts::quoted(&at, &quote.body));
+        parts.push(prompts::quoted(&local_minute(conn, quote.said_at)?, &quote.body));
     }
     Ok(parts.join("\n\n"))
 }
 
-/// The user's words, then the ledger entries the manager cites: what the runtime inserts as it was
-/// recorded, before her interpretation.
-fn with_cited(quoted: String, ledger: &[crate::ledger::CitedEntry]) -> String {
-    match (quoted.is_empty(), prompts::cited(ledger)) {
-        (_, cited) if cited.is_empty() => quoted,
-        (true, cited) => cited,
-        (false, cited) => format!("{quoted}\n\n{cited}"),
+/// A time as the runtime writes it in a role's input: month, day, hour and minute, local.
+pub fn local_minute(conn: &Connection, ms: i64) -> Result<String> {
+    Ok(conn.query_row("SELECT strftime('%m-%d %H:%M', ?1 / 1000, 'unixepoch', 'localtime')", [ms], |r| r.get(0))?)
+}
+
+/// What the user was replying to, as the runtime looked it up and the manager forwards it with the
+/// user's words (manager-actions.md §1.1). `chosen`: the user chose it; she could not leave it out.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ContextEntry {
+    /// Its id where it came from: an item or a message of the manager's database, or a record of
+    /// the project.
+    pub source_id: String,
+    pub header: String,
+    pub body: String,
+    pub chosen: bool,
+}
+
+/// The user's words, then what they replied to, then the ledger entries the manager cites: what
+/// the runtime inserts as it was, before her interpretation.
+fn with_extras(quoted: String, context: &[ContextEntry], ledger: &[crate::ledger::CitedEntry]) -> String {
+    let context: Vec<String> = context.iter().map(|c| prompts::context(&c.header, &c.body)).collect();
+    [quoted, context.join("\n\n"), prompts::cited(ledger)]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn store_context(cx: &Cx<'_>, context: &[ContextEntry], task_id: Option<&str>, message_id: Option<&str>) -> Result<()> {
+    for (pos, c) in context.iter().enumerate() {
+        cx.tx.execute(
+            "INSERT INTO forward_context (id, source_id, header, body, chosen, task_id, message_id, pos)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![new_id("ctx"), c.source_id, c.header, c.body, c.chosen, task_id, message_id, pos as i64],
+        )?;
     }
+    Ok(())
 }
 
 fn store_quotes(cx: &Cx<'_>, quotes: &[Quote], task_id: Option<&str>, message_id: Option<&str>) -> Result<()> {
@@ -323,6 +347,9 @@ pub struct Message {
     /// The turn it was delivered in, once bound.
     pub turn_id: Option<String>,
     pub created_at: i64,
+    /// What the user chose that it replies to: an item or a message of the same database
+    /// (manager-actions.md §1.1).
+    pub reply_to: Option<String>,
 }
 
 /// Messages waiting in a role's inbox, in arrival order (data-model.md §3.4).
@@ -377,7 +404,8 @@ pub(crate) fn dropped_detail(messages: &[Message]) -> serde_json::Value {
 
 fn messages(conn: &Connection, filter: &str, arg: &str) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, seq, role, source, task_id, body, turn_id, created_at FROM message WHERE {filter} ORDER BY seq"
+        "SELECT id, seq, role, source, task_id, body, turn_id, created_at, reply_to FROM message WHERE {filter}
+         ORDER BY seq"
     ))?;
     let rows = stmt.query_map([arg], |r| {
         Ok(Message {
@@ -389,6 +417,7 @@ fn messages(conn: &Connection, filter: &str, arg: &str) -> Result<Vec<Message>> 
             body: r.get(5)?,
             turn_id: r.get(6)?,
             created_at: r.get(7)?,
+            reply_to: r.get(8)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -648,6 +677,10 @@ pub struct SendMessage {
     pub role: String,
     pub task_id: Option<String>,
     pub body: String,
+    /// What it replies to, when the user chose it: an item or a message of this database, such as
+    /// one of the manager's replies. Every role follows it (manager-actions.md §1.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
 }
 
 impl Command for SendMessage {
@@ -664,9 +697,52 @@ impl Command for SendMessage {
         if let Some(task_id) = &self.task_id {
             load_task(cx.tx, task_id)?;
         }
+        if let Some(target) = &self.reply_to
+            && replied(cx.tx, target)?.is_none()
+        {
+            return Err(Error::rejected("not_found", format!("nothing here is {target}")));
+        }
         let id = queue_message(cx, &self.role, caller, self.task_id.as_deref(), &self.body)?;
+        cx.tx.execute("UPDATE message SET reply_to = ?2 WHERE id = ?1", params![id, self.reply_to])?;
         Ok(Created { id })
     }
+}
+
+/// What a message replies to, as text: one of the role's replies, or a message (manager-actions.md
+/// §1.1). `None` when nothing here has the id.
+pub fn replied(conn: &Connection, id: &str) -> Result<Option<Replied>> {
+    let item: Option<(Option<String>, i64, String)> = conn
+        .query_row(
+            "SELECT json_extract(i.content, '$.text'), i.created_at, t.role FROM item i JOIN turn t ON t.id = i.turn_id
+             WHERE i.id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    if let Some((text, at, role)) = item {
+        return Ok(Some(Replied { id: id.to_owned(), from: role, at, text: text.unwrap_or_default() }));
+    }
+    let message: Option<(String, i64, String)> = conn
+        .query_row("SELECT source, created_at, body FROM message WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .optional()?;
+    Ok(message.map(|(source, at, text)| Replied {
+        id: id.to_owned(),
+        from: prompts::sender(&source).to_owned(),
+        at,
+        text,
+    }))
+}
+
+/// What the user replied to, as text.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Replied {
+    pub id: String,
+    /// Who said it: a role's name, or the user, Lobotomy or the manager.
+    pub from: String,
+    pub at: i64,
+    pub text: String,
 }
 
 // ---- manager commands (data-model.md §10.6; roles-and-tasks.md §4) ----
@@ -680,6 +756,9 @@ pub struct Assign {
     pub executor: String,
     pub title: String,
     pub quotes: Vec<Quote>,
+    /// What the user was replying to, as the runtime looked it up (manager-actions.md §1.1).
+    #[serde(default)]
+    pub context: Vec<ContextEntry>,
     /// Her ledger entries she cites, as the runtime looked them up.
     #[serde(default)]
     pub ledger: Vec<crate::ledger::CitedEntry>,
@@ -709,7 +788,7 @@ impl Command for Assign {
                 return Err(Error::rejected("missing_field", format!("an assignment needs {field}")));
             }
         }
-        let body = with_cited(render_quotes(cx.tx, &self.quotes)?, &self.ledger);
+        let body = with_extras(render_quotes(cx.tx, &self.quotes)?, &self.context, &self.ledger);
         let id = create_task(cx, caller, &self.title, &body, &self.done_when, &self.executor)?;
         let mut actions = self.actions.clone();
         actions.dedup();
@@ -720,6 +799,7 @@ impl Command for Assign {
             params![id, serde_json::to_string(&assignment)?],
         )?;
         store_quotes(cx, &self.quotes, Some(&id), None)?;
+        store_context(cx, &self.context, Some(&id), None)?;
         Ok(Created { id })
     }
 }
@@ -732,6 +812,9 @@ pub struct SendToRole {
     pub role: String,
     pub task_id: Option<String>,
     pub quotes: Vec<Quote>,
+    /// What the user was replying to, as the runtime looked it up (manager-actions.md §1.1).
+    #[serde(default)]
+    pub context: Vec<ContextEntry>,
     /// Her ledger entries she cites, as the runtime looked them up.
     #[serde(default)]
     pub ledger: Vec<crate::ledger::CitedEntry>,
@@ -755,10 +838,11 @@ impl Command for SendToRole {
         if self.interpretation.trim().is_empty() {
             return Err(Error::rejected("missing_field", "a message needs the manager's own words"));
         }
-        let quoted = with_cited(render_quotes(cx.tx, &self.quotes)?, &self.ledger);
+        let quoted = with_extras(render_quotes(cx.tx, &self.quotes)?, &self.context, &self.ledger);
         let body = prompts::forwarded(&quoted, &self.interpretation);
         let id = queue_message(cx, &self.role, caller, self.task_id.as_deref(), &body)?;
         store_quotes(cx, &self.quotes, None, Some(&id))?;
+        store_context(cx, &self.context, None, Some(&id))?;
         Ok(Created { id })
     }
 }

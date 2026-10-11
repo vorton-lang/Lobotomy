@@ -77,7 +77,13 @@ async fn a_task_runs_from_done_to_the_users_repository() {
     // While the task waits for acceptance, messages to the executor wait too.
     db.execute(
         &Caller::User,
-        &SendMessage { request_id: "m1".into(), role: "Malkuth".into(), task_id: None, body: "还有一件事".into() },
+        &SendMessage {
+            request_id: "m1".into(),
+            role: "Malkuth".into(),
+            task_id: None,
+            body: "还有一件事".into(),
+            reply_to: None,
+        },
     )
     .unwrap();
     settle(&backend).await;
@@ -331,7 +337,13 @@ async fn a_failed_turn_holds_the_role_until_continue() {
 
     db.execute(
         &Caller::User,
-        &SendMessage { request_id: "m1".into(), role: "Malkuth".into(), task_id: None, body: "换个做法".into() },
+        &SendMessage {
+            request_id: "m1".into(),
+            role: "Malkuth".into(),
+            task_id: None,
+            body: "换个做法".into(),
+            reply_to: None,
+        },
     )
     .unwrap();
     backend.project.wake.notify_one();
@@ -446,6 +458,7 @@ async fn a_session_id_that_cannot_be_recorded_fails_the_turn() {
         role: "Malkuth".into(),
         task_id: Some(task.clone()),
         body: "FAKE:newthread".into(),
+        reply_to: None,
     };
     db.execute(&Caller::User, &message).unwrap();
     let second =
@@ -726,6 +739,7 @@ async fn a_real_claude_turn_is_interrupted_and_continued() {
         role: "Malkuth".into(),
         task_id: ended.task_id.clone(),
         body: "不用再等了，直接报告完成。".into(),
+        reply_to: None,
     };
     db.execute(&Caller::User, &reply).unwrap();
     db.execute(&Caller::User, &Continue { request_id: "k1".into(), role: "Malkuth".into() }).unwrap();
@@ -1021,8 +1035,13 @@ async fn a_claude_turn_resumes_its_session() {
     on_claude(&db);
     let task = create_task(&db, "FAKE:blocked");
     let first = ended_turn(&db).await;
-    let reply =
-        SendMessage { request_id: "m1".into(), role: "Malkuth".into(), task_id: Some(task), body: "FAKE:done".into() };
+    let reply = SendMessage {
+        request_id: "m1".into(),
+        role: "Malkuth".into(),
+        task_id: Some(task),
+        body: "FAKE:done".into(),
+        reply_to: None,
+    };
     db.execute(&Caller::User, &reply).unwrap();
     backend.project.wake.notify_one();
 
@@ -1181,8 +1200,13 @@ async fn a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown() {
 
 /// The user's message to Angela, as the window sends it; its id.
 fn tell_angela(angela: &Instance, body: &str) -> String {
-    let message =
-        SendMessage { request_id: format!("a-{body}"), role: "Angela".into(), task_id: None, body: body.into() };
+    let message = SendMessage {
+        request_id: format!("a-{body}"),
+        role: "Angela".into(),
+        task_id: None,
+        body: body.into(),
+        reply_to: None,
+    };
     let id = angela.db.execute(&Caller::User, &message).unwrap().id;
     angela.wake.notify_one();
     id
@@ -1381,6 +1405,58 @@ async fn angelas_ledger_is_kept_by_scope_and_starts_her_next_session() {
     for part in ["## 你的记录", "[决定] 导出先做 CSV", "[约束] 不改公共接口"] {
         assert!(inputs[0].contains(part), "{part} is missing from the session's first input; all inputs:\n{inputs:#?}");
     }
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// The user chose what a message replies to (manager-actions.md §1.1): Angela reads it, and
+/// forwarding the message brings that context along though she named none; where it went shows
+/// under the message ("已转给 …").
+#[tokio::test]
+async fn the_users_reply_target_goes_along_when_angela_forwards() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().expect("Angela opened");
+    let project = backend.project.clone();
+    let asked = tell_angela(&angela, "导出要不要带表头？");
+    let first = angela_turn_for(&angela, &asked).await;
+    let her_reply: String = angela
+        .db
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT id FROM item WHERE turn_id = ?1 AND kind = 'agent_message' ORDER BY seq DESC LIMIT 1",
+                [&first.id],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    let reply = SendMessage {
+        request_id: "r1".into(),
+        role: "Angela".into(),
+        task_id: None,
+        body: "要".into(),
+        reply_to: Some(her_reply.clone()),
+    };
+    let said = angela.db.execute(&Caller::User, &reply).unwrap().id;
+    angela.wake.notify_one();
+    let read = angela_turn_for(&angela, &said).await;
+    assert!(read.input.contains(&format!("（回复 Angela 的 {her_reply}：")), "{}", read.input);
+
+    let send = json!({ "project_id": project.id, "role": "Malkuth", "quote": [said], "interpretation": "表头要带上" });
+    let acts = tell_angela(&angela, &format!("FAKE:call=send_to_role{send}\nFAKE:call=recent_replies{{}}"));
+    let turn = angela_turn_for(&angela, &acts).await;
+    let [sent, recent] = reply_texts(&angela.db, &turn.id).try_into().expect("two replies");
+    assert!(sent.starts_with("已放进收件箱"), "{sent}");
+    let recent: Value = serde_json::from_str(&recent).unwrap();
+    assert!(recent["replies"].as_array().unwrap().iter().any(|r| r["id"] == her_reply.as_str()), "{recent}");
+    let body: String = project
+        .db
+        .read(|c| Ok(c.query_row("SELECT body FROM message WHERE source = 'manager'", [], |r| r.get(0))?))
+        .unwrap();
+    assert!(body.contains("【用户当时在回复】Angela ") && body.contains(&her_reply), "{body}");
+    let forwards = project.db.read(|c| lobotomy_core::view::manager::forwards(c, &said)).unwrap();
+    let [forward] = forwards.as_slice() else { panic!("one forward: {forwards:?}") };
+    assert_eq!((forward.kind, forward.role.as_str()), ("message", "Malkuth"));
+    assert!(forward.contexts[0].chosen, "the user chose it");
     backend.shutdown(Duration::from_secs(5)).await;
 }
 

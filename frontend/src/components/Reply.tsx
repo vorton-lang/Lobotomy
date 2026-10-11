@@ -4,8 +4,8 @@
 
 import { useEffect, useMemo } from 'react';
 import type { AttachmentView, QuotedMessage, Resolved } from '../api/types';
-import { attachmentExpired, attachmentLine, attachmentWarning, clock, splitReply } from '../format';
-import { selectProject, useStore, wantRefs } from '../store';
+import { attachmentExpired, attachmentLine, attachmentWarning, clock, firstLine, splitReply, textOf } from '../format';
+import { selectProject, useStore, wantForwards, wantRefs } from '../store';
 import { Markdown } from './common';
 
 export function Reply({ text }: { text: string }) {
@@ -30,6 +30,37 @@ export function Reply({ text }: { text: string }) {
 }
 
 const failed = <T extends object>(r: Resolved<T> | undefined): r is { error: string } => !!r && 'error' in r;
+
+/** What the user chose that the message replies to (manager-actions.md §1.1), from the thread. */
+export function ReplyLine({ id }: { id: string }) {
+  const text = useStore((s) => {
+    const item = s.thread.items.find((i) => i.id === id);
+    if (item?.kind === 'agent_message') return textOf(item.content.text);
+    return s.thread.messages.find((m) => m.id === id)?.body;
+  });
+  return <div className="reply-line">回复：「{text ? firstLine(text) : '较早的一条'}」</div>;
+}
+
+/** Where Angela forwarded the user's message: "已转给 …", with the context she attached (§1). */
+export function ForwardTags({ id }: { id: string }) {
+  const forwards = useStore((s) => s.forwards[id]);
+  useEffect(() => wantForwards([id]), [id]);
+  if (!forwards?.length) return null;
+  return (
+    <div className="forwards">
+      {forwards.map((f, i) => {
+        const where = f.task_title ? `${f.project_name} · 任务「${f.task_title}」` : f.project_name;
+        const what = f.kind === 'task' ? '派成任务给' : '已转给';
+        const context = f.contexts.map((c) => `${c.header}${c.chosen ? '（你指定）' : ''}`).join('；');
+        return (
+          <button key={i} className="link forward" onClick={() => void selectProject(f.project, f.task_id)}>
+            {what} {f.role}（{where}）{context && ` · 附上下文：${context}`}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function Quote({ id }: { id: string }) {
   const quote: Resolved<QuotedMessage> | undefined = useStore((s) => s.refs.quotes[id]);

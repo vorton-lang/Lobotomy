@@ -20,9 +20,12 @@ use lobotomy_core::id::new_id;
 use lobotomy_core::ledger::{AddLedgerEntry, CitedEntry, LedgerEntry, LedgerKind, ledger};
 use lobotomy_core::manager::AskUser;
 use lobotomy_core::quota::Domain;
-use lobotomy_core::task::{Abandon, Action, Assign, Quote, SendToRole, SetPaused};
+use lobotomy_core::task::{
+    Abandon, Action, Assign, ContextEntry, Quote, Replied, SendToRole, SetPaused, local_minute, replied,
+};
 use lobotomy_core::turn::{TurnState, turn_by_token};
 use lobotomy_core::verify::{Accept, SendBack, task_verifications};
+use lobotomy_core::view::attachment::{Attachment, attachment};
 use lobotomy_core::view::manager::{events_read, project_read, task_read};
 use lobotomy_core::view::{last_event, overview};
 use lobotomy_harness::{Harness, MCP_SERVER};
@@ -146,6 +149,9 @@ pub struct AssignArgs {
     /// 要原样转给执行者的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。运行时按时间顺序插入原文。没有可引用的原话时留空
     #[serde(default)]
     pub quote: Vec<String>,
+    /// 用户当时在回复的对象，原样附上：你的回复（item_…，见 recent_replies），或这个项目中的任务、候选成果、验证、汇报。用户自己指定过回复对象的消息，运行时自动附上，你不用再写
+    #[serde(default)]
+    pub context: Vec<String>,
     /// 要原样转给执行者的记录条目的 ID（led_…），例如相关的决定和约束。推测不能转给下层
     #[serde(default)]
     pub ledger: Vec<String>,
@@ -170,6 +176,9 @@ pub struct SendToRoleArgs {
     /// 要原样转给它的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。没有时留空
     #[serde(default)]
     pub quote: Vec<String>,
+    /// 用户当时在回复的对象，原样附上：你的回复（item_…，见 recent_replies），或这个项目中的任务、候选成果、验证、汇报。用户自己指定过回复对象的消息，运行时自动附上，你不用再写
+    #[serde(default)]
+    pub context: Vec<String>,
     /// 要原样转给它的记录条目的 ID（led_…）。推测不能转给下层
     #[serde(default)]
     pub ledger: Vec<String>,
@@ -251,6 +260,12 @@ pub struct LedgerAddArgs {
 pub struct LedgerReadArgs {
     /// 只读这个项目的记录（和用户范围的记录）；不填时读所有项目
     pub project_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecentArgs {
+    /// 最多列出多少条，默认 10，最多 50
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -349,6 +364,7 @@ impl AngelaTools {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |reach, project, caller| async move {
+            let context = replied_to(&reach.angela, &project, &args.quote, args.context).await?;
             let quotes = quotes(&reach.angela, args.quote).await?;
             let ledger = cite(&reach.angela, &project, args.ledger).await?;
             let cmd = Assign {
@@ -356,6 +372,7 @@ impl AngelaTools {
                 executor: args.role,
                 title: args.title,
                 quotes,
+                context,
                 ledger,
                 interpretation: args.interpretation,
                 actions: args.actions.into_iter().map(Action::from).collect(),
@@ -376,6 +393,7 @@ impl AngelaTools {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |reach, project, caller| async move {
+            let context = replied_to(&reach.angela, &project, &args.quote, args.context).await?;
             let quotes = quotes(&reach.angela, args.quote).await?;
             let ledger = cite(&reach.angela, &project, args.ledger).await?;
             let cmd = SendToRole {
@@ -383,6 +401,7 @@ impl AngelaTools {
                 role: args.role,
                 task_id: args.task_id,
                 quotes,
+                context,
                 ledger,
                 interpretation: args.interpretation,
             };
@@ -538,6 +557,42 @@ impl AngelaTools {
         .await
     }
 
+    #[tool(
+        description = "列出你最近的回复，新的在前：ID、时间和第一行。转达用户的话时，用它找到用户当时在回复的那一条，\
+                       把 ID 填进 context。"
+    )]
+    async fn recent_replies(
+        &self,
+        Parameters(args): Parameters<RecentArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        answer(&context, |reach| async move {
+            let limit = args.limit.unwrap_or(10).min(50) as i64;
+            let replies = db(&reach.angela, move |db| {
+                db.read(|c| {
+                    let mut stmt = c.prepare(
+                        "SELECT id, created_at, json_extract(content, '$.text') FROM item WHERE kind = 'agent_message'
+                         ORDER BY created_at DESC, id DESC LIMIT ?1",
+                    )?;
+                    let rows = stmt.query_map([limit], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?))
+                    })?;
+                    let mut out = Vec::new();
+                    for row in rows {
+                        let (id, at, text) = row?;
+                        let first: String =
+                            text.unwrap_or_default().lines().next().unwrap_or_default().chars().take(100).collect();
+                        out.push(json!({ "id": id, "at": local_minute(c, at)?, "first_line": first }));
+                    }
+                    Ok(out)
+                })
+            })
+            .await?;
+            Ok(json!({ "replies": replies }))
+        })
+        .await
+    }
+
     #[tool(description = "暂停或恢复一个任务。用户暂停的任务只有用户能恢复；你暂停的任务你可以恢复。")]
     async fn set_paused(
         &self,
@@ -689,6 +744,75 @@ pub async fn ledgers(
         out.push(ProjectLedger { id: entry.id, name: entry.name, entries, unavailable });
     }
     Ok(Ledgers { user, projects: out })
+}
+
+/// What the user was replying to, for the user's words she forwards (manager-actions.md §1.1):
+/// first what the user chose for each quoted message, which she cannot leave out, then what she
+/// adds. Her replies and her conversation's messages come from her database; tasks, candidates,
+/// verifications and reports from the project's.
+async fn replied_to(
+    angela: &Instance,
+    project: &Project,
+    quoted: &[String],
+    extra: Vec<String>,
+) -> anyhow::Result<Vec<ContextEntry>> {
+    let quoted = quoted.to_vec();
+    let mut out: Vec<ContextEntry> = db(angela, move |db| {
+        db.read(|c| {
+            let mut chosen = Vec::new();
+            for id in &quoted {
+                let target: Option<String> =
+                    c.query_row("SELECT reply_to FROM message WHERE id = ?1", [id], |r| r.get(0)).optional()?.flatten();
+                if let Some(target) = target.and_then(|t| replied(c, &t).transpose()) {
+                    chosen.push(reply_context(c, target?, true)?);
+                }
+            }
+            Ok(chosen)
+        })
+    })
+    .await?;
+    for id in extra {
+        if out.iter().any(|c| c.source_id == id) {
+            continue;
+        }
+        let own = id.clone();
+        let theirs = id.clone();
+        let entry = match db(angela, move |db| db.read(|c| replied(c, &own))).await? {
+            Some(target) => db(angela, move |db| db.read(|c| reply_context(c, target, false))).await?,
+            None => match db(project, move |db| db.read(|c| record_context(c, &theirs))).await? {
+                Some(entry) => entry,
+                None => anyhow::bail!(
+                    "没有 {id}：上下文可以是你的回复（recent_replies），或这个项目中的任务、候选成果、验证、汇报"
+                ),
+            },
+        };
+        out.push(entry);
+    }
+    Ok(out)
+}
+
+fn reply_context(c: &rusqlite::Connection, target: Replied, chosen: bool) -> lobotomy_core::Result<ContextEntry> {
+    let header = format!("{} {}（{}）", target.from, local_minute(c, target.at)?, target.id);
+    Ok(ContextEntry { source_id: target.id, header, body: target.text, chosen })
+}
+
+/// A record of the project as context: its line, and a report's body.
+fn record_context(c: &rusqlite::Connection, id: &str) -> lobotomy_core::Result<Option<ContextEntry>> {
+    let Some(record) = attachment(c, id)? else { return Ok(None) };
+    let (header, body) = match record {
+        Attachment::Task { title, .. } => (format!("任务「{title}」"), String::new()),
+        Attachment::Candidate { title, seq, .. } => (format!("「{title}」第 {seq} 轮的候选成果"), String::new()),
+        Attachment::Verification { title, seq, state, .. } => {
+            (format!("「{title}」第 {seq} 轮的验证，{}", state.as_str()), String::new())
+        }
+        Attachment::Report { role, report_title, .. } => {
+            let args: String = c.query_row("SELECT args FROM command_record WHERE id = ?1", [id], |r| r.get(0))?;
+            let report: serde_json::Value = serde_json::from_str(&args)?;
+            let body = report["body"].as_str().unwrap_or_default().to_owned();
+            (format!("{role} 的汇报「{report_title}」"), body)
+        }
+    };
+    Ok(Some(ContextEntry { source_id: id.to_owned(), header: format!("{header}（{id}）"), body, chosen: false }))
 }
 
 /// The ledger entries she cites to a role, looked up in her database and the project's: each must

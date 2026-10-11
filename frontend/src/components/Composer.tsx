@@ -3,28 +3,41 @@
 
 import { useState } from 'react';
 import { composerHint, harnessName } from '../format';
-import { act, setFollowing, useCommand, useMainRole, useStore } from '../store';
+import { act, setFollowing, setReplyTo, useCommand, useMainRole, useStore } from '../store';
 
 export function Composer() {
   const [text, setText] = useState('');
   const role = useMainRole();
   const task = useStore((s) => s.snapshot?.tasks.find((t) => t.id === role?.task_id));
   const running = role?.unfinished?.state === 'running' ? role.unfinished : null;
+  // What the message replies to, chosen on one of Angela's replies (manager-actions.md §1.1).
+  const replyTo = useStore((s) => (role?.kind === 'manager' ? s.replyTo : null));
 
   const { submit, busy } = useCommand('send_message');
   if (!role) return null;
   const send = async () => {
     const body = text.trim();
     if (!body) return;
-    const sent = await submit({ role: role.name, task_id: task?.id ?? null, body });
+    const sent = await submit({ role: role.name, task_id: task?.id ?? null, body, reply_to: replyTo?.id ?? null });
     if (sent === undefined) return;
     setText('');
+    setReplyTo(null);
     // What the user just sent, and what comes of it, is at the end of the thread.
     setFollowing(true);
   };
 
   return (
     <div className="composer">
+      {replyTo && (
+        <div className="replying">
+          <span>
+            回复 {role.name}：「{replyTo.text}」
+          </span>
+          <button className="ghost" aria-label="不回复这一条" onClick={() => setReplyTo(null)}>
+            ✕
+          </button>
+        </div>
+      )}
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}

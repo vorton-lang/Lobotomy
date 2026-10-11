@@ -137,6 +137,20 @@ pub(crate) fn header(from: &str, task: Option<&str>) -> String {
     }
 }
 
+/// What the user chose a message replies to (manager-actions.md §1.1), under its header.
+pub(crate) fn replying_to(target: &crate::task::Replied) -> String {
+    let first: String = target.text.lines().next().unwrap_or_default().chars().take(60).collect();
+    format!("（回复 {} 的 {}：「{first}」）", target.from, target.id)
+}
+
+/// What the user was replying to, as a forwarded message carries it (manager-actions.md §1.1).
+pub(crate) fn context(header: &str, body: &str) -> String {
+    match body {
+        "" => format!("【用户当时在回复】{header}"),
+        body => format!("【用户当时在回复】{header}\n{body}"),
+    }
+}
+
 /// The header of the user's message in the manager's input: it names the message, so that she can
 /// quote it by its id (manager-actions.md §1, §2.1).
 pub(crate) fn header_with_id(from: &str, id: &str) -> String {

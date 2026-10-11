@@ -2,8 +2,8 @@
 // holds the arguments; other items show their own content.
 
 import type { CommandRecord, Item, LiveItem, Text } from '../api/types';
-import { asReport, commandSummary, elapsed, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
-import { useStore } from '../store';
+import { asReport, commandSummary, elapsed, firstLine, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
+import { setReplyTo, useStore } from '../store';
 import { Markdown, Output, useNow } from './common';
 import { Reply } from './Reply';
 
@@ -21,7 +21,7 @@ export function ItemView({
 }) {
   switch (item.kind) {
     case 'agent_message':
-      return <AgentMessage role={role} text={textOf(item.content.text)} />;
+      return <AgentMessage id={item.id} role={role} text={textOf(item.content.text)} />;
     case 'reasoning':
       return (
         <details className="item reasoning">
@@ -107,12 +107,22 @@ export function ItemView({
   }
 }
 
-/** A reply. On 「全部」 it is Angela's, whose references the runtime renders. */
-function AgentMessage({ role, text }: { role: string; text: string }) {
+/**
+ * A reply. On 「全部」 it is Angela's, whose references the runtime renders; the user can choose it
+ * as what the next message replies to (manager-actions.md §1.1).
+ */
+function AgentMessage({ id, role, text }: { id: string; role: string; text: string }) {
   const angela = useStore((s) => s.project === null);
   return (
     <div className="message other">
-      <div className="who">{role}</div>
+      <div className="who">
+        {role}
+        {angela && (
+          <button className="link reply-to" onClick={() => setReplyTo({ id, text: firstLine(text) })}>
+            回复
+          </button>
+        )}
+      </div>
       {angela ? <Reply text={text} /> : <Markdown text={text} />}
     </div>
   );

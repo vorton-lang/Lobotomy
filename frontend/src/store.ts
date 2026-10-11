@@ -11,6 +11,7 @@ import type {
   Item,
   LiveTurn,
   Message,
+  Forward,
   Ledgers,
   Permission,
   Push,
@@ -95,6 +96,16 @@ interface State {
   refs: Refs;
   /** Angela's ledger while the "共识" view shows it (`watchLedger`). */
   ledger: Ledgers | null;
+  /** What the next message to Angela replies to, chosen by the user (manager-actions.md §1.1). */
+  replyTo: ReplyTarget | null;
+  /** Where Angela forwarded each of the user's messages on screen (`wantForwards`). */
+  forwards: Record<string, Forward[]>;
+}
+
+export interface ReplyTarget {
+  id: string;
+  /** Its first line, for the composer to show. */
+  text: string;
 }
 
 /** The role whose thread fills the main area. M1 has one, its executor (frontend.md §2 "M1 的布局"). */
@@ -135,7 +146,14 @@ export const useStore = create<State>(() => ({
   toasts: [],
   refs: { quotes: {}, attachments: {} },
   ledger: null,
+  replyTo: null,
+  forwards: {},
 }));
+
+/** The user chooses, or drops, what the next message to Angela replies to. */
+export function setReplyTo(target: ReplyTarget | null) {
+  useStore.setState({ replyTo: target });
+}
 
 /** What requests and pushes name instead of a project for Angela (data-model.md §10.6). */
 export const ANGELA = 'angela';
@@ -554,6 +572,23 @@ async function loadRefs() {
   if (scope() === ANGELA) useStore.setState({ refs });
 }
 
+// ---- where Angela forwarded the user's messages ("已转给 …", manager-actions.md §1) ----
+
+const forwarded = new Set<string>();
+
+/** The user's messages on screen: where each went is read now, and again whenever anything changes. */
+export function wantForwards(messages: string[]) {
+  const before = forwarded.size;
+  messages.forEach((id) => forwarded.add(id));
+  if (forwarded.size > before) refreshForwards();
+}
+
+async function loadForwards() {
+  if (scope() !== ANGELA || forwarded.size === 0) return;
+  const forwards = await call<Record<string, Forward[]>>('forwards', { messages: [...forwarded] });
+  if (scope() === ANGELA) useStore.setState({ forwards });
+}
+
 // ---- Angela's ledger, read-only (manager-actions.md §3.3) ----
 
 let ledgerViews = 0;
@@ -596,6 +631,7 @@ const refreshThread = debounced(catchUp, 80);
 const refreshTurnStates = debounced(refreshTurns, 120);
 const refreshRefs = debounced(loadRefs, 150);
 const refreshLedger = debounced(loadLedger, 300);
+const refreshForwards = debounced(loadForwards, 300);
 const refreshDetail = debounced(async () => {
   const selected = useStore.getState().selectedTask;
   if (selected) await loadTaskDetail(selected);
@@ -607,6 +643,7 @@ function onPush(push: Push) {
   if ((push.type === 'events' || push.type === 'resync') && wanted.attachments.size > 0) refreshRefs();
   // An entry lands in her database or a project's; a task's constraint lapses when it closes.
   if ((push.type === 'events' || push.type === 'resync') && ledgerViews > 0) refreshLedger();
+  if ((push.type === 'events' || push.type === 'resync') && forwarded.size > 0) refreshForwards();
   // The settings follow their own page's project, wherever the window is.
   const settings = useStore.getState().settings;
   if (settings && (push.type === 'host' || push.type === 'resync' || ('project' in push && push.type === 'events' && push.project === settingsTarget(settings.page)))) {

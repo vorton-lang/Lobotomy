@@ -93,6 +93,7 @@
      - 已完成：最小的记录。按作用域存放，换会话时放进她的首轮输入，「全部」中有只读的"共识"（manager-actions.md §3.4.1）。
      - 已完成：`flag_mismatch`，直接进入用户与 Angela 的对话，并唤醒她（manager-actions.md §2.3 现状）。
      - 已完成：`send_to_role` 与 `assign` 的 `ledger` 参数（manager-actions.md §3.4.1）。
+     - 已完成：用户在 GUI 中"回复"Angela 的某一条；`context` 与 `recent_replies`；用户消息下的"已转给 …"（manager-actions.md §1.1 现状）。
 - #50 的三组开放问题属于 Angela 的判断：怎样估计用户的状态，怎样选择行动与介入时机，给出什么信息。M4 不回答这些问题，只搭出能观察它们的环境。M4 不做用户状态模型、信息价值的打分、为对照而做的多个版本，也不改通知规则。需要提前告诉用户的变化，Angela 按现有规则改变状态，例如用 `ask_user` 阻塞任务，由运行时发通知（manager-actions.md §6）。
 - 验收：
   - 用户只与 Angela 对话，完成一个真实任务；

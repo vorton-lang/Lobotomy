@@ -13,7 +13,8 @@ use crate::id::new_id;
 use crate::prompts;
 use crate::sql::sql_enum;
 use crate::task::{
-    Attempt, Message, Phase, Task, attempt_brief, load_task, occupant, open_attempt, queue_message, queued_messages,
+    Attempt, Message, Phase, Replied, Task, attempt_brief, load_task, occupant, open_attempt, queue_message,
+    queued_messages,
 };
 
 sql_enum! {
@@ -239,16 +240,21 @@ fn is_abnormal(turn: &Turn) -> bool {
 }
 
 /// The text written to the CLI's stdin: the bound messages in arrival order. The manager's input
-/// names each of the user's messages, so that she can quote it (manager-actions.md §1).
-pub fn compose_input(messages: &[Message], manager: bool) -> String {
+/// names each of the user's messages, so that she can quote it (manager-actions.md §1), and says
+/// what one replies to when the user chose it (§1.1); `replied` looks that up.
+pub fn compose_input(messages: &[Message], manager: bool, replied: impl Fn(&str) -> Option<Replied>) -> String {
     messages
         .iter()
         .map(|m| {
             let from = prompts::sender(&m.source);
-            let header = match m.source == Caller::User.scope() && manager {
+            let mut header = match m.source == Caller::User.scope() && manager {
                 true => prompts::header_with_id(from, &m.id),
                 false => prompts::header(from, m.task_id.as_deref()),
             };
+            if let Some(target) = m.reply_to.as_deref().and_then(&replied) {
+                header.push('\n');
+                header.push_str(&prompts::replying_to(&target));
+            }
             format!("{header}\n{}", m.body)
         })
         .collect::<Vec<_>>()
@@ -419,7 +425,7 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     }
     if !messages.is_empty() {
         let kind: String = cx.tx.query_row("SELECT kind FROM role WHERE name = ?1", [role], |r| r.get(0))?;
-        parts.push(compose_input(&messages, kind == "manager"));
+        parts.push(compose_input(&messages, kind == "manager", |id| crate::task::replied(cx.tx, id).ok().flatten()));
     }
     if parts.is_empty() {
         return Err(Error::rejected("nothing_to_deliver", format!("{role} has no queued messages")));

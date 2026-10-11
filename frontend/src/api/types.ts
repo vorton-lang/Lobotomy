@@ -370,6 +370,20 @@ export interface Message {
   /** The turn it was delivered in, once bound. */
   turn_id: string | null;
   created_at: number;
+  /** What the user chose that it replies to: an item or a message of the same conversation. */
+  reply_to: string | null;
+}
+
+/** Where Angela forwarded one of the user's messages ("已转给 …", manager-actions.md §1). */
+export interface Forward {
+  project: string;
+  project_name: string;
+  kind: 'task' | 'message';
+  role: string;
+  task_id: string | null;
+  task_title: string | null;
+  at: number;
+  contexts: { header: string; chosen: boolean }[];
 }
 
 export interface CommandRecord {

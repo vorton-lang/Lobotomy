@@ -167,6 +167,40 @@ test('Angela’s question waits in 「全部」 and the reply goes to her', asyn
   expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['angela']);
 });
 
+// The user replies to one of Angela's replies, and sees where she forwarded the message, with the
+// context the user chose (manager-actions.md §1, §1.1).
+test('a reply to Angela names its target, and the message shows where she forwarded it', async ({ page }) => {
+  const sent: [string, Record<string, unknown>][] = [];
+  const host: HostSnapshot = { projects: [entry('alpha', [accept]), entry('beta')], attention: [], harnesses: [], angela };
+  const hers = { id: 'item_1', seq: 1, turn_id: 'turn1', kind: 'agent_message', content: { text: '导出要不要带表头？\n细节在后面' }, command_id: null, created_at: 1 };
+  const mine = { id: 'msg_2', seq: 2, role: 'Angela', source: 'user', task_id: null, body: '要', turn_id: null, created_at: 2, reply_to: 'item_1' };
+  const thread = { items: [hers], has_more: false, turns: {}, messages: [], commands: {}, queued: [mine] };
+  const forwards = {
+    msg_2: [{
+      project: 'alpha', project_name: 'alpha', kind: 'message', role: 'Malkuth', task_id: 'task1', task_title: '导出报表', at: 3,
+      contexts: [{ header: 'Angela 10-11 13:58（item_1）', chosen: true }],
+    }],
+  };
+  await openHost(page, host, (name, args) => {
+    sent.push([name, args]);
+    return { id: 'msg_3' };
+  }, { thread, forwards });
+  const conversation = page.getByRole('region', { name: 'Angela', exact: true });
+  await expect(conversation.locator('.reply-line')).toHaveText('回复：「导出要不要带表头？」');
+  const tag = conversation.getByRole('button', { name: /已转给 Malkuth/ });
+  await expect(tag).toHaveText('已转给 Malkuth（alpha · 任务「导出报表」） · 附上下文：Angela 10-11 13:58（item_1）（你指定）');
+
+  await conversation.getByRole('button', { name: '回复', exact: true }).click();
+  await expect(conversation.locator('.replying')).toContainText('回复 Angela：「导出要不要带表头？」');
+  await conversation.getByLabel('消息').fill('对，带上');
+  await conversation.getByRole('button', { name: '发送' }).click();
+  await expect.poll(() => sent.map(([, args]) => [args.body, args.reply_to])).toEqual([['对，带上', 'item_1']]);
+  await expect(conversation.locator('.replying')).toHaveCount(0);
+
+  await tag.click();
+  await expect(page.getByRole('region', { name: '导出报表', exact: true })).toBeVisible();
+});
+
 // "共识" beside Angela lists what she recorded and still holds, each with the user's words it rests
 // on; a superseded entry is not listed (manager-actions.md §3.3, read-only in M4).
 test('共识 lists what Angela recorded and still holds, with the user’s words', async ({ page }) => {

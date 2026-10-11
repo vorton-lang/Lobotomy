@@ -113,6 +113,7 @@ pub fn send(db: &Db, request_id: &str, task: Option<&str>, body: &str) -> String
         role: ROLE.into(),
         task_id: task.map(Into::into),
         body: body.into(),
+        reply_to: None,
     };
     db.execute(&Caller::User, &message).unwrap().id
 }

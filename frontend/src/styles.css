@@ -194,6 +194,38 @@ pre {
   font-size: 13px;
 }
 
+/* Replying to one of Angela's replies, and where she forwarded the user's words (manager-actions.md §1). */
+.reply-to {
+  margin-left: 8px;
+  font-size: 12px;
+}
+.reply-line {
+  font-size: 12px;
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding-left: 6px;
+  margin-bottom: 4px;
+}
+.replying {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 4px;
+}
+.forwards {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-top: 4px;
+}
+.forward {
+  font-size: 12px;
+  text-align: left;
+}
+
 .splash,
 .onboarding {
   max-width: 560px;

@@ -9,7 +9,8 @@ use lobotomy_core::capture::{CaptureResult, FinishCapture, pending_captures};
 use lobotomy_core::ledger::{CitedEntry, LedgerKind};
 use lobotomy_core::report::ReportStatus;
 use lobotomy_core::task::{
-    Action, Assign, CreateTask, EditCriteria, Phase, Quote, Reopen, SendToRole, SetPaused, load_task, queued_messages,
+    Action, Assign, ContextEntry, CreateTask, EditCriteria, Phase, Quote, Reopen, SendToRole, SetPaused, load_task,
+    queued_messages,
 };
 use lobotomy_core::verify::{Accept, SendBack};
 use lobotomy_core::view::attachment::{Attachment, attachment};
@@ -31,6 +32,7 @@ fn assign(request_id: &str) -> Assign {
         executor: ROLE.into(),
         title: "查清启动慢的原因".into(),
         quotes: vec![quote("msg_user1", "启动太慢了，先看看为什么")],
+        context: vec![],
         ledger: vec![],
         interpretation: "先定位，不改代码".into(),
         actions: vec![Action::ReadOnly],
@@ -167,6 +169,12 @@ fn the_managers_message_quotes_the_user_and_answers_a_question() {
         role: ROLE.into(),
         task_id: Some(task.clone()),
         quotes: vec![quote("msg_user2", "用 8080")],
+        context: vec![ContextEntry {
+            source_id: "item_1".into(),
+            header: "Angela 10-11 13:58".into(),
+            body: "端口用 8080 还是 3000？".into(),
+            chosen: true,
+        }],
         ledger: vec![CitedEntry {
             id: "led_1".into(),
             kind: LedgerKind::Constraint,
@@ -183,10 +191,15 @@ fn the_managers_message_quotes_the_user_and_answers_a_question() {
     let input: String =
         db.read(|c| Ok(c.query_row("SELECT input FROM turn WHERE id = ?1", [&t.turn_id], |r| r.get(0))?)).unwrap();
     assert!(input.contains("【来自 Angela · 任务") && input.contains("【用户原话】"), "{input}");
-    // Her ledger entry comes as recorded, between the user's words and hers.
-    let cited =
-        "用 8080\n\n【记录】\n- [约束] 不改公共接口（led_1；用户原话：「别动接口」）\n\n【Angela 解读】\n端口定为 8080";
+    // What the user replied to, then her ledger entry, as they were, between the user's words and
+    // hers (manager-actions.md §1.1).
+    let cited = "用 8080\n\n【用户当时在回复】Angela 10-11 13:58\n端口用 8080 还是 3000？\n\n【记录】\n\
+                 - [约束] 不改公共接口（led_1；用户原话：「别动接口」）\n\n【Angela 解读】\n端口定为 8080";
     assert!(input.contains(cited), "{input}");
+    let chosen: bool = db
+        .read(|c| Ok(c.query_row("SELECT chosen FROM forward_context WHERE source_id = 'item_1'", [], |r| r.get(0))?))
+        .unwrap();
+    assert!(chosen, "the context keeps that the user chose it");
     assert_eq!(db.read(|c| load_task(c, &task)).unwrap().blocked_reason, None);
 }
 

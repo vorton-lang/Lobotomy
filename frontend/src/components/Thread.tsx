@@ -5,12 +5,13 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { VList, type VListHandle } from 'virtua';
-import type { CommandRecord } from '../api/types';
+import type { CommandRecord, Message } from '../api/types';
 import { buildRows, clock, sourceLabel, turnOutcome, type Row } from '../format';
 import { clearHighlight, highlight } from '../highlight';
 import { loadOlder, matchRowKey, setFollowing, useStore } from '../store';
 import { Markdown } from './common';
 import { ItemView, LiveItemView, RunningView } from './ItemView';
+import { ForwardTags, ReplyLine } from './Reply';
 
 const AT_END_SLACK = 48;
 
@@ -155,11 +156,11 @@ function RowView({
       );
     }
     case 'message':
-      return <MessageView source={row.message.source} body={row.message.body} />;
+      return <MessageView source={row.message.source} body={row.message.body} message={row.message} />;
     case 'input':
       return <MessageView source="runtime" body={row.note} />;
     case 'queued':
-      return <MessageView source={row.message.source} body={row.message.body} queued />;
+      return <MessageView source={row.message.source} body={row.message.body} message={row.message} queued />;
     case 'item':
       return <ItemView item={row.item} role={role} commands={commands} fold={row.fold} />;
     case 'live':
@@ -169,7 +170,10 @@ function RowView({
   }
 }
 
-function MessageView({ source, body, queued }: { source: string; body: string; queued?: boolean }) {
+function MessageView({ source, body, message, queued }: { source: string; body: string; message?: Message; queued?: boolean }) {
+  // In the conversation with Angela, the user's message says what it replies to and where she
+  // forwarded it (manager-actions.md §1, §1.1).
+  const angela = useStore((s) => s.project === null);
   // The runtime's messages repeat the task and carry instructions for the executor; the first
   // line says what each is about, the rest opens on demand (#13).
   if (source === 'runtime') {
@@ -190,7 +194,9 @@ function MessageView({ source, body, queued }: { source: string; body: string; q
         {sourceLabel(source)}
         {queued && <span className="muted"> · 排队中，下一个 turn 投递</span>}
       </div>
+      {message?.reply_to && <ReplyLine id={message.reply_to} />}
       <Markdown text={body} />
+      {angela && message && source === 'user' && <ForwardTags id={message.id} />}
     </div>
   );
 }
