@@ -139,19 +139,25 @@ pub async fn start_with(dir: &Path, harness: HarnessConfig) -> Started {
     Started { addr: backend.addr, backend, project }
 }
 
-pub fn create_task(db: &Db, body: &str) -> String {
-    db.execute(
-        &Caller::User,
-        &CreateTask {
-            request_id: format!("c-{body}"),
-            title: "测试任务".into(),
-            body: body.into(),
-            criteria: "work.txt 存在".into(),
-            executor: "Malkuth".into(),
-        },
-    )
-    .unwrap()
-    .id
+/// Creates a task and wakes its scheduler, as a GUI command does. Database-only fixtures can
+/// also use this: without a running scheduler, the notification has nothing to wake.
+pub fn create_task(project: &Project, body: &str) -> String {
+    let task = project
+        .db
+        .execute(
+            &Caller::User,
+            &CreateTask {
+                request_id: format!("c-{body}"),
+                title: "测试任务".into(),
+                body: body.into(),
+                criteria: "work.txt 存在".into(),
+                executor: "Malkuth".into(),
+            },
+        )
+        .unwrap()
+        .id;
+    project.wake.notify_one();
+    task
 }
 
 /// What the scheduler does when the role is free: starts the attempt and writes the slot. For

@@ -31,7 +31,21 @@ async fn a_task_runs_from_done_to_the_users_repository() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
-    let task = create_task(&db, "FAKE:done");
+    // Leave this direct database write unnotified: work must eventually progress even when
+    // the command did not arrive through the GUI's wake path.
+    let task = db
+        .execute(
+            &Caller::User,
+            &CreateTask {
+                request_id: "c-FAKE:done".into(),
+                title: "测试任务".into(),
+                body: "FAKE:done".into(),
+                criteria: "work.txt 存在".into(),
+                executor: "Malkuth".into(),
+            },
+        )
+        .unwrap()
+        .id;
 
     let turn = ended_turn(&db).await;
     assert_eq!(turn.outcome, Some(Outcome::Completed));
@@ -135,21 +149,11 @@ fn set_config(db: &Db, change: impl FnOnce(&mut ProjectConfig)) {
     .unwrap();
 }
 
-/// Checks run in the verification site on the candidate; a failing one sends it straight back to
-/// the executor with the output (harness-adapter.md §4.2).
-#[tokio::test]
-async fn checks_run_on_the_candidate_and_a_failure_goes_back_to_the_executor() {
-    failed_check_round_trip(false).await;
-}
-
-/// Both turns may finish between two polls. Observe only after that has happened: the done
-/// turn must still be identified, rather than treating the latest turn as the first (#25).
+/// Checks run on the candidate and a failure goes back to the executor (harness-adapter.md
+/// §4.2). Observe after both turns finish: the done turn must still be identified, rather than
+/// treating the latest turn as the first (#25).
 #[tokio::test]
 async fn a_failed_check_can_finish_before_the_first_turn_is_observed() {
-    failed_check_round_trip(true).await;
-}
-
-async fn failed_check_round_trip(observe_after_both: bool) {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
@@ -162,20 +166,18 @@ async fn failed_check_round_trip(observe_after_both: bool) {
             Check { command: r#"node -e "console.log('two tests failed'); process.exit(3)""#.into(), timeout_secs: 60 },
         ];
     });
-    let task = create_task(&db, "FAKE:done");
-    if observe_after_both {
-        wait_for_backend(&backend.project, "both turns to end before observing the first", || {
-            let ended: i64 = db
-                .read(|c| {
-                    Ok(c.query_row("SELECT count(*) FROM turn WHERE task_id = ?1 AND state = 'ended'", [&task], |r| {
-                        r.get(0)
-                    })?)
-                })
-                .unwrap();
-            (ended == 2).then_some(())
-        })
-        .await;
-    }
+    let task = create_task(&backend.project, "FAKE:done");
+    wait_for_backend(&backend.project, "both turns to end before observing the first", || {
+        let ended: i64 = db
+            .read(|c| {
+                Ok(c.query_row("SELECT count(*) FROM turn WHERE task_id = ?1 AND state = 'ended'", [&task], |r| {
+                    r.get(0)
+                })?)
+            })
+            .unwrap();
+        (ended == 2).then_some(())
+    })
+    .await;
     // The attempt records the exact turn that reported done. This remains true when the
     // resumed turn has already started or ended before the test's first poll.
     let first = wait_for_backend(&backend.project, "the reported done turn to end", || {
@@ -195,9 +197,7 @@ async fn failed_check_round_trip(observe_after_both: bool) {
     .await;
     assert!(first.done_at.is_some(), "the first turn reported done");
     assert_eq!(first.outcome, Some(Outcome::Completed));
-    if observe_after_both {
-        assert_ne!(first.id, last(&db).unwrap().id, "the latest turn is already the resumed turn");
-    }
+    assert_ne!(first.id, last(&db).unwrap().id, "the latest turn is already the resumed turn");
 
     // The first check saw the candidate's file; the second failed, and its output went back.
     let next = wait_for_backend(&backend.project, "the turn after the failed check", || {
@@ -229,7 +229,7 @@ async fn a_check_that_runs_too_long_times_out() {
     set_config(&db, |config| {
         config.checks = vec![Check { command: r#"node -e "setTimeout(() => {}, 600000)""#.into(), timeout_secs: 2 }];
     });
-    let task = create_task(&db, "FAKE:done");
+    let task = create_task(&backend.project, "FAKE:done");
     let first = ended_turn(&db).await;
     let next = wait_for("the turn after the timeout", || {
         last(&db).filter(|t| t.id != first.id && t.state == TurnState::Ended)
@@ -248,7 +248,7 @@ async fn an_oversized_done_stops_the_role_until_the_user_decides() {
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
     set_config(&db, |config| config.max_new_files = 0);
-    let task = create_task(&db, "FAKE:done");
+    let task = create_task(&backend.project, "FAKE:done");
     let first = ended_turn(&db).await;
     wait_for("the capture to stop", || db.read(|c| stopped_capture(c, "Malkuth")).unwrap()).await;
     settle(&backend).await;
@@ -274,7 +274,7 @@ async fn a_failed_store_job_waits_for_the_users_retry() {
     std::fs::write(&slot_path, "in the way").unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
-    create_task(&db, "FAKE:done");
+    create_task(&backend.project, "FAKE:done");
     let failed = wait_for("the failure", || failures(&backend.project).into_iter().next()).await;
     assert_eq!(failed.0, "slot:worker");
 
@@ -297,7 +297,7 @@ async fn the_preview_stops_on_local_changes_until_the_user_retries() {
     let db = backend.project.db.clone();
     let repo = user_repo(dir.path());
     let base = git(&repo, &["rev-parse", "HEAD"]);
-    let task = create_task(&db, "FAKE:done");
+    let task = create_task(&backend.project, "FAKE:done");
     phase(&db, &task, Phase::Accepting).await;
     std::fs::write(repo.join("notes.txt"), "mine").unwrap();
     let v = db.read(|c| latest_verification(c, &task)).unwrap().unwrap();
@@ -328,7 +328,7 @@ async fn a_failed_turn_holds_the_role_until_continue() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
-    create_task(&db, "FAKE:fail");
+    create_task(&backend.project, "FAKE:fail");
 
     let failed = ended_turn(&db).await;
     assert_eq!(failed.outcome, Some(Outcome::Failed));
@@ -370,7 +370,7 @@ async fn a_cli_that_exits_with_only_stderr_fails_with_its_error() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start_with(dir.path(), fake_codex_with(&["--fake-start-error"])).await;
     let db = backend.project.db.clone();
-    create_task(&db, "FAKE:done");
+    create_task(&backend.project, "FAKE:done");
 
     let turn = ended_turn(&db).await;
     assert_eq!(turn.outcome, Some(Outcome::Failed));
@@ -407,7 +407,7 @@ async fn a_project_from_before_multi_project_is_registered_and_opened() {
     let id = {
         let project = Arc::new(Project::open("prj_old", &data, host.clone()).unwrap());
         lobotomyd::onboard::onboard(&project, &user_repo(dir.path())).await.unwrap();
-        create_task(&project.db, "上次的任务");
+        create_task(&project, "上次的任务");
         project.id.clone()
     };
     let config = serde_json::json!({ "project": data });
@@ -450,7 +450,7 @@ async fn a_session_id_that_cannot_be_recorded_fails_the_turn() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
-    let task = create_task(&db, "先说一句");
+    let task = create_task(&backend.project, "先说一句");
     let first = ended_turn(&db).await;
     assert_eq!(first.outcome, Some(Outcome::Completed));
     let message = SendMessage {
@@ -481,7 +481,7 @@ async fn a_managed_codex_runs_the_task_after_switching_to_auto_review() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
-    let task = create_task(&db, "FAKE:managed FAKE:done");
+    let task = create_task(&backend.project, "FAKE:managed FAKE:done");
 
     let refused = ended_turn(&db).await;
     let failure = refused.failure.clone().unwrap();
@@ -526,7 +526,7 @@ async fn interrupting_a_turn_ends_it_as_interrupted() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
-    create_task(&db, "FAKE:sleep");
+    create_task(&backend.project, "FAKE:sleep");
 
     let turn = wait_for("the turn to run", || last(&db).filter(|t| t.state == TurnState::Running)).await;
     // Give the fake time to install its SIGINT handler.
@@ -545,7 +545,7 @@ async fn a_turn_left_registered_by_the_last_run_is_reconciled_as_interrupted() {
     {
         // The last run registered a turn and stopped before starting the CLI.
         let project = open_project(dir.path(), fake_codex()).await;
-        create_task(&project.db, "FAKE:done");
+        create_task(&project, "FAKE:done");
         start_attempt(&project, &next_task(&project.db)).await;
         project.db.execute(&Caller::Runtime, &RegisterTurn { role: "Malkuth".into() }).unwrap();
     }
@@ -566,7 +566,7 @@ async fn a_large_field_is_stored_even_when_its_blob_cannot_be_written() {
     std::fs::write(dir.path().join("project").join("blobs"), "not a directory").unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
-    create_task(&db, "FAKE:big");
+    create_task(&backend.project, "FAKE:big");
 
     let turn = ended_turn(&db).await;
     assert_eq!(turn.outcome, Some(Outcome::Completed));
@@ -712,7 +712,7 @@ async fn a_real_claude_turn_is_interrupted_and_continued() {
     on_claude(&db);
     db.write(|tx| Ok(tx.execute("UPDATE role SET model = 'haiku' WHERE name = 'Malkuth'", [])?)).unwrap();
     let body = "运行这条命令并等它结束：Start-Sleep -Seconds 120。然后报告完成。";
-    create_task(&db, body);
+    create_task(&backend.project, body);
 
     let turn = wait_for("the turn to run", || last(&db).filter(|t| t.state == TurnState::Running)).await;
     let project = backend.project.clone();
@@ -767,7 +767,7 @@ async fn a_blocked_quota_domain_starts_nothing_until_a_retry_passes() {
     let host = backend.project.host.clone();
     // Unknown reset time: no automatic check is planned (data-model.md §8.4).
     host.db.block("codex", None, "limit", now_ms()).unwrap();
-    let task = create_task(&db, "FAKE:done");
+    let task = create_task(&backend.project, "FAKE:done");
     settle(&backend).await;
     assert!(last(&db).is_none(), "no turn while the domain is blocked");
     assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Queued);
@@ -787,7 +787,7 @@ async fn after_recovery_a_quota_failed_role_waits_for_the_user() {
     {
         // The last turn failed for quota and blocked the domain.
         let project = open_project(dir.path(), fake_codex()).await;
-        let task = create_task(&project.db, "FAKE:done");
+        let task = create_task(&project, "FAKE:done");
         start_attempt(&project, &task).await;
         let turn = project.db.execute(&Caller::Runtime, &RegisterTurn { role: "Malkuth".into() }).unwrap();
         let failure = Failure::new(FailureKind::Quota, "limit");
@@ -819,10 +819,10 @@ async fn abandoning_a_failed_task_lets_the_next_one_run() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
-    let a = create_task(&db, "FAKE:fail");
+    let a = create_task(&backend.project, "FAKE:fail");
     let failed = ended_turn(&db).await;
     assert_eq!(failed.outcome, Some(Outcome::Failed));
-    let b = create_task(&db, "FAKE:done");
+    let b = create_task(&backend.project, "FAKE:done");
     db.execute(&Caller::User, &Abandon { request_id: "x1".into(), task_id: a, reason: String::new() }).unwrap();
     backend.project.wake.notify_one();
 
@@ -906,7 +906,7 @@ if (process.argv[2] === 'child') {{
     let Started { backend, project, .. } = start_with(dir.path(), harness).await;
     let (id, data, host) = (project.id.clone(), project.data_dir.clone(), project.host.clone());
     let db = project.db.clone();
-    create_task(&db, "deaf");
+    create_task(&project, "deaf");
     let turn =
         wait_for("the turn to run", || last(&db).filter(|t| t.state == TurnState::Running && t.pid.is_some())).await;
     // The handlers and the ordinary child are ready before the interrupt; a launched pid alone
@@ -986,7 +986,7 @@ async fn interrupting_a_claude_turn_ends_it_as_interrupted() {
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
     on_claude(&db);
-    create_task(&db, "FAKE:sleep");
+    create_task(&backend.project, "FAKE:sleep");
 
     let turn = wait_for("the turn to run", || last(&db).filter(|t| t.state == TurnState::Running)).await;
     // Give the fake time to install its SIGINT handler.
@@ -1005,7 +1005,7 @@ async fn a_task_runs_on_claude_to_acceptance() {
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
     on_claude(&db);
-    let task = create_task(&db, "FAKE:done");
+    let task = create_task(&backend.project, "FAKE:done");
 
     let turn = ended_turn(&db).await;
     assert_eq!((turn.harness.as_str(), turn.outcome), ("claude", Some(Outcome::Completed)));
@@ -1033,7 +1033,7 @@ async fn a_claude_turn_resumes_its_session() {
     let backend = start(dir.path()).await;
     let db = backend.project.db.clone();
     on_claude(&db);
-    let task = create_task(&db, "FAKE:blocked");
+    let task = create_task(&backend.project, "FAKE:blocked");
     let first = ended_turn(&db).await;
     let reply = SendMessage {
         request_id: "m1".into(),
@@ -1052,32 +1052,6 @@ async fn a_claude_turn_resumes_its_session() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
-/// Claude's session limit (data-model.md §8.3) fails the turn for its quota with the reset time,
-/// and blocks Claude's domain only. The user's retry runs Claude's quota check.
-#[tokio::test]
-async fn a_session_limit_on_claude_blocks_its_domain_only() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend = start(dir.path()).await;
-    let db = backend.project.db.clone();
-    on_claude(&db);
-    create_task(&db, "FAKE:quota");
-
-    let turn = ended_turn(&db).await;
-    let failure = turn.failure.clone().unwrap();
-    assert_eq!(
-        (turn.outcome, failure.kind, failure.resets_at),
-        (Some(Outcome::Failed), FailureKind::Quota, Some(1_790_868_000_000))
-    );
-    assert!(failure.message.contains("session limit"), "{failure:?}");
-    let host = backend.project.host.clone();
-    assert!(host.is_blocked("claude").unwrap());
-    assert!(!host.is_blocked("codex").unwrap());
-
-    assert!(!host.retry("claude").await.unwrap().is_blocked());
-    assert!(last_args(&host_dir(dir.path()).join("probe")).contains(&"--no-session-persistence".to_owned()));
-    backend.shutdown(Duration::from_secs(5)).await;
-}
-
 /// The quota domain belongs to the host (data-model.md §10.5, roadmap M3 acceptance): Claude's
 /// session limit in one project stops Claude's roles in every project, Codex's roles go on, and
 /// the user's retry lets them all continue.
@@ -1087,9 +1061,16 @@ async fn a_session_limit_in_one_project_stops_claude_in_every_project() {
     let backend = start(dir.path()).await;
     let a = backend.project.clone();
     on_claude(&a.db);
-    create_task(&a.db, "FAKE:quota");
-    assert_eq!(ended_turn(&a.db).await.failure.unwrap().kind, FailureKind::Quota);
+    create_task(&a, "FAKE:quota");
+    let turn = ended_turn(&a.db).await;
+    let failure = turn.failure.clone().unwrap();
+    assert_eq!(
+        (turn.outcome, failure.kind, failure.resets_at),
+        (Some(Outcome::Failed), FailureKind::Quota, Some(1_790_868_000_000))
+    );
+    assert!(failure.message.contains("session limit"), "{failure:?}");
     assert!(a.host.is_blocked("claude").unwrap());
+    assert!(!a.host.is_blocked("codex").unwrap());
 
     let projects = backend.backend.projects.clone();
     let open = |name: &str| {
@@ -1102,13 +1083,14 @@ async fn a_session_limit_in_one_project_stops_claude_in_every_project() {
     };
     let (b, c) = (open("b").await, open("c").await);
     on_claude(&b.db);
-    create_task(&b.db, "FAKE:done");
-    create_task(&c.db, "FAKE:done");
+    create_task(&b, "FAKE:done");
+    create_task(&c, "FAKE:done");
     assert_eq!(ended_turn(&c.db).await.outcome, Some(Outcome::Completed), "Codex goes on");
     settle(&backend).await;
     assert!(last(&b.db).is_none(), "Claude starts nothing in another project");
 
     assert!(!a.host.retry("claude").await.unwrap().is_blocked());
+    assert!(last_args(&host_dir(dir.path()).join("probe")).contains(&"--no-session-persistence".to_owned()));
     projects.wake_all();
     assert_eq!(ended_turn(&b.db).await.outcome, Some(Outcome::Completed));
     drop((a, b, c));
@@ -1155,7 +1137,7 @@ async fn a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown() {
     let backend = start(dir.path()).await;
     let project = backend.project.clone();
     let db = project.db.clone();
-    let task = create_task(&db, "FAKE:done FAKE:trial");
+    let task = create_task(&backend.project, "FAKE:done FAKE:trial");
     phase(&db, &task, Phase::Accepting).await;
     let request = || {
         let detail = db.read(|c| lobotomy_core::view::task_detail(c, &task)).unwrap();
@@ -1262,7 +1244,7 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
     let backend = start(dir.path()).await;
     let angela = backend.backend.angela().expect("Angela opened");
     let project = backend.project.clone();
-    let task = create_task(&project.db, "FAKE:done");
+    let task = create_task(&project, "FAKE:done");
     phase(&project.db, &task, Phase::Accepting).await;
     let projects = backend.backend.projects.clone();
     let archived = projects.create(&user_repo(&dir.path().join("b"))).await.unwrap().id;
@@ -1470,7 +1452,7 @@ async fn a_mismatch_reaches_the_users_conversation_with_angela() {
     let angela = backend.backend.angela().expect("Angela opened");
     let project = backend.project.clone();
     wait_for("her cursor on the project", || angela.db.read(lobotomy_core::manager::cursors).unwrap().pop()).await;
-    create_task(&project.db, "FAKE:sleep");
+    create_task(&project, "FAKE:sleep");
     let turn =
         wait_for("the executor's turn to run", || last(&project.db).filter(|t| t.state == TurnState::Running)).await;
     let flag = lobotomy_core::report::FlagMismatch { body: "原话说先别大改，解读要求重写".into() };
@@ -1505,7 +1487,7 @@ async fn a_project_that_settles_wakes_angela_with_what_changed() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(angela.db.read(|c| lobotomy_core::turn::last_turn(c, "Angela")).unwrap().is_none(), "no wake at startup");
 
-    let task = create_task(&project.db, "FAKE:done");
+    let task = create_task(&project, "FAKE:done");
     phase(&project.db, &task, Phase::Accepting).await;
     let turn = angela_turn_ended(&angela).await;
     let told = angela.db.read(|c| lobotomy_core::task::turn_messages(c, &turn.id)).unwrap();
@@ -1611,7 +1593,7 @@ async fn angela_assigns_with_the_users_words_and_leaves_the_users_pause_alone() 
     let project = backend.project.clone();
     let said = tell_angela(&angela, "启动太慢了，先看看为什么");
     angela_turn_for(&angela, &said).await;
-    let held = create_task(&project.db, "先别动");
+    let held = create_task(&project, "先别动");
     project
         .db
         .execute(&Caller::User, &SetPaused { request_id: "p1".into(), task_id: held.clone(), paused: true })
