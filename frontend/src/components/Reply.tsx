@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo } from 'react';
 import type { AttachmentView, QuotedMessage, Resolved } from '../api/types';
-import { attachmentExpired, attachmentLine, attachmentWarning, clock, firstLine, splitReply, textOf } from '../format';
+import { attachmentExpired, attachmentLine, attachmentWarning, clock, previewLine, splitReply, textOf } from '../format';
 import { selectProject, useStore, wantForwards, wantRefs } from '../store';
 import { Markdown } from './common';
 
@@ -38,7 +38,7 @@ export function ReplyLine({ id }: { id: string }) {
     if (item?.kind === 'agent_message') return textOf(item.content.text);
     return s.thread.messages.find((m) => m.id === id)?.body;
   });
-  return <div className="reply-line">回复：「{text ? firstLine(text) : '较早的一条'}」</div>;
+  return <div className="reply-line">回复：「{text ? previewLine(text) : '较早的一条'}」</div>;
 }
 
 /** Where Angela forwarded the user's message: "已转给 …", with the context she attached (§1). */

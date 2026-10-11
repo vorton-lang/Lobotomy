@@ -33,6 +33,7 @@ import {
   firstLines,
   fits,
   lastLines,
+  previewLine,
   roleActivity,
   splitReply,
   stoppedPaths,
@@ -263,6 +264,19 @@ describe("Angela's reply", () => {
     expect(splitReply('没有引用')).toEqual([{ kind: 'text', text: '没有引用' }]);
     // A malformed reference stays text.
     expect(splitReply('[[att: x]]')).toEqual([{ kind: 'text', text: '[[att: x]]' }]);
+  });
+
+  it('previews the message a reply replies to as plain text', () => {
+    expect(previewLine('**alpha · 导出报表**：第 1 轮已通过验证。\n\n[[att:ver_1]]')).toBe('alpha · 导出报表：第 1 轮已通过验证。');
+    expect(previewLine('## 结论\n细节')).toBe('结论');
+    expect(previewLine('> - 你说过 `--force` 不要用，见 [说明](https://x.y)')).toBe('你说过 --force 不要用，见 说明');
+    // Lines of markup alone say nothing; a reference shows as what it is.
+    expect(previewLine('---\n```ts\nconst a = 1;\n```')).toBe('const a = 1;');
+    expect(previewLine('[[quote:msg_1]] 这句还算数吗')).toBe('（原话） 这句还算数吗');
+    expect(previewLine('[[att:ver_1]]')).toBe('（附件）');
+    // Underscores inside names stay.
+    expect(previewLine('改了 snake_case_name 和 2*3')).toBe('改了 snake_case_name 和 2*3');
+    expect(previewLine('长'.repeat(70))).toBe(`${'长'.repeat(60)}…`);
   });
 
   it('writes the version an attachment is bound to and whether it still holds', () => {

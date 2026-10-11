@@ -2,7 +2,7 @@
 // holds the arguments; other items show their own content.
 
 import type { CommandRecord, Item, LiveItem, Text } from '../api/types';
-import { asReport, commandSummary, elapsed, firstLine, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
+import { asReport, commandSummary, elapsed, previewLine, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
 import { setReplyTo, useStore } from '../store';
 import { Markdown, Output, useNow } from './common';
 import { Reply } from './Reply';
@@ -118,7 +118,7 @@ function AgentMessage({ id, role, text }: { id: string; role: string; text: stri
       <div className="who">
         {role}
         {angela && (
-          <button className="link reply-to" onClick={() => setReplyTo({ id, text: firstLine(text) })}>
+          <button className="link reply-to" onClick={() => setReplyTo({ id, text: previewLine(text) })}>
             回复
           </button>
         )}

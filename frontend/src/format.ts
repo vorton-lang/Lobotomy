@@ -156,9 +156,23 @@ export const LEDGER_LABEL: Record<LedgerKind, string> = {
 /** An entry still holds: no newer one superseded it, and its task's constraint has not lapsed. */
 export const ledgerHolds = (e: LedgerEntry): boolean => e.superseded_by === null && !e.lapsed;
 
-/** A text's first non-empty line, cut to `max` characters. */
-export function firstLine(text: string, max = 60): string {
-  const line = text.split('\n').find((l) => l.trim()) ?? '';
+/**
+ * The first line of a Markdown text that says something, as plain text cut to `max` characters:
+ * what a reply shows of the message it replies to. Markup goes; a reference the runtime renders
+ * shows as what it is. Lines of markup alone, such as a rule or a fence, are skipped.
+ */
+export function previewLine(text: string, max = 60): string {
+  const plain = (line: string) =>
+    line
+      .replace(/^\s*(`{3,}|~{3,}).*$/, '')
+      .replace(REFERENCE, (_, kind: string) => (kind === 'quote' ? '（原话）' : '（附件）'))
+      .replace(/^\s*(?:(?:#{1,6}|>|[-*+]|\d+[.)])\s+|>)+/, '')
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/(\*\*|__|~~)(.+?)\1/g, '$2')
+      .replace(/\*([^*\s][^*]*)\*/g, '$1')
+      .replace(/`([^`]*)`/g, '$1')
+      .trim();
+  const line = text.split('\n').map(plain).find((l) => /[\p{L}\p{N}]/u.test(l)) ?? '';
   return line.length > max ? `${line.slice(0, max)}…` : line;
 }
 
