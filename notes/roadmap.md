@@ -88,7 +88,7 @@
      - 只读调查的任务产生了文件改动时，运行时标出（roles-and-tasks.md §4）。
      - 实测（2026-10-11，Windows，Claude Code，haiku）：她先读项目，再调用 `assign`，`actions`、`quote`、`stop_when` 都按工具的参数说明填写，引用的是用户那条消息的 ID。测试是 `a_real_claude_angela_assigns_a_task`，默认忽略。只验证了一次调用，没有验证她在自然协作中的判断。
   3. **Angela 跟上变化。** 运行时按每个项目的事件游标把变化放进她的收件箱；组织进入"等你"时她写合并的消息；`ask_user`；最小的记录与换会话时的投影。还有第 2 步排到这里的几项：`ledger` 参数、`flag_mismatch`、"已转给 …"标签、`context` 与用户手动指定回复对象。（完成，2026-10-11）
-     - 没做：她的输入中仍然没有用户的本地时间（第 1 步留下的）；`ask_user` 和 `flag_mismatch` 不带附件；系统通知是否等她写完合并的消息（manager-actions.md §8 的待决问题）；下层对记录的只读查询。
+     - 没做：她的输入中仍然没有用户的本地时间（第 1 步留下的）；`ask_user` 和 `flag_mismatch` 不带附件；下层对记录的只读查询。系统通知还没有做；做的时候，等她写完合并的消息再发（manager-actions.md §6，用户确认，2026-10-11）。
      - 这一步的行为只用假 CLI 测过。用真实的 CLI 走过的只有第 2 步的 `assign`。
      - 已完成：收件箱与唤醒。项目停下且有她不知道的变化时唤醒她，她每次运行时收到各项目的变化（manager-actions.md §6"Manager 什么时候运行"）。
      - 已完成：`ask_user`，只带问题；要停下的任务由她另外暂停（manager-actions.md §6 现状）。
