@@ -203,7 +203,8 @@ async function setHarness(page: Page, harness: 'claude' | 'codex') {
   const settings = page.getByRole('region', { name: '设置' });
   await settings.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '常规' }).click();
   const choice = settings.getByRole('radiogroup', { name: 'Malkuth 使用的 harness' }).getByRole('radio', { name });
-  await choice.check();
+  // The controlled radio updates when the backend's settings snapshot arrives.
+  await choice.click();
   await expect(choice).toBeChecked();
   await settings.getByRole('button', { name: '← 返回' }).click();
   await expect(page.locator('.role-line .badge')).toHaveText(name);
