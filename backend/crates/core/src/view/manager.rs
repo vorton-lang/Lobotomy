@@ -376,6 +376,9 @@ pub struct ChangesRead {
     /// How many of the changes, listed or not, someone other than the manager caused: what she
     /// does not know yet.
     pub by_others: usize,
+    /// Roles that said her interpretation differs from the user's words (manager-actions.md §2.3),
+    /// a line each; never cut.
+    pub mismatches: Vec<String>,
 }
 
 pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
@@ -383,6 +386,7 @@ pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
         crate::task::list_tasks(conn)?.into_iter().map(|t| (t.id, t.title)).collect();
     let as_of = last_event(conn)?;
     let mut lines = Vec::new();
+    let mut mismatches = Vec::new();
     let mut by_others = 0;
     let mut seq = after;
     while seq < as_of {
@@ -390,6 +394,13 @@ pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
         let Some(last) = events.last() else { break };
         seq = last.seq;
         for event in &events {
+            if event.kind == "mismatch.flagged" {
+                let text = |key: &str| event.payload.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+                let task = event.payload.get("task_id").and_then(Value::as_str).and_then(|t| titles.get(t));
+                let of = task.map(|t| format!("（任务「{t}」）")).unwrap_or_default();
+                mismatches.push(format!("{}{of}：{}", text("role"), text("body")));
+                continue;
+            }
             if let Some(line) = change_line(conn, event, &titles)? {
                 lines.push(line);
                 by_others += usize::from(event.caller.as_deref() != Some("manager"));
@@ -398,7 +409,7 @@ pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
     }
     let not_listed = lines.len().saturating_sub(CHANGES_LISTED);
     lines.truncate(CHANGES_LISTED);
-    Ok(ChangesRead { after, as_of: seq.max(after), lines, not_listed, by_others })
+    Ok(ChangesRead { after, as_of: seq.max(after), lines, not_listed, by_others, mismatches })
 }
 
 /// Who caused a change, as the manager reads it: she is "你".

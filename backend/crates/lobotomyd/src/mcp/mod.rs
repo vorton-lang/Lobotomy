@@ -18,7 +18,7 @@ use axum::{
     routing::any,
 };
 use lobotomy_core::Caller;
-use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
+use lobotomy_core::report::{FlagMismatch, OrgReport, ReportEffect, ReportStatus};
 use lobotomy_core::task::Trial;
 use lobotomy_core::turn::turn_by_token;
 use rmcp::{
@@ -161,8 +161,47 @@ pub struct OrgReportArgs {
     pub trial: Option<TrialArg>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FlagMismatchArgs {
+    /// 原话与解读哪里不一致，你按哪个理解在做
+    pub body: String,
+}
+
 #[tool_router]
 impl OrgTools {
+    #[tool(
+        description = "你认为 Angela 的解读与【用户原话】不一致时调用。运行时把它直接放进用户与 Angela 的对话，不经 Angela 转述。"
+    )]
+    async fn flag_mismatch(
+        &self,
+        Parameters(args): Parameters<FlagMismatchArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let token = turn_token(&context).map(str::to_owned);
+        let Some(project) = request_project(&context) else {
+            return Err(ErrorData::internal_error("the URL names no open project", None));
+        };
+        let db_project = project.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let token =
+                token.ok_or_else(|| lobotomy_core::Error::rejected("no_token", "the URL carries no turn token"))?;
+            let turn = db_project
+                .db
+                .read(|c| turn_by_token(c, &token))?
+                .ok_or_else(|| lobotomy_core::Error::rejected("unknown_token", "no turn has this token"))?;
+            let caller = Caller::Role { role: turn.role, turn_id: turn.id };
+            db_project.db.execute_recorded(&caller, &FlagMismatch { body: args.body })
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        match outcome {
+            Ok(((), id)) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "已直接告诉用户（{id}）。在得到答复前，按用户原话理解。"
+            ))])),
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!("被拒绝：{e}"))])),
+        }
+    }
+
     #[tool(
         description = "向 Lobotomy 组织汇报：阶段性进展（progress）、需要用户决定的问题（blocked）或任务完成（done）。"
     )]

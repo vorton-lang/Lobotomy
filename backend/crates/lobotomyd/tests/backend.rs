@@ -1348,11 +1348,46 @@ async fn angelas_ledger_is_kept_by_scope_and_starts_her_next_session() {
 
     let new_session = lobotomy_core::turn::NewNativeSession { request_id: "n1".into(), role: "Angela".into() };
     angela.db.execute(&Caller::User, &new_session).unwrap();
+    let session = angela.db.read(|c| lobotomy_core::turn::current_session(c, "Angela", None)).unwrap().unwrap();
     let next = tell_angela(&angela, "现在怎么样");
-    let turn = angela_turn_for(&angela, &next).await;
+    angela_turn_for(&angela, &next).await;
+    // The session's first turn, whatever woke her, starts from the ledger.
+    let inputs: Vec<String> = angela
+        .db
+        .read(|c| {
+            let mut stmt =
+                c.prepare("SELECT input FROM turn WHERE native_session_id = ?1 ORDER BY registered_at, id")?;
+            Ok(stmt.query_map([&session.id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
     for part in ["## 你的记录", "[决定] 导出先做 CSV", "[约束] 不改公共接口"] {
-        assert!(turn.input.contains(part), "{part} is missing from:\n{}", turn.input);
+        assert!(inputs[0].contains(part), "{part} is missing from the session's first input; all inputs:\n{inputs:#?}");
     }
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// An executor that says Angela's interpretation differs from the user's words reaches the user's
+/// conversation with her unfiltered, while its turn still runs, and wakes her (manager-actions.md
+/// §2.3).
+#[tokio::test]
+async fn a_mismatch_reaches_the_users_conversation_with_angela() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().expect("Angela opened");
+    let project = backend.project.clone();
+    wait_for("her cursor on the project", || angela.db.read(lobotomy_core::manager::cursors).unwrap().pop()).await;
+    create_task(&project.db, "FAKE:sleep");
+    let turn =
+        wait_for("the executor's turn to run", || last(&project.db).filter(|t| t.state == TurnState::Running)).await;
+    let flag = lobotomy_core::report::FlagMismatch { body: "原话说先别大改，解读要求重写".into() };
+    project.db.execute(&Caller::Role { role: "Malkuth".into(), turn_id: turn.id }, &flag).unwrap();
+    project.wake.notify_one();
+
+    let hers = angela_turn_ended(&angela).await;
+    let told = angela.db.read(|c| lobotomy_core::task::turn_messages(c, &hers.id)).unwrap();
+    let mismatch = told.iter().find(|m| m.body.starts_with("⚠ ")).expect("a message of its own");
+    assert_eq!(mismatch.source, "runtime");
+    assert!(mismatch.body.contains("Malkuth（任务「测试任务」）：原话说先别大改，解读要求重写"), "{}", mismatch.body);
     backend.shutdown(Duration::from_secs(5)).await;
 }
 

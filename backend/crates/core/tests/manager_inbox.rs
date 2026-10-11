@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use lobotomy_core::Caller;
 use lobotomy_core::manager::{AskUser, Cursor, TellManager, cursors, open_questions};
-use lobotomy_core::report::ReportStatus;
+use lobotomy_core::report::{FlagMismatch, ReportStatus};
 use lobotomy_core::task::{SetPaused, queued_messages};
 use lobotomy_core::view::manager::{changes_since, settled};
 use lobotomy_core::view::{Attention, attention, last_event, overview};
@@ -102,6 +102,24 @@ fn her_question_waits_for_a_message_sent_after_it() {
     send(&db, "m3", None, "先做 CSV");
     register(&db);
     assert!(open().is_empty(), "the answer closes it");
+}
+
+/// A role's word that her interpretation differs from the user's comes apart from the other
+/// changes, whole (manager-actions.md §2.3), and only from a turn still running.
+#[test]
+fn a_mismatch_is_told_apart_from_the_changes() {
+    let db = db();
+    let task = create(&db, "c1");
+    start(&db, &task);
+    let t = register(&db);
+    let role = Caller::Role { role: ROLE.into(), turn_id: t.turn_id.clone() };
+    let flag = FlagMismatch { body: "原话说先别大改，解读要求重写内存模型".into() };
+    db.execute(&role, &flag).unwrap();
+    let read = db.read(|c| changes_since(c, 0)).unwrap();
+    assert_eq!(read.mismatches, ["Malkuth（任务「加一个 new.txt」）：原话说先别大改，解读要求重写内存模型"]);
+    assert!(read.lines.iter().all(|l| !l.contains("原话说先别大改")), "{:?}", read.lines);
+    end_turn(&db, &t.turn_id);
+    assert_eq!(common::rejection(db.execute(&role, &flag)), "turn_ended");
 }
 
 /// Her inbox and her cursors are written together, in her database only (data-model.md §10.6

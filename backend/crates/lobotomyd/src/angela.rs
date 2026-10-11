@@ -221,7 +221,23 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
         seen.push(Seen { id: entry.id, name: entry.name, settled, waiting, changes });
     }
 
-    let wakes = |s: &Seen| s.settled.is_some() && s.changes.as_ref().is_ok_and(|c| c.by_others > 0);
+    // A role questioning her interpretation goes to the user unfiltered, in a message of its own in
+    // her conversation, and wakes her to correct herself (manager-actions.md §2.3).
+    for s in &seen {
+        let Ok(changes) = &s.changes else { continue };
+        if changes.mismatches.is_empty() {
+            continue;
+        }
+        let body = format!(
+            "⚠ {} 中有角色认为 Angela 的解读与用户原话不一致\n\n{}\n\n这条提示由运行时直接放进对话，用户能看到。请对照用户原话修正。",
+            s.name,
+            changes.mismatches.iter().map(|m| format!("- {m}")).collect::<Vec<_>>().join("\n")
+        );
+        runtime(instance, TellManager { role: ROLE.into(), body: Some(body), cursors: Vec::new() }).await?;
+    }
+    let wakes = |s: &Seen| {
+        s.changes.as_ref().is_ok_and(|c| !c.mismatches.is_empty() || (s.settled.is_some() && c.by_others > 0))
+    };
     let woken: Vec<&Seen> = seen.iter().filter(|s| wakes(s)).collect();
     let mut sections = Vec::new();
     let mut moved = Vec::new();
@@ -259,14 +275,15 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
     if moved.is_empty() && recalled.is_none() {
         return Ok(());
     }
-    let summary = match woken.as_slice() {
-        [] if sections.is_empty() => "你的记录".to_owned(),
-        [] => "各项目自上次以来的变化".to_owned(),
-        woken => {
-            let states: Vec<String> =
-                woken.iter().filter_map(|s| s.settled.map(|state| format!("{} {}", s.name, state.label()))).collect();
-            states.join("；")
-        }
+    let states: Vec<String> = woken
+        .iter()
+        .filter(|s| s.changes.as_ref().is_ok_and(|c| c.by_others > 0))
+        .filter_map(|s| s.settled.map(|state| format!("{} {}", s.name, state.label())))
+        .collect();
+    let summary = match (states.is_empty(), sections.is_empty()) {
+        (false, _) => states.join("；"),
+        (true, true) => "你的记录".to_owned(),
+        (true, false) => "各项目自上次以来的变化".to_owned(),
     };
     sections.splice(0..0, recalled);
     let body = (!sections.is_empty()).then(|| format!("{summary}\n\n{}", sections.join("\n\n")));

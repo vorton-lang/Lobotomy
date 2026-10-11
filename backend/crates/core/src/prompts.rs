@@ -66,7 +66,7 @@ pub(crate) fn assigned_brief(
 /// What the executor does when the user's words and the manager's reading of them differ
 /// (manager-actions.md §1).
 const QUOTES_FIRST: &str =
-    "【用户原话】由运行时原样插入，其余是 Angela 的解读。两者冲突时，以原话为准，并在汇报中指出。";
+    "【用户原话】由运行时原样插入，其余是 Angela 的解读。两者冲突时，以原话为准，并调用 flag_mismatch 说明哪里不一致。";
 
 /// One quoted message of the user, under the runtime's header (manager-actions.md §1).
 pub(crate) fn quoted(at: &str, body: &str) -> String {

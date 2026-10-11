@@ -147,6 +147,35 @@ fn current_task(cx: &Cx<'_>, turn: &Turn) -> Result<Option<Task>> {
     Ok(open.filter(|a| &a.id == attempt_id).map(|_| task))
 }
 
+/// A role says the manager's interpretation differs from the user's words (manager-actions.md
+/// §2.3). It goes to the user unfiltered, because it questions the manager herself; the runtime
+/// puts it in the user's conversation with her, and she gets it too, to correct herself.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FlagMismatch {
+    /// What differs, in the role's own words.
+    pub body: String,
+}
+
+impl Command for FlagMismatch {
+    const NAME: &'static str = "flag_mismatch";
+    type Output = ();
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
+        let Caller::Role { role, turn_id } = caller else {
+            return Err(Error::rejected("forbidden", "flag_mismatch comes from a role's turn"));
+        };
+        let turn = load_turn(cx.tx, turn_id)?;
+        if &turn.role != role || turn.state == TurnState::Ended {
+            return Err(Error::rejected("turn_ended", format!("turn {} has ended", turn.id)));
+        }
+        if self.body.trim().is_empty() {
+            return Err(Error::rejected("missing_field", "say what differs"));
+        }
+        cx.emit("mismatch.flagged", &turn.id, json!({ "role": role, "task_id": turn.task_id, "body": self.body }))?;
+        Ok(())
+    }
+}
+
 pub(crate) fn set_blocked(cx: &mut Cx<'_>, task: &Task, reason: Option<&str>) -> Result<()> {
     if task.blocked_reason.as_deref() == reason {
         return Ok(());
