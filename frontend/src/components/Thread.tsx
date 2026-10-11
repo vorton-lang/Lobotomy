@@ -93,7 +93,11 @@ export function Thread() {
       // row measurement can pull the list back to the end after the wheel moved it away.
       handle.scrollTo(offset);
     }
-    setFollowing(offset + handle.viewportSize >= handle.scrollSize - AT_END_SLACK);
+    // A scroll can arrive before virtua measures the viewport. Zero means unmeasured, not
+    // that the user left the end; preserve following until there is a size to compare with.
+    if (handle.viewportSize > 0) {
+      setFollowing(offset + handle.viewportSize >= handle.scrollSize - AT_END_SLACK);
+    }
     if (offset < 200 && thread.hasMore) {
       setPrepending(true);
       void loadOlder();
