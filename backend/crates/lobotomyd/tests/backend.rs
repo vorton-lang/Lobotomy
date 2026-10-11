@@ -1188,14 +1188,25 @@ fn tell_angela(angela: &Instance, body: &str) -> String {
     id
 }
 
-/// Angela's turn after `previous`, once it ended.
-async fn angela_turn_after(angela: &Instance, previous: Option<&str>) -> lobotomy_core::turn::Turn {
+/// Angela's turn that delivered the message `id`, once it ended. A project that settles can wake
+/// her in between (manager-actions.md §6), so her last turn may be another one.
+async fn angela_turn_for(angela: &Instance, id: &str) -> lobotomy_core::turn::Turn {
     wait_for("Angela's turn to end", || {
-        angela
+        let turn: Option<String> = angela
             .db
-            .read(|c| lobotomy_core::turn::last_turn(c, "Angela"))
-            .unwrap()
-            .filter(|t| t.state == TurnState::Ended && Some(t.id.as_str()) != previous)
+            .read(|c| Ok(c.query_row("SELECT turn_id FROM message WHERE id = ?1", [id], |r| r.get(0))?))
+            .unwrap();
+        let turn = turn?;
+        let turn = angela.db.read(|c| load_turn(c, &turn)).unwrap();
+        (turn.state == TurnState::Ended).then_some(turn)
+    })
+    .await
+}
+
+/// Angela's last turn, once it ended.
+async fn angela_turn_ended(angela: &Instance) -> lobotomy_core::turn::Turn {
+    wait_for("Angela's turn to end", || {
+        angela.db.read(|c| lobotomy_core::turn::last_turn(c, "Angela")).unwrap().filter(|t| t.state == TurnState::Ended)
     })
     .await
 }
@@ -1240,8 +1251,8 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
         format!(r#"FAKE:call=read_events{{"project_id":"{}","limit":3}}"#, project.id),
         format!(r#"FAKE:call=read_project{{"project_id":"{archived}"}}"#),
     ];
-    tell_angela(&angela, &calls.join("\n"));
-    let turn = angela_turn_after(&angela, None).await;
+    let asked = tell_angela(&angela, &calls.join("\n"));
+    let turn = angela_turn_for(&angela, &asked).await;
     assert_eq!((turn.outcome, turn.workspace_id.as_deref()), (Some(Outcome::Completed), None));
     let args = last_args(&host_dir(dir.path()).join("angela").join("work"));
     assert!(after(&args, "--append-system-prompt").contains("你是 Angela"), "she runs in her own directory");
@@ -1280,6 +1291,42 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// A project that settles wakes Angela (manager-actions.md §6 "Manager 什么时候运行"): the runtime
+/// tells her it waits for the user, with what changed since her cursor, and she runs. The project
+/// she saw first at startup, settling after its slot was written, did not wake her.
+#[tokio::test]
+async fn a_project_that_settles_wakes_angela_with_what_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().expect("Angela opened");
+    let project = backend.project.clone();
+    wait_for("her cursor on the project", || angela.db.read(lobotomy_core::manager::cursors).unwrap().pop()).await;
+    wait_for("the idle slot", || {
+        let ready = project.db.read(|c| lobotomy_core::view::manager::settled(c, &[])).unwrap();
+        ready.then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    angela.wake.notify_one();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(angela.db.read(|c| lobotomy_core::turn::last_turn(c, "Angela")).unwrap().is_none(), "no wake at startup");
+
+    let task = create_task(&project.db, "FAKE:done");
+    phase(&project.db, &task, Phase::Accepting).await;
+    let turn = angela_turn_ended(&angela).await;
+    let told = angela.db.read(|c| lobotomy_core::task::turn_messages(c, &turn.id)).unwrap();
+    let [told] = told.as_slice() else { panic!("one message: {told:#?}") };
+    assert_eq!(told.source, "runtime");
+    let summary = told.body.lines().next().unwrap();
+    assert!(summary.ends_with("全员在等你"), "{summary}");
+    for part in ["现在全员在等你。", "- 等用户：", "等待验收", "汇报（完成）", task.as_str()] {
+        assert!(told.body.contains(part), "{part} is missing from:\n{}", told.body);
+    }
+    let cursor = angela.db.read(lobotomy_core::manager::cursors).unwrap().pop().unwrap();
+    assert_eq!(cursor.seq, project.db.read(lobotomy_core::view::last_event).unwrap(), "she has read it all");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// Keeps a test's Claude session out of the user's Claude history: its file is
 /// ~/.claude/projects/<the working directory's path>/<session>.jsonl.
 fn forget_claude_session(session: &str) {
@@ -1312,7 +1359,7 @@ async fn a_real_claude_angela_assigns_a_task() {
         project.id
     );
     let said = tell_angela(&angela, &ask);
-    let turn = angela_turn_after(&angela, None).await;
+    let turn = angela_turn_for(&angela, &said).await;
     let calls: Vec<String> = angela
         .db
         .read(|c| {
@@ -1369,7 +1416,7 @@ async fn angela_assigns_with_the_users_words_and_leaves_the_users_pause_alone() 
     let angela = backend.backend.angela().expect("Angela opened");
     let project = backend.project.clone();
     let said = tell_angela(&angela, "启动太慢了，先看看为什么");
-    let first = angela_turn_after(&angela, None).await;
+    angela_turn_for(&angela, &said).await;
     let held = create_task(&project.db, "先别动");
     project
         .db
@@ -1382,8 +1429,8 @@ async fn angela_assigns_with_the_users_words_and_leaves_the_users_pause_alone() 
         "stop_when": "找到第一个确定的原因就汇报", "done_when": "说明原因和证据",
     });
     let resume = json!({ "project_id": project.id, "task_id": held, "paused": false });
-    tell_angela(&angela, &format!("FAKE:call=assign{assign}\nFAKE:call=set_paused{resume}"));
-    let turn = angela_turn_after(&angela, Some(&first.id)).await;
+    let acts = tell_angela(&angela, &format!("FAKE:call=assign{assign}\nFAKE:call=set_paused{resume}"));
+    let turn = angela_turn_for(&angela, &acts).await;
     let [assigned, refused] = reply_texts(&angela.db, &turn.id).try_into().expect("two replies");
     assert!(assigned.starts_with("已派出任务 task_"), "{assigned}");
     assert!(refused.contains("只有用户能恢复"), "{refused}");

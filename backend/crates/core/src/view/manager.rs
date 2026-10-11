@@ -317,6 +317,159 @@ fn reports(conn: &Connection, task_id: &str) -> Result<Vec<ReportRead>> {
     rows.collect()
 }
 
+// ---- what wakes the manager (manager-actions.md §6 "Manager 什么时候运行") ----
+
+/// Whether nothing in the project moves on without the user: no turn registered or running, no
+/// capture, verification, slot or preview being written, and nothing the scheduler would start, a
+/// queued task or a message to deliver, for a role that does not wait for the user and whose
+/// harness is not quota-blocked (`blocked`). A role or task that waits for the user is in "等你决定"
+/// instead (manager-actions.md §6 "组织离了用户就无法推进").
+pub fn settled(conn: &Connection, blocked: &[String]) -> Result<bool> {
+    let any = |sql: &str| -> Result<bool> { Ok(conn.query_row(&format!("SELECT EXISTS ({sql})"), [], |r| r.get(0))?) };
+    if any("SELECT 1 FROM turn WHERE state IN ('registered', 'running')")?
+        || any("SELECT 1 FROM capture WHERE state = 'intent'")?
+        || any("SELECT 1 FROM task WHERE phase = 'verifying'")?
+        || any("SELECT 1 FROM workspace WHERE state = 'materializing'")?
+        || any("SELECT 1 FROM outbox WHERE state = 'pending'")?
+    {
+        return Ok(false);
+    }
+    for role in crate::role::list_roles(conn)? {
+        if blocked.contains(&role.harness) || crate::turn::hold(conn, &role.name)?.is_some() {
+            continue;
+        }
+        let occupant = crate::task::occupant(conn, &role.name)?;
+        // A free role starts its next queued task.
+        if occupant.is_none() && crate::task::next_queued_task(conn, &role.name)?.is_some() {
+            return Ok(false);
+        }
+        // Its messages go in its next turn while it is free or its task executes.
+        let deliverable = match &occupant {
+            None => true,
+            Some(task) => {
+                let task = load_task(conn, task)?;
+                task.phase == Phase::Executing && !task.paused
+            }
+        };
+        if deliverable && !crate::task::queued_messages(conn, &role.name)?.is_empty() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// How many lines of changes one project gives the manager's input; she reads the rest with
+/// `read_events`.
+pub const CHANGES_LISTED: usize = 30;
+
+/// What changed in a project since the manager last read it, for her next input: the changes that
+/// matter to her, in a line each with the ids she can attach (manager-actions.md §6).
+#[derive(Debug, Serialize)]
+pub struct ChangesRead {
+    /// The events it covers: after `after`, up to `as_of`.
+    pub after: i64,
+    pub as_of: i64,
+    pub lines: Vec<String>,
+    /// Lines beyond `CHANGES_LISTED`, left out.
+    pub not_listed: usize,
+    /// How many of the changes, listed or not, someone other than the manager caused: what she
+    /// does not know yet.
+    pub by_others: usize,
+}
+
+pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
+    let titles: std::collections::HashMap<String, String> =
+        crate::task::list_tasks(conn)?.into_iter().map(|t| (t.id, t.title)).collect();
+    let as_of = last_event(conn)?;
+    let mut lines = Vec::new();
+    let mut by_others = 0;
+    let mut seq = after;
+    while seq < as_of {
+        let events = super::events_after(conn, seq)?;
+        let Some(last) = events.last() else { break };
+        seq = last.seq;
+        for event in &events {
+            if let Some(line) = change_line(conn, event, &titles)? {
+                lines.push(line);
+                by_others += usize::from(event.caller.as_deref() != Some("manager"));
+            }
+        }
+    }
+    let not_listed = lines.len().saturating_sub(CHANGES_LISTED);
+    lines.truncate(CHANGES_LISTED);
+    Ok(ChangesRead { after, as_of: seq.max(after), lines, not_listed, by_others })
+}
+
+/// Who caused a change, as the manager reads it: she is "你".
+fn by(caller: Option<&str>) -> &str {
+    match caller {
+        Some("user") => "用户",
+        Some("manager") => "你",
+        Some(role) if role.starts_with("role:") => &role[5..],
+        _ => "运行时",
+    }
+}
+
+fn change_line(
+    conn: &Connection,
+    e: &super::Event,
+    titles: &std::collections::HashMap<String, String>,
+) -> Result<Option<String>> {
+    let task = |id: &str| match titles.get(id) {
+        Some(title) => format!("「{title}」（{id}）"),
+        None => id.to_owned(),
+    };
+    let text = |key: &str| e.payload.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+    let who = by(e.caller.as_deref());
+    let people = matches!(e.caller.as_deref(), Some("user" | "manager"));
+    Ok(Some(match e.kind.as_str() {
+        "task.created" => format!("{who}建了任务 {}，执行者 {}", task(&e.entity), text("executor")),
+        "report.recorded" | "report.progress" => {
+            let status = match text("status").as_str() {
+                "done" => "完成",
+                "blocked" => "提问",
+                _ => "进展",
+            };
+            let of = if e.kind == "report.recorded" { format!("，任务 {}", task(&e.entity)) } else { String::new() };
+            let id = e.command_id.as_deref().map(|id| format!("；汇报 {id}")).unwrap_or_default();
+            format!("{who} 汇报（{status}）：{}{of}{id}", text("title"))
+        }
+        "task.blocked_changed" if !text("blocked_reason").is_empty() => {
+            format!("任务 {} 的执行者提问：{}", task(&e.entity), text("blocked_reason"))
+        }
+        "verification.finished" => {
+            let state = if text("state") == "passed" { "通过" } else { "未通过" };
+            format!("任务 {} 的验证{state}（{}）", task(&text("task_id")), e.entity)
+        }
+        "task.accepting" => format!("任务 {} 等待验收", task(&e.entity)),
+        "task.done" => format!("{who}验收了任务 {}，成果已发布", task(&e.entity)),
+        "task.abandoned" => format!("{who}放弃了任务 {}：{}", task(&e.entity), text("reason")),
+        "task.reopened" => format!("{who}重开了任务 {}", task(&e.entity)),
+        "task.paused_changed" => {
+            let what = if e.payload.get("paused").and_then(Value::as_bool) == Some(true) { "暂停" } else { "恢复" };
+            format!("{who}{what}了任务 {}", task(&e.entity))
+        }
+        "task.criteria_changed" => {
+            let version = e.payload.get("version").and_then(Value::as_i64).unwrap_or_default();
+            format!("{who}把任务 {} 的完成条件改为第 {version} 版", task(&e.entity))
+        }
+        // A new attempt the user or the manager started: a send-back.
+        "attempt.started" if people => {
+            let round = e.payload.get("seq").and_then(Value::as_i64).unwrap_or_default();
+            format!("{who}退回了任务 {}，开始第 {round} 轮", task(&e.entity))
+        }
+        // What the user said to a role directly (#23 §3).
+        "message.queued" if e.caller.as_deref() == Some("user") => {
+            let body: String = conn.query_row("SELECT body FROM message WHERE id = ?1", [&e.entity], |r| r.get(0))?;
+            let first = body.lines().next().unwrap_or_default();
+            let first: String = first.chars().take(80).collect();
+            format!("用户直接给 {} 发了消息：{first}", text("role"))
+        }
+        "project.config_changed" => format!("{who}修改了项目的检查设置"),
+        _ => return Ok(None),
+    }))
+}
+
 #[derive(Serialize)]
 pub struct EventsRead {
     /// The last event of the project when it was read; events after the last one listed are

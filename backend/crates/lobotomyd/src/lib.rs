@@ -54,7 +54,7 @@ impl Backend {
         *host.mcp_base.lock().unwrap() = format!("http://{addr}");
         let projects = Arc::new(Projects::new(host.clone()));
         projects.open_registered().await?;
-        let angela = Angela::start(host.clone()).await.map_err(|e| {
+        let angela = Angela::start(host.clone(), projects.clone()).await.map_err(|e| {
             tracing::error!(error = format!("{e:#}"), "Angela could not be opened");
             format!("{e:#}")
         });
