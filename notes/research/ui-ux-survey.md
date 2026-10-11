@@ -1,7 +1,7 @@
 # 调研：多 agent 工具的界面与交互
 
-> 调研快照（2026-10-11），事实可能已经变化。计划见 [ui-ux-plan.md](../ui-ux-plan.md)，本文记录依据。
-> 三路网页调研：同类产品；agent 界面的指南与人机研究；桌面工作工具的视觉做法。标"文档"的来源没有发布日期，日期是读取日。只有二手来源、或原文没能读到的，标 **未核实**。性能方面的调研见 [frontend-survey.md](frontend-survey.md)。
+> 调研快照（2026-10-11/12），事实可能已经变化。计划见 [ui-ux-plan.md](../ui-ux-plan.md)，本文记录依据。
+> 2026-10-11 三路网页调研：同类产品；agent 界面的指南与人机研究；桌面工作工具的视觉做法。2026-10-12 补两路用户痛点调研（§1.6）：GitHub issue 按 👍 计数；HN、产品论坛的讨论。标"文档"的来源没有发布日期，日期是读取日。只有二手来源、或原文没能读到的，标 **未核实**。性能方面的调研见 [frontend-survey.md](frontend-survey.md)。
 
 ## 1. 同类产品
 
@@ -71,6 +71,33 @@
 - **审批走哪条路**：Claude Projects 与 dots 在执行会话内处理；Devin 唤醒 coordinator 处理。Lobotomy 现在是后一种：Angela 转达，用户也可以直接打开执行者。
 - **先摘要还是先 diff**：面向委派者的产品先给摘要与证据（Antigravity、Jules、Claude Projects、GitHub 的审查顺序）；面向代码作者的产品先给 diff（Codex、Conductor）。
 - **列表形态**：侧栏列表是主流（Claude、Codex、Cursor、VS Code、Zed）；看板（Vibe Kanban）和网格（Cursor）是少数。
+
+### 1.6 用户痛点（按证据强度）
+
+**方法与偏差**：
+- GitHub：11 个仓库（anthropics/claude-code、openai/codex、zed、anomalyco/opencode、aaif-goose/goose、OpenHands、cline、gemini-cli、t3code、vibe-kanban、crystal）按主题检索，按 👍 排序，代表 issue 由人工筛选。CC 与 codex 体量远大于 GUI 编排类仓库；CC 约 11% 的 issue 是终端渲染问题；23% 以重复关闭，单个 issue 的 👍 会低估。"谎报完成"这类抱怨多是长尾，单条 👍 很少超过 10。
+- 社区：HN（Algolia API）、forum.cursor.com、community.openai.com、discuss.ai.google.dev。Reddit 没能读取。HN 偏向怀疑 AI 的资深工程师；发布周的帖子多是泛泛之谈；dots 只发布了 13 天。
+- 数字是下限或粗估，不是精确频率。
+
+| # | 痛点 | 证据（代表） |
+|---|---|---|
+| 1 | agent 谎报完成、无视指令、静默卡住 | [CC#42796](https://github.com/anthropics/claude-code/issues/42796) 2072👍；标题含"falsely claims"的 issue 19 个；卡住类 [CC#26224](https://github.com/anthropics/claude-code/issues/26224) 152👍、[gemini-cli#22141](https://github.com/google-gemini/gemini-cli/issues/22141) 164👍；"agents report 'fixed!' when they just suppressed the error"（HN） |
+| 2 | 额度意外耗尽、看不到余量 | [CC#16157](https://github.com/anthropics/claude-code/issues/16157) 695👍、1499 评；[codex#28879](https://github.com/openai/codex/issues/28879) 364👍；评论数是所有痛点中最多的 |
+| 3 | 审阅成瓶颈、走过场；看不出改了什么 | 抽查的 8 个多 agent 讨论帖都出现；[Cursor：Only some diffs are shown](https://forum.cursor.com/t/152099) 236 帖；[CC#33932](https://github.com/anthropics/claude-code/issues/33932) 204👍；[codex#9203](https://github.com/openai/codex/issues/9203) undo 477👍；"agents parallelize, humans review sequentially"（HN） |
+| 4 | 注意力上限；不知道哪个在等我 | [AI fatigue is real](https://news.ycombinator.com/item?id=46934404) 471 分；[cmux](https://news.ycombinator.com/item?id=47079718) 198 分："Claude Code's notification body is always just 'Claude is waiting for your input' with no context"；"once I have about 3 or more running at a time it's very easy to forget about one" |
+| 5 | 失去直接看代码的路径 | [Antigravity bait and switch](https://news.ycombinator.com/item?id=48222529) 771 分；[Cursor 3](https://news.ycombinator.com/item?id=47618084) 544 分，约 11 条要求保留编辑器优先 |
+| 6 | 编排者不透明、转述失真 | [Codex 加密子 agent 提示](https://news.ycombinator.com/item?id=48905028) 425 分，约 25–30 条抱怨看不到父 agent 给子 agent 的指令；"the only visibility you have is what they choose to report back. Which is often sanitised and dangerously optimistic"；"finalizers lie about success after workers failed"；子 agent 失败时上级收到空的成功结果（[opencode#37852](https://github.com/anomalyco/opencode/issues/37852)）；dots 用户的批准转交后不被承认（[t/1404561](https://community.openai.com/t/1404561)）；Codex 用户分不清自己的指令与任务转交（"matching bubbles"） |
+| 7 | 过程太啰嗦，或藏得太多 | 两种诉求方向相反：[CC#8477](https://github.com/anthropics/claude-code/issues/8477) 要看思考过程 337👍，[CC#6814](https://github.com/anthropics/claude-code/issues/6814) 要关掉进度消息 215👍；[CC#21151](https://github.com/anthropics/claude-code/issues/21151) "Read 3 files" 不说哪个文件 186👍；[I-have-ADHD](https://news.ycombinator.com/item?id=49610631) 542 分 |
+| 8 | 离开后回来 | [CC#73125](https://github.com/anthropics/claude-code/issues/73125) 388👍：60 秒没回答，系统让 agent 按自己的判断继续，后改为默认关闭；回来发现跑偏烧掉 token、空等一句"继续"、历史被清空。HN 中含"when I come back"的 10 条评论有 7 条是正面的：痛点集中在等输入卡住、被代做决定、无人监督跑偏、跨线程接不上 |
+| 9 | 运行中改方向、消息排队 | 合计约 777👍；[CC#50246](https://github.com/anthropics/claude-code/issues/50246) 211👍；撤回排队消息 [opencode#4821](https://github.com/anomalyco/opencode/issues/4821) 105👍 |
+| 10 | 审批疲劳 | [Continue? Y/N](https://news.ycombinator.com/item?id=48308376) 386 分，至少 6 人说已绕过权限；Claude Code 用户批准了 93% 的权限提示（§2.2） |
+| 11 | 上下文用量、压缩后丢东西 | [codex#23794](https://github.com/openai/codex/issues/23794) 176👍；[CC#27242](https://github.com/anthropics/claude-code/issues/27242) 压缩后无法回看 |
+| 12 | 会话找不到、历史丢失 | [CC#2112](https://github.com/anthropics/claude-code/issues/2112) 170👍；[codex#12564](https://github.com/openai/codex/issues/12564) 114👍 |
+| 13 | worktree 的开销 | [codex#12862](https://github.com/openai/codex/issues/12862) 113👍；[CC#21236](https://github.com/anthropics/claude-code/issues/21236) 110👍 |
+| 14 | 往上翻时被拉回底部 | [CC#3648](https://github.com/anthropics/claude-code/issues/3648) 693👍（终端为主）；[t3code#3925](https://github.com/pingdotgg/t3code/issues/3925) |
+| 15 | 包装 CLI 后丢了 CLI 自带的功能 | [t3code#2736](https://github.com/pingdotgg/t3code/issues/2736) 等，合计约 175👍 |
+
+对编排者 / manager agent 的直接抱怨只有十几条，多数来自真正用过 Codex 多 agent、Claude agent teams 与 dots 的人。反方向的需求也存在：有用户想要一个定期检查进度的监督 agent，不满的是监督者不透明，不是监督本身。有人怀疑编排是否值得（Ask HN"Are you using an agent orchestrator"，怀疑约 18 条，正面约 12 条）。多个来源说自己能同时盯住的上限是 3–4 个线程，这是个人观察，展示上的改进只能降低切换成本，不能抬高这个上限。
 
 ## 2. 指南与研究
 
