@@ -57,6 +57,37 @@ fn scope() -> Scope {
 
 const GUARD: Guard = Guard { max_new_files: 100, max_new_bytes: 1 << 20 };
 
+#[test]
+fn a_shallow_repository_can_be_imported_and_deliver_a_candidate() {
+    let mut f = fixture();
+    fs::write(f.user_repo.join("a.txt"), "shallow baseline\n").unwrap();
+    git(&f.user_repo, &["commit", "--quiet", "-am", "second"]);
+    let shallow = f.root.join("shallow");
+    git(
+        &f.root,
+        &["clone", "--quiet", "--no-local", "--depth=1", f.user_repo.to_str().unwrap(), shallow.to_str().unwrap()],
+    );
+    assert_eq!(git(&shallow, &["rev-parse", "--is-shallow-repository"]), "true");
+    f.head = git(&shallow, &["rev-parse", "HEAD"]);
+    f.user_repo = shallow;
+    // A fresh store must learn the shallow boundary, not borrow the original fixture's history.
+    f.store = Store::init(&f.root.join("shallow-store")).unwrap();
+    assert_eq!(f.store.import(&f.user_repo, "main", Some(&f.head), "import").unwrap(), f.head);
+    let slot = f.workspace("worker");
+    slot.materialize(&f.store, &f.head, &f.head, "main", &scope()).unwrap();
+    fs::write(slot.path.join("a.txt"), "candidate\n").unwrap();
+    let candidate = capture(&f, &slot, &f.head, "candidate");
+    let verified = f.store.compose(&candidate, &f.head, "verified", &Identity::runtime(), "verified").unwrap();
+    let check = f.workspace("verify");
+    check.materialize(&f.store, &verified.commit, &verified.commit, "main", &scope()).unwrap();
+    assert_eq!(fs::read_to_string(check.path.join("a.txt")).unwrap(), "candidate\n");
+    assert_eq!(f.store.parent(&verified.commit).unwrap(), f.head);
+    assert!(repo::fast_forward(&f.user_repo, &f.store, "main", &f.head, &verified.commit).unwrap().is_none());
+    assert_eq!(git(&f.user_repo, &["rev-parse", "HEAD"]), verified.commit);
+    assert_eq!(fs::read_to_string(f.user_repo.join("a.txt")).unwrap(), "candidate\n");
+    assert_eq!(git(&f.user_repo, &["status", "--porcelain"]), "");
+}
+
 fn capture(f: &Fixture, ws: &Workspace, base: &str, pin: &str) -> String {
     match ws.capture(&f.store, base, &scope(), Some(&GUARD), Leave::default(), pin).unwrap() {
         Captured::Pinned { commit } => commit,

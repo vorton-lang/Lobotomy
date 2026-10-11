@@ -106,7 +106,9 @@ impl Store {
     pub fn import(&self, repo: &Path, branch: &str, expected: Option<&str>, pin: &str) -> Result<String> {
         let git = Git::bare(&self.git_dir);
         let refspec = format!("+refs/heads/{branch}:refs/lobotomy/import");
-        git.run(&["fetch", "--no-tags", "--quiet", &path_arg(repo), &refspec])?;
+        // A shallow source needs its boundary copied too. Otherwise git can succeed while
+        // rejecting the ref update, leaving no import ref (or the previous import's ref).
+        git.run(&["fetch", "--update-shallow", "--no-tags", "--quiet", &path_arg(repo), &refspec])?;
         let commit = git.run(&["rev-parse", "--verify", "refs/lobotomy/import^{commit}"])?;
         if let Some(expected) = expected
             && expected != commit
