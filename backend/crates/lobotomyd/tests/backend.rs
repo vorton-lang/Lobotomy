@@ -1280,6 +1280,72 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
+/// Keeps a test's Claude session out of the user's Claude history: its file is
+/// ~/.claude/projects/<the working directory's path>/<session>.jsonl.
+fn forget_claude_session(session: &str) {
+    let Some(home) = std::env::var_os("USERPROFILE").or(std::env::var_os("HOME")) else { return };
+    let projects = std::path::Path::new(&home).join(".claude").join("projects");
+    for project in std::fs::read_dir(&projects).into_iter().flatten().flatten() {
+        let file = project.path().join(format!("{session}.jsonl"));
+        if file.exists() {
+            eprintln!("deleted Claude session {session}: {:?}", std::fs::remove_file(&file));
+        }
+    }
+}
+
+/// Angela on the real Claude, on the smallest model, calls a tool of step 2 as its schema says
+/// (roadmap.md M4 step 2): she assigns a read-only task and quotes the user's message by its id.
+/// Malkuth stays on the fake Codex, so only her turn uses the subscription.
+#[tokio::test]
+#[ignore = "runs a real Claude Code turn"]
+async fn a_real_claude_angela_assigns_a_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = fake_codex();
+    harness.claude = real_clis().claude;
+    let backend = start_with(dir.path(), harness).await;
+    let angela = backend.backend.angela().expect("Angela opened");
+    angela.db.write(|tx| Ok(tx.execute("UPDATE role SET model = 'haiku' WHERE name = 'Angela'", [])?)).unwrap();
+    let project = backend.project.clone();
+    let ask = format!(
+        "请在项目 {} 里给 Malkuth 派一个只读调查任务：看看 README 里写了什么。用 quote 引用我这条消息。\
+         停止条件：读完 README 就汇报。完成条件：说明 README 的内容。直接派，不用先问我。",
+        project.id
+    );
+    let said = tell_angela(&angela, &ask);
+    let turn = angela_turn_after(&angela, None).await;
+    let calls: Vec<String> = angela
+        .db
+        .read(|c| {
+            let mut stmt =
+                c.prepare("SELECT content FROM item WHERE turn_id = ?1 AND kind = 'mcp_call' ORDER BY seq")?;
+            Ok(stmt.query_map([&turn.id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    eprintln!("outcome {:?}, failure {:?}", turn.outcome, turn.failure);
+    for call in &calls {
+        eprintln!("call {}", &call[..call.len().min(600)]);
+    }
+    if let Some(session) = &turn.native_id {
+        forget_claude_session(session);
+    }
+
+    assert_eq!((turn.harness.as_str(), turn.outcome), ("claude", Some(Outcome::Completed)));
+    let tasks = project.db.read(lobotomy_core::task::list_tasks).unwrap();
+    let task = tasks.iter().find(|t| t.assignment.is_some()).expect("she assigned a task");
+    let assignment = task.assignment.as_ref().unwrap();
+    assert_eq!(assignment.actions, [lobotomy_core::task::Action::ReadOnly]);
+    assert!(!assignment.stop_when.trim().is_empty());
+    let sources: Vec<String> = project
+        .db
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT source_id FROM quote WHERE task_id = ?1")?;
+            Ok(stmt.query_map([&task.id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+        })
+        .unwrap();
+    assert_eq!(sources, [said], "she quoted the user's message by its id");
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 /// The texts of the Lobotomy tools' replies in a turn, in order.
 fn reply_texts(db: &Db, turn: &str) -> Vec<String> {
     db.read(|c| {
