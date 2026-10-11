@@ -1,6 +1,6 @@
 # Lobotomy
 
-> 状态（2026-10-10）：M1 执行闭环与 M2（第二个 harness：Claude Code）已经完成。下一步是 M3 多项目，然后是 M4 最小的全局 Manager Angela，见 [Roadmap](notes/roadmap.md)。
+> 状态（2026-10-11）：M1 执行闭环、M2（第二个 harness：Claude Code）与 M3 多项目已经完成。M4 最小的全局 Manager Angela 完成了第 1 步：能对话、能读各项目，见 [Roadmap](notes/roadmap.md)。
 
 一个长期在线、位于现有 coding harness 之上的 agent 组织运行时：用户主要与 Manager 协作，系统承载长期角色、原生 session、可恢复状态和组织级工作界面。
 
@@ -14,15 +14,19 @@
 - 回答它提出的问题；它停下时，选择继续或新建会话；
 - 看候选成果的交付说明、diff 和检查结果，然后验收或退回。验收后，成果发布到你仓库的分支上；
 - 执行者提供试用命令时，点击后在电脑的独立终端里体验本轮候选副本。新一轮不会改写已经打开的旧副本。
+- 同时管理多个项目：在左侧的项目列表中新建、切换、归档。
+- 在「全部」中与 Angela 对话。她能读所有项目的现状，还不能替你建任务或验收。
 
-多项目、审查和 Manager 还没有实现。
+审查还没有实现。
 
 ## 从源码运行
 
 需要 Rust、Node.js、git，以及已经登录的 Codex CLI 或 Claude Code。
 
-1. `cd backend && cargo build -p lobotomyd`
-2. `cd frontend && npm install && npm run app`
+1. `cd frontend && npm install`（第一次，或依赖变了之后）
+2. `npm start`：编译后端、构建前端，然后打开应用
+
+应用发现后端已经在运行时，会连上它，不会启动新编译的那个。更新代码后，先在托盘中退出 Lobotomy，再运行 `npm start`。
 
 第一次启动时，选择一个 git 仓库。仓库的工作区要干净，并且检出在分支上。开发方式见 [frontend.md](notes/frontend.md) §7；改什么跑什么测试，见 [AGENTS.md](AGENTS.md)。
 

@@ -5,6 +5,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
+    "start": "cargo build -p lobotomyd --manifest-path ../backend/Cargo.toml && vite build && electron .",
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
