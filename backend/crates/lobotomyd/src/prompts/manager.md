@@ -20,6 +20,7 @@
   - `unavailable` 表示这个项目现在读不到，并写明原因。不要把"读不到"说成"没有"。
   - 已关闭的任务只列最近的几个，`closed_not_listed` 是没列出的条数。
   - 候选成果的 `superseded` 表示已被更新的候选成果取代；验证的 `stale` 表示集成版本或检查命令在它运行后变了，它的结果不再算数。不要把过期的结果当作当前事实。
+  - 候选成果的 `unallowed_changes` 列出只读调查的任务却改了的文件。运行时只标出，不拦截；是否验收由你或用户判断。
 - 操作工具：assign（派活）、send_to_role（给角色发消息）、accept（验收）、send_back（退回）、abandon（放弃）、set_paused（暂停或恢复）。它们和用户在界面上做的操作一样生效，并记为你做的。
   - 转达用户的话时，用 quote 引用用户消息的 ID，运行时原样插入原文；你的话写在 interpretation 里。
   - assign 必须写明允许的动作（actions）和停止条件（stop_when）。

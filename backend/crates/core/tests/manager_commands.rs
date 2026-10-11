@@ -5,11 +5,14 @@
 mod common;
 
 use common::*;
+use lobotomy_core::capture::{CaptureResult, FinishCapture, pending_captures};
 use lobotomy_core::report::ReportStatus;
 use lobotomy_core::task::{
-    Action, Assign, CreateTask, EditCriteria, Quote, Reopen, SendToRole, SetPaused, load_task, queued_messages,
+    Action, Assign, CreateTask, EditCriteria, Phase, Quote, Reopen, SendToRole, SetPaused, load_task, queued_messages,
 };
 use lobotomy_core::verify::{Accept, SendBack};
+use lobotomy_core::view::attachment::{Attachment, attachment};
+use lobotomy_core::view::manager::task_read;
 use lobotomy_core::view::overview;
 use lobotomy_core::{Caller, Db};
 
@@ -120,6 +123,29 @@ fn an_assignment_says_what_it_allows_and_when_to_stop() {
         "停止条件：找到第一个",
     ] {
         assert!(brief.contains(part), "{part} is missing from {brief}");
+    }
+}
+
+/// A task that allows reading only and still changed files is marked, not refused: the user or the
+/// manager decides whether to accept it (roles-and-tasks.md §4).
+#[test]
+fn a_read_only_task_that_changed_files_is_marked_not_refused() {
+    let db = db();
+    let task = db.execute(&angela(), &assign("a1")).unwrap().id;
+    start(&db, &task);
+    let t = register(&db);
+    report(&db, &t.turn_id, ReportStatus::Done, None).unwrap();
+    end_turn(&db, &t.turn_id);
+    let capture = db.read(pending_captures).unwrap().pop().unwrap();
+    let result = CaptureResult::Pinned { commit: "c1".into(), changed: vec!["src/main.rs".into()] };
+    db.execute(&Caller::Runtime, &FinishCapture { capture_id: capture.id.clone(), result }).unwrap();
+    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, Phase::Verifying, "verification goes ahead");
+
+    let read = db.read(|c| task_read(c, &task)).unwrap();
+    assert_eq!(read.attempts[0].candidate.as_ref().unwrap().unallowed_changes, ["src/main.rs"]);
+    match db.read(|c| attachment(c, &capture.id)).unwrap() {
+        Some(Attachment::Candidate { unallowed_changes, .. }) => assert_eq!(unallowed_changes, 1),
+        other => panic!("not a candidate: {other:?}"),
     }
 }
 

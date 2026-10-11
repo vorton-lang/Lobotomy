@@ -20,6 +20,7 @@ import {
   asReport,
   attachmentExpired,
   attachmentLine,
+  attachmentWarning,
   attentionKey,
   attentionSummary,
   attentionTask,
@@ -40,6 +41,7 @@ import {
   trialCandidate,
   toolSubject,
   turnOutcome,
+  unallowedChanges,
   voidReport,
   workRange,
 } from './format';
@@ -276,11 +278,30 @@ describe("Angela's reply", () => {
       at: 0,
       superseded: false,
       stale: false,
+      unallowed_changes: 0,
     };
     expect(attachmentLine(v)).toContain('alpha · 「加行号」第 2 轮的验证 · 通过 · 基于集成版本 abcdef01 · 检查设置第 3 版');
     expect(attachmentExpired(v)).toBeNull();
     expect(attachmentExpired({ ...v, stale: true })).toMatch(/^已过期/);
     expect(attachmentExpired({ ...v, superseded: true })).toBe('已被新的验证取代');
+    expect(attachmentWarning(v)).toBeNull();
+    expect(attachmentWarning({ ...v, unallowed_changes: 2 })).toBe('只读调查，却改了 2 个文件');
+  });
+});
+
+describe('a task Angela assigned for reading only', () => {
+  it('lists what its candidate changed, and nothing for a task that may change files', () => {
+    const d = detail({ attempts: [attempt(1, 10, 20)] });
+    d.attempts[0].candidate_id = 'cap1';
+    d.captures = [{
+      id: 'cap1', turn_id: 't', role: 'Malkuth', task_id: 't', attempt_id: d.attempts[0].id, kind: 'candidate', base: 'b',
+      state: 'pinned', commit_id: 'c', detail: { changed: ['src/main.rs'] }, created_at: 20, outside: null,
+    }];
+    expect(unallowedChanges(d)).toEqual([]);
+    d.task.assignment = { actions: ['read_only'], stop_when: '找到原因就停', interpretation: '先定位' };
+    expect(unallowedChanges(d)).toEqual(['src/main.rs']);
+    d.task.assignment = { ...d.task.assignment, actions: ['read_only', 'edit_code'] };
+    expect(unallowedChanges(d)).toEqual([]);
   });
 });
 

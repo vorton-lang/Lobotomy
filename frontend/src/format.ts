@@ -180,6 +180,25 @@ export function attachmentLine(a: AttachmentView): string {
   }
 }
 
+/** What an attachment's candidate did beyond its task's actions, or `null` (roles-and-tasks.md §4). */
+export function attachmentWarning(a: AttachmentView): string | null {
+  if ((a.kind === 'candidate' || a.kind === 'verification') && a.unallowed_changes > 0) {
+    return `只读调查，却改了 ${a.unallowed_changes} 个文件`;
+  }
+  return null;
+}
+
+/**
+ * The files the latest candidate changed although Angela assigned the task for reading only.
+ * Marked, not refused: whether to accept it is the user's or Angela's decision (roles-and-tasks.md §4).
+ */
+export function unallowedChanges(detail: TaskDetail): string[] {
+  const actions = detail.task.assignment?.actions;
+  if (!actions || actions.some((a) => a !== 'read_only')) return [];
+  const candidate = detail.attempts.findLast((a) => a.candidate_id)?.candidate_id;
+  return detail.captures.find((c) => c.id === candidate)?.detail?.changed ?? [];
+}
+
 /** Why an attachment no longer holds now, or `null` while it does. */
 export function attachmentExpired(a: AttachmentView): string | null {
   if (a.kind === 'candidate' && a.superseded) return '已被新的候选成果取代';

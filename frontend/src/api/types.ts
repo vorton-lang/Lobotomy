@@ -112,7 +112,17 @@ export interface Assignment {
 /** What `[[att:<id>]]` in Angela's reply shows (manager-actions.md §2.1). */
 export type AttachmentView = { project: string; project_name: string } & (
   | { kind: 'task'; task_id: string; title: string; executor: string; phase: Phase; paused: boolean }
-  | { kind: 'candidate'; task_id: string; title: string; seq: number; commit: string | null; at: number; superseded: boolean }
+  | {
+      kind: 'candidate';
+      task_id: string;
+      title: string;
+      seq: number;
+      commit: string | null;
+      at: number;
+      superseded: boolean;
+      /** Files it changed although its task allows reading only. */
+      unallowed_changes: number;
+    }
   | {
       kind: 'verification';
       task_id: string;
@@ -124,6 +134,7 @@ export type AttachmentView = { project: string; project_name: string } & (
       at: number;
       superseded: boolean;
       stale: boolean;
+      unallowed_changes: number;
     }
   | {
       kind: 'report';

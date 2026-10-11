@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo } from 'react';
 import type { AttachmentView, QuotedMessage, Resolved } from '../api/types';
-import { attachmentExpired, attachmentLine, clock, splitReply } from '../format';
+import { attachmentExpired, attachmentLine, attachmentWarning, clock, splitReply } from '../format';
 import { selectProject, useStore, wantRefs } from '../store';
 import { Markdown } from './common';
 
@@ -48,6 +48,7 @@ function Attachment({ id }: { id: string }) {
   if (failed(attachment)) return <p className="ref-error">附件无效（{id}）：{attachment.error}</p>;
   if (!attachment) return <p className="muted">正在读取附件…</p>;
   const expired = attachmentExpired(attachment);
+  const warning = attachmentWarning(attachment);
   const task = attachment.task_id;
   return (
     <button
@@ -57,6 +58,7 @@ function Attachment({ id }: { id: string }) {
     >
       <span aria-hidden>▸ </span>
       {attachmentLine(attachment)}
+      {warning && <span className="badge expired">{warning}</span>}
       {expired && <span className="badge expired">{expired}</span>}
     </button>
   );

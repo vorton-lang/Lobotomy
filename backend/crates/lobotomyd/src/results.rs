@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use lobotomy_core::capture::{Capture, CaptureResult, FinishCapture};
+use lobotomy_core::capture::{Capture, CaptureKind, CaptureResult, FinishCapture};
 use lobotomy_core::id::new_id;
 use lobotomy_core::item::externalize;
 use lobotomy_core::project::{Check, ProjectConfig, config_version, current_config, require_project};
@@ -152,8 +152,9 @@ pub async fn capture(project: Arc<Project>, capture: Capture) -> anyhow::Result<
         blocking(move || workspace(&p, &ws).capture(&p.store, &c.base, &scope(&config), guard.as_ref(), leave, &c.id))
             .await??;
     let result = match captured {
-        // What a turn outside any task changed waits for the user (#14).
-        Captured::Pinned { commit } if capture.task_id.is_none() => {
+        // What a turn outside any task changed waits for the user (#14). What a candidate changed
+        // is marked when its task allows reading only (roles-and-tasks.md §4).
+        Captured::Pinned { commit } if capture.task_id.is_none() || capture.kind == CaptureKind::Candidate => {
             let (p, base, c) = (project.clone(), capture.base.clone(), commit.clone());
             let changed = blocking(move || p.store.changed_paths(&base, &c)).await??;
             CaptureResult::Pinned { commit, changed }

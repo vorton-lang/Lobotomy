@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{Attention, Overview, last_event};
+use crate::capture::{load_capture, unallowed_changes};
 use crate::error::Result;
 use crate::project::load_project;
 use crate::report::{OrgReport, ReportEffect};
@@ -191,6 +192,8 @@ pub struct CandidateRead {
     pub commit_id: Option<String>,
     /// A newer attempt's candidate replaced it.
     pub superseded: bool,
+    /// The files it changed although the task allows reading only (roles-and-tasks.md §4).
+    pub unallowed_changes: Vec<String>,
     pub verifications: Vec<VerificationRead>,
 }
 
@@ -239,8 +242,7 @@ pub fn task_read(conn: &Connection, task_id: &str) -> Result<TaskRead> {
     for attempt in &attempts {
         let candidate = match &attempt.candidate_id {
             Some(capture_id) => {
-                let commit_id: Option<String> =
-                    conn.query_row("SELECT commit_id FROM capture WHERE id = ?1", [capture_id], |r| r.get(0))?;
+                let capture = load_capture(conn, capture_id)?;
                 let mut checks_of = Vec::new();
                 for v in verifications.iter().filter(|v| &v.capture_id == capture_id) {
                     checks_of.push(VerificationRead {
@@ -254,8 +256,9 @@ pub fn task_read(conn: &Connection, task_id: &str) -> Result<TaskRead> {
                     });
                 }
                 Some(CandidateRead {
-                    capture_id: capture_id.clone(),
-                    commit_id,
+                    unallowed_changes: unallowed_changes(&task, &capture),
+                    capture_id: capture.id,
+                    commit_id: capture.commit_id,
                     superseded: latest.as_ref() != Some(capture_id),
                     verifications: checks_of,
                 })

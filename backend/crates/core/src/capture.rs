@@ -115,6 +115,24 @@ fn query(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result
     rows.collect()
 }
 
+impl Capture {
+    /// The paths it changed from its base, where the runtime recorded them: for a capture outside
+    /// any task and for a candidate.
+    pub fn changed(&self) -> Vec<String> {
+        let changed = self.detail.as_ref().and_then(|d| d.get("changed")).cloned();
+        changed.and_then(|c| serde_json::from_value(c).ok()).unwrap_or_default()
+    }
+}
+
+/// What a candidate changed although its task allows reading only. Marked, not refused: the user
+/// or the manager decides whether to accept it (roles-and-tasks.md §4).
+pub fn unallowed_changes(task: &crate::task::Task, candidate: &Capture) -> Vec<String> {
+    match &task.assignment {
+        Some(a) if a.read_only() => candidate.changed(),
+        _ => Vec::new(),
+    }
+}
+
 pub fn load_capture(conn: &Connection, id: &str) -> Result<Capture> {
     query(conn, "WHERE id = ?1", [id])?.pop().ok_or_else(|| Error::rejected("not_found", format!("no capture {id}")))
 }
@@ -273,7 +291,8 @@ pub struct UncoveredPath {
 pub enum CaptureResult {
     Pinned {
         commit: String,
-        /// For a capture outside any task: the paths that differ from its base.
+        /// For a capture outside any task, and for a candidate: the paths that differ from its
+        /// base.
         #[serde(default)]
         changed: Vec<String>,
     },
@@ -313,6 +332,11 @@ impl Command for FinishCapture {
                 Some(json!({ "changed": changed })),
                 Some(Outside::Pending),
             ),
+            // A candidate keeps what it changed, for a task that allows reading only
+            // (roles-and-tasks.md §4).
+            CaptureResult::Pinned { commit, changed } if !changed.is_empty() => {
+                (CaptureState::Pinned, Some(commit.as_str()), Some(json!({ "changed": changed })), None)
+            }
             CaptureResult::Pinned { commit, .. } => (CaptureState::Pinned, Some(commit.as_str()), None, None),
             CaptureResult::Oversized { files, total_bytes } => {
                 (CaptureState::Oversized, None, Some(json!({ "files": files, "total_bytes": total_bytes })), None)

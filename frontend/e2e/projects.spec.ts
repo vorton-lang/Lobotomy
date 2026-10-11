@@ -127,7 +127,7 @@ test('Angela’s references show the user’s words and attachments that open th
     attachments: {
       ver_1: {
         project: 'alpha', project_name: 'alpha', kind: 'verification', task_id: 'task1', title: '导出报表', seq: 1,
-        state: 'passed', base: 'base0000aaaa', config_version: 2, at: 1, superseded: false, stale: true,
+        state: 'passed', base: 'base0000aaaa', config_version: 2, at: 1, superseded: false, stale: true, unallowed_changes: 0,
       },
       task_gone: { error: '在打开的项目中找不到；读不到的项目：gamma' },
     },

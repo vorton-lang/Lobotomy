@@ -83,6 +83,13 @@ pub struct Assignment {
     pub interpretation: String,
 }
 
+impl Assignment {
+    /// Allows reading only: changing files is beyond what it allows.
+    pub fn read_only(&self) -> bool {
+        self.actions.iter().all(|a| *a == Action::ReadOnly)
+    }
+}
+
 /// A user's message the manager quotes, copied from her database (data-model.md §10.6 跨库操作
 /// 第 1 条). The runtime looks it up there by id and checks that the user wrote it; the manager
 /// only names the id (manager-actions.md §1).

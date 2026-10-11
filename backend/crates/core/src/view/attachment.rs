@@ -8,6 +8,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
+use crate::capture::{load_capture, unallowed_changes};
 use crate::error::Result;
 use crate::report::{OrgReport, ReportEffect};
 use crate::task::{Phase, list_attempts, load_task};
@@ -33,6 +34,8 @@ pub enum Attachment {
         at: i64,
         /// A newer attempt's candidate replaced it.
         superseded: bool,
+        /// How many files it changed although its task allows reading only (roles-and-tasks.md §4).
+        unallowed_changes: usize,
     },
     Verification {
         task_id: String,
@@ -48,6 +51,8 @@ pub enum Attachment {
         superseded: bool,
         /// The integration version or the checks changed since it ran (data-model.md §4.5).
         stale: bool,
+        /// How many files its candidate changed although the task allows reading only.
+        unallowed_changes: usize,
     },
     /// An executor's report, with the title it wrote itself.
     Report {
@@ -99,6 +104,10 @@ fn latest_candidate(conn: &Connection, task_id: &str) -> Result<Option<String>> 
     Ok(list_attempts(conn, task_id)?.into_iter().rev().find_map(|a| a.candidate_id))
 }
 
+fn unallowed(conn: &Connection, task_id: &str, capture_id: &str) -> Result<usize> {
+    Ok(unallowed_changes(&load_task(conn, task_id)?, &load_capture(conn, capture_id)?).len())
+}
+
 fn candidate(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
     let row: Option<(String, i64, Option<String>, i64)> = conn
         .query_row(
@@ -112,7 +121,15 @@ fn candidate(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
         return Ok(None);
     };
     let superseded = latest_candidate(conn, &task_id)?.as_deref() != Some(id);
-    Ok(Some(Attachment::Candidate { title: title(conn, &task_id)?, task_id, seq, commit, at, superseded }))
+    Ok(Some(Attachment::Candidate {
+        title: title(conn, &task_id)?,
+        unallowed_changes: unallowed(conn, &task_id, id)?,
+        task_id,
+        seq,
+        commit,
+        at,
+        superseded,
+    }))
 }
 
 fn verification(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
@@ -126,6 +143,7 @@ fn verification(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
     Ok(Some(Attachment::Verification {
         title: title(conn, &v.task_id)?,
         stale: evidence_is_stale(conn, &v)?,
+        unallowed_changes: unallowed(conn, &v.task_id, &v.capture_id)?,
         task_id: v.task_id,
         seq,
         state: v.state,

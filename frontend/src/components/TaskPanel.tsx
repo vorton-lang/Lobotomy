@@ -15,6 +15,7 @@ import {
   shortSha,
   taskNow,
   timeline,
+  unallowedChanges,
   VERIFICATION_LABEL,
   workRange,
 } from '../format';
@@ -53,6 +54,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const acceptable = task.phase === 'accepting' && verification?.state === 'passed';
   // Messages the executor never got hold acceptance until the user decides about them (#14).
   const undelivered = loaded?.undelivered_messages ?? [];
+  const unallowed = loaded ? unallowedChanges(loaded) : [];
 
   // Accepting names the verification, the criteria version, the integration head and the
   // undelivered messages the user saw; the backend refuses if any differ (harness-adapter.md §4.2).
@@ -125,6 +127,21 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 </button>
                 <button onClick={() => accept(undelivered.map((m) => m.id))}>验收，不再投递这些消息</button>
               </div>
+            </section>
+          )}
+          {unallowed.length > 0 && (
+            // Marked, not refused (roles-and-tasks.md §4).
+            <section className="card warn" aria-label="超出允许的动作">
+              <h3>这是只读调查任务，候选成果却改了 {unallowed.length} 个文件</h3>
+              <p className="muted">运行时只标出，不拦截。是否验收由你或 Angela 决定。</p>
+              <ul>
+                {unallowed.slice(0, 10).map((path) => (
+                  <li key={path}>
+                    <code>{path}</code>
+                  </li>
+                ))}
+              </ul>
+              {unallowed.length > 10 && <p className="muted">另有 {unallowed.length - 10} 个</p>}
             </section>
           )}
           <section className={`delivery${delivery?.earlier ? ' earlier' : ''}`} aria-label="交付说明">
