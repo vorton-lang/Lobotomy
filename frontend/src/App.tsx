@@ -66,7 +66,7 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-  // Links in agent text open outside the app window: the main process decides how (frontend.md §4.1).
+  // Links in agent text open outside the app window: the main process decides how (frontend.md §7.2).
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
       const link = (event.target as HTMLElement).closest('a');

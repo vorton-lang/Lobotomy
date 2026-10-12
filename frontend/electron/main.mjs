@@ -116,7 +116,7 @@ ipcMain.on('lobotomy:attention', (_event, count) => {
 const VIEWABLE = new Set(['.html', '.htm', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.md', '.txt', '.log', '.json', '.csv']);
 
 /**
- * What a link in agent text opens (frontend.md §4.1): web and mail links in the system browser; a
+ * What a link in agent text opens (frontend.md §7.2): web and mail links in the system browser; a
  * local folder, or a file of a viewable kind, with the system's app for it; any other local file
  * in its folder, selected, so a link never runs a program. A missing file opens nothing.
  */

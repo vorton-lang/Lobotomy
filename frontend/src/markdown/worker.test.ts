@@ -82,7 +82,7 @@ describe('Markdown worker', () => {
     expect(html).not.toContain('<a');
   });
 
-  // The desktop app opens these without running programs (frontend.md §4.1).
+  // The desktop app opens these without running programs (frontend.md §7.2).
   it('links local files by their absolute path', async () => {
     const link = async (target: string) => /href="([^"]*)"/.exec(await render(`[对照](${target})`, false))?.[1];
     expect(await link('</C:/Users/Yufeng Ying/p2/index.html>')).toBe('file:///C:/Users/Yufeng%20Ying/p2/index.html');

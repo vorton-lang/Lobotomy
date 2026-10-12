@@ -4,7 +4,7 @@ export function escapeHtml(text: string): string {
 
 /**
  * Only links that cannot run code: the web, mail, and local files, which the desktop app opens
- * without running programs (frontend.md §4.1). A local file is a `file:` URL or an absolute path,
+ * without running programs (frontend.md §7.2). A local file is a `file:` URL or an absolute path,
  * such as `C:\…`, `C:/…`, `/C:/…` (how Markdown keeps `</C:/…>`) or `/home/…`; it becomes a
  * `file:` URL. A relative path stays text: nothing says what it is relative to.
  */
