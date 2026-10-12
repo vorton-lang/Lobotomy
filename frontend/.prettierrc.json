@@ -1,0 +1,8 @@
+{
+  "printWidth": 120,
+  "singleQuote": true,
+  "endOfLine": "lf",
+  "proseWrap": "preserve",
+  "htmlWhitespaceSensitivity": "strict",
+  "embeddedLanguageFormatting": "off"
+}

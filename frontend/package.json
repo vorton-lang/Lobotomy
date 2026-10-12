@@ -19,7 +19,9 @@
     "lint": "oxlint --deny-warnings --report-unused-disable-directives",
     "typecheck:app": "tsc -p tsconfig.json",
     "typecheck:node": "tsc -p tsconfig.node.json",
-    "typecheck:tests": "tsc -p tsconfig.tests.json"
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -43,6 +45,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "electron": "^44.5.1",
     "oxlint": "1.87.0",
+    "prettier": "3.9.10",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
     "vitest": "^5.0.3"
