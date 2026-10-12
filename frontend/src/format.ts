@@ -104,7 +104,7 @@ export function liveSize(item: LiveItem): string {
 
 /** A command or tool of the running turn is still at work; it shows its own running time. */
 export function toolRunning(turn: LiveTurn | undefined): boolean {
-  return Object.values(turn?.items ?? {}).some((item) => (item.content as { status?: string }).status === 'in_progress');
+  return Object.values(turn?.items ?? {}).some((item) => jsonObject(item.content).status === 'in_progress');
 }
 
 export const VERIFICATION_LABEL: Record<Verification['state'], string> = { running: '进行中', passed: '通过', failed: '未通过' };

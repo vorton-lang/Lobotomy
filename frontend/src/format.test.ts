@@ -462,6 +462,9 @@ describe('who a role is and how long its turn is quiet', () => {
     expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: text('hi'), b: command } })).toBe(true);
     expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: text('hi') } })).toBe(false);
     expect(toolRunning(undefined)).toBe(false);
+    const dynamic = { kind: 'future_kind', started_at: 1, content: null };
+    expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: dynamic } })).toBe(false);
+    expect(liveSize(dynamic)).toBe('future_kind:0:');
   });
 });
 
