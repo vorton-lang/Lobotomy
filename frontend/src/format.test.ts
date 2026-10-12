@@ -18,6 +18,7 @@ import type {
 import {
   abnormalEnd,
   asReport,
+  attachmentAccepted,
   attachmentExpired,
   attachmentLine,
   attachmentWarning,
@@ -304,12 +305,16 @@ describe("Angela's reply", () => {
       at: 0,
       superseded: false,
       stale: false,
+      accepted: false,
       unallowed_changes: 0,
     };
     expect(attachmentLine(v)).toContain('alpha · 「加行号」第 2 轮的验证 · 通过');
     expect(attachmentExpired(v)).toBeNull();
     expect(attachmentExpired({ ...v, stale: true })).toMatch(/^已过期/);
     expect(attachmentExpired({ ...v, superseded: true })).toBe('已被新的验证取代');
+    // Accepting moved the integration version past it: accepted, not stale.
+    expect(attachmentExpired({ ...v, stale: true, accepted: true })).toBeNull();
+    expect(attachmentAccepted({ ...v, stale: true, accepted: true })).toBe(true);
     expect(attachmentWarning(v)).toBeNull();
     expect(attachmentWarning({ ...v, unallowed_changes: 2 })).toBe('只读调查，却改了 2 个文件');
   });

@@ -366,6 +366,9 @@ details[open] > summary::before {
   color: var(--fail);
   margin-left: 6px;
 }
+.badge.accepted {
+  margin-left: 6px;
+}
 /* A round mark for a state, such as a turn that runs. */
 .dot {
   display: inline-block;

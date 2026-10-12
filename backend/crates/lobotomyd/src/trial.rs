@@ -179,6 +179,13 @@ pub async fn start(project: &Arc<Project>, request: StartTrial) -> anyhow::Resul
     Ok(view)
 }
 
+/// Lists a new trial. The task's closed trials go: their copies are deleted, and each launch would
+/// otherwise add one more to the list (frontend.md §8).
+fn admit(entries: &mut Vec<Trial>, trial: Trial) {
+    entries.retain(|t| t.view.task_id != trial.view.task_id || t.view.state == "open");
+    entries.push(trial);
+}
+
 /// Copies the candidate and opens its terminal. Once the terminal is open, the trial's owner
 /// task deletes the copy when the terminal exits.
 async fn launch(project: &Arc<Project>, view: &mut TrialView) -> anyhow::Result<()> {
@@ -205,7 +212,7 @@ async fn launch(project: &Arc<Project>, view: &mut TrialView) -> anyhow::Result<
             spawned.reap();
             return Err(error.into());
         }
-        entries.push(Trial { view: view.clone(), stop: stop.clone(), finished: finished.clone() });
+        admit(&mut entries, Trial { view: view.clone(), stop: stop.clone(), finished: finished.clone() });
     }
     let (project, id, root) = (project.clone(), view.id.clone(), copy_root(project, &view.id));
     tokio::spawn(async move {
@@ -357,6 +364,31 @@ mod tests {
             std::fs::read_to_string(project.verify_dir().join("version.txt")).unwrap(),
             "unrelated verification"
         );
+    }
+
+    #[test]
+    fn a_new_trial_replaces_the_tasks_closed_ones() {
+        let trial = |id: &str, task: &str, state: &'static str| super::Trial {
+            view: TrialView {
+                id: id.into(),
+                task_id: task.into(),
+                attempt_id: "a".into(),
+                round: 1,
+                candidate: "c".into(),
+                directory: String::new(),
+                command: String::new(),
+                purpose: String::new(),
+                state,
+                error: None,
+            },
+            stop: CancellationToken::new(),
+            finished: CancellationToken::new(),
+        };
+        let mut entries =
+            vec![trial("closed", "t1", "closed"), trial("open", "t1", "open"), trial("other", "t2", "closed")];
+        admit(&mut entries, trial("new", "t1", "open"));
+        let ids: Vec<&str> = entries.iter().map(|t| t.view.id.as_str()).collect();
+        assert_eq!(ids, ["open", "other", "new"], "an open terminal and other tasks' trials stay");
     }
 
     #[tokio::test]

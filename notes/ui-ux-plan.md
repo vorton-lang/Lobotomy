@@ -108,6 +108,8 @@
 
 ### P2 对话
 
+进行中。"内部词汇"一项完成（2026-10-13，在 Lobotomy-dogfood 中由 Angela 派给 Malkuth，用户验收），现状见 frontend.md §7.3。
+
 - **版式**：
   - 阅读区宽约 720px，居中。
   - Angela 与 role 的话不加框，左侧是头像与名字。

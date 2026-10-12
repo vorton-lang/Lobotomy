@@ -42,7 +42,7 @@ test('internal vocabulary stays secondary while abnormal endings remain visible'
     ({ id, seq, turn_id, kind, content, command_id: null, created_at: seq });
   await openHost(page, { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela }, undefined, {
     thread: {
-      items: [item('item_3', 1, 'normal', 'agent_message', { text: '候选成果及验证：\n[[att:candidate]]\n[[att:verification]]' }),
+      items: [item('item_3', 1, 'normal', 'agent_message', { text: '候选成果及验证：\n[[att:candidate]]\n[[att:verification]]\n[[att:accepted]]' }),
         item('tool', 2, 'normal', 'mcp_call', { server: 'lobotomy', tool: 'assign', arguments: { task: '导出报表' }, result: 'ok' }),
         item('external', 3, 'failed', 'mcp_call', { server: 'drive', tool: 'read', arguments: {}, result: 'ok' })],
       turns: { normal: turn('normal', 'completed'), failed: turn('failed', 'interrupted') },
@@ -50,19 +50,24 @@ test('internal vocabulary stays secondary while abnormal endings remain visible'
     },
     refs: { quotes: {}, attachments: {
       candidate: { project: 'alpha', project_name: 'alpha', kind: 'candidate', task_id: 'task1', title: '导出报表', seq: 1,
-        commit: 'abcdef0123456789', at: 1, superseded: true, unallowed_changes: 0 },
+        commit: 'abcdef0123456789', at: 1, superseded: true, accepted: false, unallowed_changes: 0 },
       verification: { project: 'alpha', project_name: 'alpha', kind: 'verification', task_id: 'task1', title: '导出报表', seq: 1,
-        state: 'passed', base: 'base0000aaaa', config_version: 2, at: 1, superseded: false, stale: true, unallowed_changes: 0 },
+        state: 'passed', base: 'base0000aaaa', config_version: 2, at: 1, superseded: false, stale: true, accepted: false, unallowed_changes: 0 },
+      // Accepting moved the integration version past it: accepted, not expired.
+      accepted: { project: 'alpha', project_name: 'alpha', kind: 'verification', task_id: 'task2', title: '加行号', seq: 1,
+        state: 'passed', base: 'base1111bbbb', config_version: 2, at: 1, superseded: false, stale: true, accepted: true, unallowed_changes: 0 },
     } },
   });
-  await expect(page.locator('.ref-attachment')).toHaveCount(2);
+  await expect(page.locator('.ref-attachment')).toHaveCount(3);
   await expect(page.locator('.turn-divider.interrupted')).toContainText('被中断');
+  await expect(page.locator('.badge.expired')).toHaveCount(2);
   await expect(page.locator('.badge.expired').first()).toContainText('取代');
   await expect(page.locator('.badge.expired').last()).toContainText('已过期');
+  await expect(page.locator('.ref-attachment').nth(2).locator('.badge')).toHaveText('已验收');
   await expect(page.locator('.turn-divider.completed')).toHaveText(/^\d{1,2}-\d{1,2} \d{2}:\d{2}$/);
   await expect(page.locator('.ref-attachment').first()).toHaveAttribute('title', /abcdef0123456789/);
-  await expect(page.locator('.ref-attachment').last()).toHaveAttribute('title', /base0000aaaa.*检查设置第 2 版/);
-  await expect(page.locator('.ref-attachment').last()).not.toContainText('检查设置第 2 版');
+  await expect(page.locator('.ref-attachment').nth(1)).toHaveAttribute('title', /base0000aaaa.*检查设置第 2 版/);
+  await expect(page.locator('.ref-attachment').nth(1)).not.toContainText('检查设置第 2 版');
   await expect(page.locator('summary').filter({ hasText: 'assign' })).toHaveText('调用 assign');
   await expect(page.locator('summary').filter({ hasText: 'drive.read' })).toHaveText('调用 drive.read');
   await page.locator('summary').filter({ hasText: 'assign' }).click();

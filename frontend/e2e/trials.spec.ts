@@ -43,6 +43,8 @@ async function openTrial(page: Page, initial = detail()) {
         round: current.seq, candidate: args.expected_candidate, directory: `/trials/round-${current.seq}`,
         ...current.trial!, state: 'open', error: null,
       };
+      // As the backend: a new trial replaces the task's closed ones.
+      api.trials = api.trials.filter((item) => item.task_id !== args.task_id || item.state === 'open');
       api.trials.push(trial);
       return structuredClone(trial);
     },
@@ -138,8 +140,16 @@ test('trial launches only a fixed candidate after an explicit click, and stops o
   await expect.poll(() => commands('stop_trial').length).toBe(1);
   releaseStop();
   await expect(terminal).toContainText('终端已关闭');
+  // The closed trial's copy is deleted: its card no longer names the directory.
+  await expect(terminal).not.toContainText('/trials/round-1');
   await expect(launch).toBeEnabled();
   expect(commands('start_trial')).toHaveLength(1);
+
+  // Trying again replaces the closed card instead of adding one more.
+  await launch.click();
+  await expect(controls.getByRole('article')).toHaveCount(1);
+  await expect(terminal).toContainText('终端已打开');
+  expect(commands('start_trial')).toHaveLength(2);
 });
 
 test('trial keeps an old terminal when the round changes without reusing its launch recipe', async ({ page }, testInfo) => {

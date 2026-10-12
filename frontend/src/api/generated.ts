@@ -43,6 +43,10 @@ seq: number, commit: string | null, at: number,
  */
 superseded: boolean,
 /**
+ * It was accepted: it is in the integration version.
+ */
+accepted: boolean,
+/**
  * How many files it changed although its task allows reading only (roles-and-tasks.md §4).
  */
 unallowed_changes: number, } | { "kind": "verification", task_id: string, title: string,
@@ -62,6 +66,11 @@ superseded: boolean,
  * The integration version or the checks changed since it ran (data-model.md §4.5).
  */
 stale: boolean,
+/**
+ * The candidate was accepted on it. Accepting moves the integration version, so an
+ * accepted verification is always stale; that is no reason to doubt it.
+ */
+accepted: boolean,
 /**
  * How many files its candidate changed although the task allows reading only.
  */

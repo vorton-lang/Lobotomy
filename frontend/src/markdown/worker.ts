@@ -1,5 +1,6 @@
 // Markdown to HTML off the main thread (frontend.md §4.1). Agent text is untrusted: raw HTML is
-// shown as text, links only open http(s) and mailto, images are not loaded.
+// shown as text, links only open http(s), mailto and local files (never running a program),
+// images are not loaded.
 
 import { Marked, type Tokens } from 'marked';
 import remend from 'remend';
@@ -49,7 +50,9 @@ const marked = new Marked({
     link({ href, tokens }) {
       const inner = this.parser.parseInline(tokens);
       const safe = safeHref(href);
-      return safe ? `<a href="${escapeHtml(safe)}" target="_blank" rel="noreferrer">${inner}</a>` : inner;
+      // A local file names its path on hover: the text alone does not say where it points.
+      const title = safe?.startsWith('file:') ? ` title="${escapeHtml(href)}"` : '';
+      return safe ? `<a href="${escapeHtml(safe)}"${title} target="_blank" rel="noreferrer">${inner}</a>` : inner;
     },
     code(token) {
       const code = token as CodeToken;

@@ -77,9 +77,19 @@ describe('Markdown worker', () => {
   });
 
   it.each([true, false])('does not activate unsafe links with streaming=%s', async (streaming) => {
-    const html = await render('[script](javascript:alert%281%29) [local](file:///etc/passwd)', streaming);
-    expect(html).toBe('<p>script local</p>\n');
+    const html = await render('[script](javascript:alert%281%29) [relative](notes/a.md) [data](data:text/html,x)', streaming);
+    expect(html).toBe('<p>script relative data</p>\n');
     expect(html).not.toContain('<a');
+  });
+
+  // The desktop app opens these without running programs (frontend.md §4.1).
+  it('links local files by their absolute path', async () => {
+    const link = async (target: string) => /href="([^"]*)"/.exec(await render(`[对照](${target})`, false))?.[1];
+    expect(await link('</C:/Users/Yufeng Ying/p2/index.html>')).toBe('file:///C:/Users/Yufeng%20Ying/p2/index.html');
+    expect(await link('<C:\\Users\\Yufeng Ying\\p2\\index.html>')).toBe('file:///C:/Users/Yufeng%20Ying/p2/index.html');
+    expect(await link('file:///C:/a%20b/x.png')).toBe('file:///C:/a%20b/x.png');
+    expect(await link('/home/u/report.pdf')).toBe('file:///home/u/report.pdf');
+    expect(await render('[对照](</C:/x/index.html>)', false)).toContain('title="/C:/x/index.html"');
   });
 
   it.each([true, false])('escapes HTML and omits images with streaming=%s', async (streaming) => {

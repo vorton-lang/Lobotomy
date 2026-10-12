@@ -112,9 +112,30 @@ ipcMain.on('lobotomy:attention', (_event, count) => {
   tray?.setToolTip(label ? `Lobotomy · ${label}` : 'Lobotomy');
 });
 
-ipcMain.on('lobotomy:openExternal', (_event, url) => {
-  if (/^(https?:|mailto:)/.test(url)) void shell.openExternal(url);
-});
+/** Files a link opens in the app the system views them with. Nothing here runs a program. */
+const VIEWABLE = new Set(['.html', '.htm', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.md', '.txt', '.log', '.json', '.csv']);
+
+/**
+ * What a link in agent text opens (frontend.md §4.1): web and mail links in the system browser; a
+ * local folder, or a file of a viewable kind, with the system's app for it; any other local file
+ * in its folder, selected, so a link never runs a program. A missing file opens nothing.
+ */
+function openLink(url) {
+  if (/^(https?:|mailto:)/.test(url)) return void shell.openExternal(url);
+  if (!url.startsWith('file:')) return;
+  let file;
+  let stat;
+  try {
+    file = fileURLToPath(url);
+    stat = fs.statSync(file);
+  } catch {
+    return;
+  }
+  if (stat.isDirectory() || VIEWABLE.has(path.extname(file).toLowerCase())) void shell.openPath(file);
+  else shell.showItemInFolder(file);
+}
+
+ipcMain.on('lobotomy:openExternal', (_event, url) => openLink(url));
 
 /** Quitting stops the organization (frontend.md §1): the backend interrupts running turns,
  *  waits for them, and exits. */
@@ -212,9 +233,9 @@ function createWindow() {
   });
   window.once('ready-to-show', () => window.show());
   window.removeMenu();
-  // Links never navigate the app window; they open in the system browser.
+  // Links never navigate the app window; they open outside it (openLink).
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^(https?:|mailto:)/.test(url)) void shell.openExternal(url);
+    openLink(url);
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {

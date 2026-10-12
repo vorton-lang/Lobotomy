@@ -326,11 +326,18 @@ export function unallowedChanges(detail: TaskDetail): string[] {
   return captureChanges(detail.captures.find((c) => c.id === candidate));
 }
 
-/** Why an attachment no longer holds now, or `null` while it does. */
+/** The attachment's candidate was accepted into the integration version. */
+export const attachmentAccepted = (a: AttachmentView): boolean =>
+  (a.kind === 'candidate' || a.kind === 'verification') && a.accepted;
+
+/**
+ * Why an attachment no longer holds now, or `null` while it does. Accepting moves the
+ * integration version past the verification it used: that verification is accepted, not stale.
+ */
 export function attachmentExpired(a: AttachmentView): string | null {
   if (a.kind === 'candidate' && a.superseded) return '已被新的候选成果取代';
   if (a.kind === 'verification' && a.superseded) return '已被新的验证取代';
-  if (a.kind === 'verification' && a.stale) return '已过期：集成版本或检查设置在它之后变了';
+  if (a.kind === 'verification' && a.stale && !a.accepted) return '已过期：集成版本或检查设置在它之后变了';
   if (a.kind === 'report' && a.effect && VOID_REPORT[a.effect]) return '没有生效';
   return null;
 }

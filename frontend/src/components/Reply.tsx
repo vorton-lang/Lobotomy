@@ -5,7 +5,7 @@
 import { useEffect, useMemo } from 'react';
 import { ChevronRight } from 'lucide-react';
 import type { AttachmentView, QuotedMessage, Resolved } from '../api/types';
-import { attachmentExpired, attachmentLine, attachmentMetadata, attachmentWarning, clock, previewLine, splitReply, jsonObject, textOf } from '../format';
+import { attachmentAccepted, attachmentExpired, attachmentLine, attachmentMetadata, attachmentWarning, clock, previewLine, splitReply, jsonObject, textOf } from '../format';
 import { selectProject, useStore, wantForwards, wantRefs } from '../store';
 import { ICON, Markdown } from './common';
 
@@ -93,6 +93,7 @@ function Attachment({ id }: { id: string }) {
       {attachmentLine(attachment)}
       {warning && <span className="badge expired">{warning}</span>}
       {expired && <span className="badge expired">{expired}</span>}
+      {!expired && attachmentAccepted(attachment) && <span className="badge passed accepted">已验收</span>}
     </button>
   );
 }

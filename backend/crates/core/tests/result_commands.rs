@@ -16,6 +16,7 @@ use lobotomy_core::verify::{
     Accept, CheckOutcome, FinishPreview, FinishVerification, PreviewResult, RetryPreview, Reverify, SendBack,
     StartVerification, VerificationState, latest_verification, next_preview, preview_stopped, verification_plan,
 };
+use lobotomy_core::view::attachment::{Attachment, attachment};
 use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceState, current_workspace};
 use lobotomy_core::{Caller, Db};
 use serde_json::json;
@@ -74,8 +75,19 @@ fn a_verified_candidate_is_published_by_accepting_it() {
     assert_eq!(phase(&db, &task), Phase::Verifying);
     let v = verify(&db, &task, "rebased", vec![], vec![check(0)]);
     assert_eq!(phase(&db, &task), Phase::Accepting);
+    let cited = |id: &str| match db.read(|c| attachment(c, id)).unwrap() {
+        Some(Attachment::Verification { stale, accepted, .. }) => (stale, accepted),
+        Some(Attachment::Candidate { superseded, accepted, .. }) => (superseded, accepted),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(cited(&v), (false, false));
+    let capture = db.read(|c| latest_verification(c, &task)).unwrap().unwrap().capture_id;
 
     let published = accept(&db, "a1", &task, &v, BASE).unwrap();
+    // Accepting moved the integration version past the verification's base: stale, but accepted,
+    // which the attachment says (manager-actions.md §2.1).
+    assert_eq!(cited(&v), (true, true));
+    assert_eq!(cited(&capture), (false, true));
     assert_eq!(published, "rebased");
     let project = db.read(load_project).unwrap().unwrap();
     assert_eq!((project.integration.as_str(), project.integration_rev), ("rebased", 2));

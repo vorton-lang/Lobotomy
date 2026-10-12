@@ -35,6 +35,8 @@ pub enum Attachment {
         at: i64,
         /// A newer attempt's candidate replaced it.
         superseded: bool,
+        /// It was accepted: it is in the integration version.
+        accepted: bool,
         /// How many files it changed although its task allows reading only (roles-and-tasks.md §4).
         unallowed_changes: usize,
     },
@@ -52,6 +54,9 @@ pub enum Attachment {
         superseded: bool,
         /// The integration version or the checks changed since it ran (data-model.md §4.5).
         stale: bool,
+        /// The candidate was accepted on it. Accepting moves the integration version, so an
+        /// accepted verification is always stale; that is no reason to doubt it.
+        accepted: bool,
         /// How many files its candidate changed although the task allows reading only.
         unallowed_changes: usize,
     },
@@ -105,6 +110,16 @@ fn latest_candidate(conn: &Connection, task_id: &str) -> Result<Option<String>> 
     Ok(list_attempts(conn, task_id)?.into_iter().rev().find_map(|a| a.candidate_id))
 }
 
+/// Whether the task's accept decision names `id` as its `field` (data-model.md §9.2 验收).
+fn accepted(conn: &Connection, task_id: &str, field: &str, id: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM decision WHERE kind = 'accept' AND task_id = ?1
+                        AND json_extract(detail, '$.' || ?2) = ?3)",
+        [task_id, field, id],
+        |r| r.get(0),
+    )?)
+}
+
 fn unallowed(conn: &Connection, task_id: &str, capture_id: &str) -> Result<usize> {
     Ok(unallowed_changes(&load_task(conn, task_id)?, &load_capture(conn, capture_id)?).len())
 }
@@ -124,6 +139,7 @@ fn candidate(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
     let superseded = latest_candidate(conn, &task_id)?.as_deref() != Some(id);
     Ok(Some(Attachment::Candidate {
         title: title(conn, &task_id)?,
+        accepted: accepted(conn, &task_id, "capture_id", id)?,
         unallowed_changes: unallowed(conn, &task_id, id)?,
         task_id,
         seq,
@@ -144,6 +160,7 @@ fn verification(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
     Ok(Some(Attachment::Verification {
         title: title(conn, &v.task_id)?,
         stale: evidence_is_stale(conn, &v)?,
+        accepted: accepted(conn, &v.task_id, "verification_id", id)?,
         unallowed_changes: unallowed(conn, &v.task_id, &v.capture_id)?,
         task_id: v.task_id,
         seq,

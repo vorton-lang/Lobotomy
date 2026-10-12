@@ -35,9 +35,12 @@ export function TrialControls({ detail }: { detail: TaskDetail }) {
     return () => { disposed = true; clearTimeout(timer); };
   }, [taskId, status]);
 
-  const update = (trial: TrialView) => {
+  const update = (trial: TrialView, keepClosed = true) => {
     revision.current++;
-    setTrials((previous) => [...(previous ?? []).filter((item) => item.id !== trial.id), trial]);
+    setTrials((previous) => [
+      ...(previous ?? []).filter((item) => item.id !== trial.id && (keepClosed || item.state === 'open')),
+      trial,
+    ]);
     setError(null);
   };
   const latest = detail.attempts.at(-1);
@@ -59,7 +62,8 @@ export function TrialControls({ detail }: { detail: TaskDetail }) {
             candidate={candidate}
             disabled={status !== 'open' || trials === null || error !== null || opened}
             opened={opened}
-            onStarted={update}
+            // A new trial replaces the task's closed ones, as the backend's list does.
+            onStarted={(trial) => update(trial, false)}
           />
           {!candidate && <p className="muted">候选成果尚未固定，固定后才能体验。</p>}
         </>
@@ -122,9 +126,14 @@ function TrialTerminal({ trial, earlier, connected, onStopped }: {
         <span className="badge">{trial.state === 'open' ? '终端已打开' : '终端已关闭'}</span>
       </p>
       {earlier && trial.state === 'open' && <p className="muted">仍在旧轮副本中运行，不会自动切换到本轮。</p>}
-      {trial.purpose && <p>{trial.purpose}</p>}
-      <pre className="trial-command"><code>{trial.command}</code></pre>
-      <p className="muted">运行目录：<code>{trial.directory}</code></p>
+      {/* A closed trial's copy is deleted: its command and directory say nothing more. */}
+      {trial.state === 'open' && (
+        <>
+          {trial.purpose && <p>{trial.purpose}</p>}
+          <pre className="trial-command"><code>{trial.command}</code></pre>
+          <p className="muted">运行目录：<code>{trial.directory}</code></p>
+        </>
+      )}
       {trial.error && <p className="error">{trial.error}</p>}
       {trial.state === 'open' && <button disabled={!connected || busy} onClick={stop}>{busy ? '正在停止…' : '停止体验'}</button>}
     </article>

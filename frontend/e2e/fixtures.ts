@@ -1,7 +1,8 @@
 // Each test gets a backend of its own (#16): a fresh host directory with one project connected to a
 // fresh git repository, and the fake Codex. Starting one takes a fraction of a second, and no test
 // depends on what an earlier one left. The backend is built beforehand with
-// `cargo build -p lobotomyd`.
+// `cargo build -p lobotomyd`; `LOBOTOMYD` names another build, as for the app, such as one in its
+// own target directory while the app runs the usual one.
 
 import { test as base, expect, type Page } from '@playwright/test';
 import { execFileSync, spawn } from 'node:child_process';
@@ -12,7 +13,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(here, '..', '..', 'backend');
-const exe = path.join(backendDir, 'target', 'debug', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
+const exe =
+  process.env.LOBOTOMYD ??
+  path.join(backendDir, 'target', 'debug', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
 const fakeCodex = path.join(backendDir, 'crates', 'lobotomyd', 'tests', 'fixtures', 'fake-codex.mjs');
 const fakeClaude = path.join(backendDir, 'crates', 'lobotomyd', 'tests', 'fixtures', 'fake-claude.mjs');
 
