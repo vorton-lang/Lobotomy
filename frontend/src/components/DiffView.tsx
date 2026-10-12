@@ -46,7 +46,7 @@ export function DiffView({ from, to }: { from: string; to: string }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   useEffect(() => {
     let current = true;
-    call<FileChange[]>('diff', { from, to })
+    call('diff', { from, to })
       .then((changes) => current && setLoaded({ from, to, changes }))
       .catch((e) => current && setLoaded({ from, to, error: String(e) }));
     return () => {

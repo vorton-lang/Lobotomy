@@ -9,6 +9,7 @@ use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Project {
     pub id: String,
     pub repo_path: String,
@@ -59,6 +60,7 @@ pub fn peek_project(path: &std::path::Path) -> Result<Option<Project>> {
 /// A check command, run in order in the verification site; it passes with exit code 0
 /// (harness-adapter.md §4.2).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Check {
     pub command: String,
     pub timeout_secs: u64,
@@ -67,6 +69,7 @@ pub struct Check {
 /// What the project configuration holds (data-model.md §9.1 project_config). Captures, checks
 /// and their results name the version they used.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ProjectConfig {
     pub checks: Vec<Check>,
     /// gitignore patterns never captured; materializing keeps them as caches.
@@ -157,6 +160,7 @@ impl Command for Onboard {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct EditProjectConfig {
     pub request_id: String,
     pub expected_version: i64,
@@ -164,6 +168,7 @@ pub struct EditProjectConfig {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ConfigEdited {
     pub version: i64,
 }

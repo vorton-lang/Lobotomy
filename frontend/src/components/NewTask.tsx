@@ -8,7 +8,7 @@ export function NewTask({ executor, fromCapture, onClose }: { executor: string; 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [criteria, setCriteria] = useState('');
-  const { submit, busy } = useCommand<{ id: string }>(fromCapture ? 'adopt_outside_changes' : 'create_task');
+  const { submit, busy } = useCommand(fromCapture ? 'adopt_outside_changes' : 'create_task');
   const create = async () => {
     // A task made from changes goes to the role whose slot holds them.
     const created = await submit(fromCapture ? { capture_id: fromCapture, title, body, criteria } : { title, body, criteria, executor });

@@ -16,6 +16,7 @@ use crate::verify::{VerificationState, evidence_is_stale, latest_verification, l
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum Attachment {
     Task {
         task_id: String,

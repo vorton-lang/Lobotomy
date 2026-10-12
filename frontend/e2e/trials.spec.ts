@@ -15,11 +15,11 @@ const attempt = (round: number, fixed = true): Attempt => ({
 const capture = (round: number): Capture => ({
   id: `capture${round}`, turn_id: `turn${round}`, role: 'Malkuth', task_id: 'task1', attempt_id: `attempt${round}`,
   kind: 'candidate', base: 'base0000', state: 'pinned', commit_id: round === 1 ? candidate1 : candidate2,
-  detail: null, created_at: round + 1, outside: null,
+  detail: null, created_at: round + 1, outside: null, workspace_id: 'workspace', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
 });
 const detail = (fixed = true): TaskDetail => ({
   task: {
-    id: 'task1', title: '体验候选成果', body: '检查交互', executor: 'Malkuth', phase: 'accepting', paused: false,
+    id: 'task1', title: '体验候选成果', body: '检查交互', executor: 'Malkuth', phase: 'accepting', paused: false, paused_by: null, assignment: null,
     blocked_reason: null, criteria_version: 1, queue_pos: null, revision: 1, created_at: 1, closed_at: null, origin_capture: null,
   },
   criteria: [{ version: 1, text: '交互可用', created_by: 'user', created_at: 1 }],
@@ -55,8 +55,8 @@ async function openTrial(page: Page, initial = detail()) {
       await page.evaluate(async (value) => {
         const module = '/src/store.ts';
         const { useStore } = await import(module);
-        useStore.setState({ taskDetail: value });
-      }, next);
+        useStore.setState({ taskDetail: JSON.parse(value) });
+      }, JSON.stringify(next));
     },
   };
   await page.routeWebSocket(/\/gui\?token=trial-test$/, (socket) => {
@@ -70,7 +70,7 @@ async function openTrial(page: Page, initial = detail()) {
           case 'snapshot': result = {
             seq: 1,
             project: { id: 'project1', repo_path: '/project', branch: 'main', author_name: 'Test', author_email: 'test@example.com', integration: 'base0000', integration_rev: 1, previewed: 'base0000' },
-            config: null, roles: [], tasks: [{ ...api.detail.task, attempt_seq: 1, attempt_open: false, verification: null, undelivered_messages: 0 }],
+            config: null, roles: [], tasks: [{ ...api.detail.task, attempt_seq: 1, attempt_open: false, verification: null, undelivered_messages: 0, reply_queued: false }],
             attention: [], quota: [], harnesses: [], live: {},
           } satisfies Snapshot; break;
           case 'task': result = api.detail; break;

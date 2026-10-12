@@ -5,7 +5,11 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+ts-rs = ["dep:ts-rs"]
+
 [dependencies]
+ts-rs = { workspace = true, optional = true }
 # The library API is not stable; the version is pinned and its types stay inside this crate
 # (harness-adapter.md §6).
 jj-lib = { version = "=0.45.1", default-features = false, features = ["git"] }

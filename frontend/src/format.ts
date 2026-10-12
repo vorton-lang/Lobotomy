@@ -25,7 +25,6 @@ import type {
   RoleView,
   TaskDetail,
   TaskView,
-  Text,
   Turn,
   Verification,
 } from './api/types';
@@ -94,7 +93,7 @@ export function quietFor(lastAt: number | undefined, now: number): string | null
 
 /** What changes as a live item grows: its kind, the size of its texts, and its status. */
 export function liveSize(item: LiveItem): string {
-  const content = item.content as Record<string, unknown>;
+  const content = jsonObject(item.content);
   let size = 0;
   for (const value of Object.values(content)) {
     if (typeof value === 'string') size += value.length;
@@ -105,7 +104,7 @@ export function liveSize(item: LiveItem): string {
 
 /** A command or tool of the running turn is still at work; it shows its own running time. */
 export function toolRunning(turn: LiveTurn | undefined): boolean {
-  return Object.values(turn?.items ?? {}).some((item) => (item.content as { status?: string }).status === 'in_progress');
+  return Object.values(turn?.items ?? {}).some((item) => jsonObject(item.content).status === 'in_progress');
 }
 
 export const VERIFICATION_LABEL: Record<Verification['state'], string> = { running: '进行中', passed: '通过', failed: '未通过' };
@@ -143,14 +142,32 @@ export function shortSha(commit: string | null | undefined): string {
   return commit ? commit.slice(0, 8) : '';
 }
 
+/** Read only the fields a display needs from dynamic JSON; these are not wire validators. */
+export function jsonObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+export function jsonArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+export function jsonNumber(value: unknown): number {
+  return typeof value === 'number' ? value : 0;
+}
+
+export function captureChanges(capture: Capture | undefined): string[] {
+  return jsonArray(jsonObject(capture?.detail).changed).filter((value): value is string => typeof value === 'string');
+}
+
 export function isBlob(value: unknown): value is BlobRef {
-  return typeof value === 'object' && value !== null && 'blob' in value;
+  const ref = jsonObject(value);
+  return typeof ref.blob === 'string' && typeof ref.size === 'number' && typeof ref.head === 'string' && typeof ref.tail === 'string';
 }
 
 /** A text field as the thread shows it: whole, or the head and tail of one in the blob store. */
-export function textOf(value: Text | null | undefined): string {
+export function textOf(value: unknown): string {
   if (value == null) return '';
-  return isBlob(value) ? `${value.head}\n…\n${value.tail}` : value;
+  return isBlob(value) ? `${value.head}\n…\n${value.tail}` : typeof value === 'string' ? value : '';
 }
 
 /** Lines and characters an output shows before the rest goes behind "查看全文". */
@@ -178,12 +195,13 @@ const COMMAND_LINE = 120;
  * How a command shows folded (#14): a short one whole; a long one, such as a heredoc that writes a
  * file, by its first line, with its size.
  */
-export function commandSummary(raw: Text | null | undefined): { line: string; size: string | null } {
-  const command = isBlob(raw) ? raw.head : (raw ?? '');
+export function commandSummary(raw: unknown): { line: string; size: string | null } {
+  const blob = isBlob(raw) ? raw : null;
+  const command = blob ? blob.head : typeof raw === 'string' ? raw : '';
   const lines = command.split('\n');
-  if (!isBlob(raw) && lines.length === 1 && command.length <= COMMAND_LINE) return { line: command, size: null };
+  if (!blob && lines.length === 1 && command.length <= COMMAND_LINE) return { line: command, size: null };
   const line = lines[0].length > COMMAND_LINE ? `${lines[0].slice(0, COMMAND_LINE)}…` : lines[0];
-  const size = isBlob(raw) ? `${raw.size} 个字符` : `共 ${lines.length} 行，${command.length} 个字符`;
+  const size = blob ? `${blob.size} 个字符` : `共 ${lines.length} 行，${command.length} 个字符`;
   return { line, size };
 }
 
@@ -298,7 +316,7 @@ export function unallowedChanges(detail: TaskDetail): string[] {
   const actions = detail.task.assignment?.actions;
   if (!actions || actions.some((a) => a !== 'read_only')) return [];
   const candidate = detail.attempts.findLast((a) => a.candidate_id)?.candidate_id;
-  return detail.captures.find((c) => c.id === candidate)?.detail?.changed ?? [];
+  return captureChanges(detail.captures.find((c) => c.id === candidate));
 }
 
 /** Why an attachment no longer holds now, or `null` while it does. */
@@ -397,8 +415,8 @@ export function quotaNote(domain: Domain): string {
 
 /** What a capture the runtime stopped holds back, one line per path. */
 export function stoppedPaths(capture: Capture): string[] {
-  if (capture.state === 'oversized') return (capture.detail?.files ?? []).map((f) => `${f.path}（${bytes(f.size)}）`);
-  return (capture.detail?.paths ?? []).map((p) => `${p.path}（${p.kind}）`);
+  if (capture.state === 'oversized') return jsonArray(jsonObject(capture.detail).files).map(jsonObject).map((f) => `${textOf(f.path)}（${bytes(jsonNumber(f.size))}）`);
+  return jsonArray(jsonObject(capture.detail).paths).map(jsonObject).map((p) => `${textOf(p.path)}（${textOf(p.kind)}）`);
 }
 
 export const REPORT_LABEL: Record<ReportArgs['status'], string> = { progress: '进展', blocked: '需要你决定', done: '完成' };
@@ -433,7 +451,7 @@ export function attentionSummary(a: Attention): string {
         ? `${a.role} 的这次采集超过了体积上限，等你决定`
         : `${a.role} 的工作目录里有采集无法保存的内容，等你决定`;
     case 'outside_changes':
-      return `${a.role} 在任务之外改了 ${a.capture.detail?.changed?.length ?? 0} 个文件，等你决定`;
+      return `${a.role} 在任务之外改了 ${captureChanges(a.capture).length} 个文件，等你决定`;
     case 'unknown_turn':
       return `后端重启前启动的 ${a.role} 的 CLI 仍在运行`;
     case 'task_blocked':
@@ -580,8 +598,8 @@ function decisionLabel(kind: string, actor: string): string {
 }
 
 /** What a closing decision let go: the user's messages the executor never got (#14). */
-function droppedNote(detail: Record<string, unknown>): string {
-  const dropped = Array.isArray(detail.dropped_messages) ? (detail.dropped_messages as { body: string }[]) : [];
+function droppedNote(detail: unknown): string {
+  const dropped = jsonArray(jsonObject(detail).dropped_messages).map(jsonObject).map((message) => ({ body: textOf(message.body) }));
   if (dropped.length === 0) return '';
   const quoted = dropped.map((m) => `「${m.body.length > 40 ? `${m.body.slice(0, 40)}…` : m.body}」`).join('');
   return `；${dropped.length} 条消息没有投递：${quoted}`;
@@ -604,7 +622,8 @@ export function timeline(detail: TaskDetail): TimelineEntry[] {
   add(detail.task.created_at, 0, detail.task.assignment ? 'Angela 派出任务' : '建立任务');
   for (const c of detail.criteria) if (c.version > 1) add(c.created_at, 0, `完成条件改为第 ${c.version} 版`);
   for (const d of detail.decisions) {
-    const reason = typeof d.detail.reason === 'string' && d.detail.reason ? `：${d.detail.reason}` : '';
+    const body = textOf(jsonObject(d.detail).reason);
+    const reason = body ? `：${body}` : '';
     add(d.created_at, 0, `${decisionLabel(d.kind, d.actor)}${reason}${droppedNote(d.detail)}`);
   }
   for (const v of detail.verifications) {

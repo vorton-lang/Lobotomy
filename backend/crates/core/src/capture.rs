@@ -43,6 +43,7 @@ sql_enum! {
 
 /// The user's decision for a capture the runtime stopped (data-model.md §9.2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct CaptureOptions {
     /// Keep the new files although they exceed the guardrail.
     #[serde(default)]
@@ -68,6 +69,7 @@ sql_enum! {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Capture {
     pub id: String,
     pub turn_id: String,
@@ -242,6 +244,7 @@ pub(crate) fn settle_outside(cx: &mut Cx<'_>, capture_id: &str, outcome: Outside
 /// "丢弃任务之外的改动": the slot is written over with the integration version; the capture
 /// keeps the changes (#14).
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct DiscardOutsideChanges {
     pub request_id: String,
     pub capture_id: String,
@@ -439,6 +442,7 @@ fn retry(cx: &mut Cx<'_>, caller: &Caller, capture_id: &str, keep: bool) -> Resu
 
 /// "放行新增文件": the new files over the guardrail belong in the result.
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ApproveNewFiles {
     pub request_id: String,
     pub capture_id: String,
@@ -461,6 +465,7 @@ impl Command for ApproveNewFiles {
 /// guardrail that is the new files; otherwise the content a capture cannot represent. Left-out
 /// files stay in the slot until it is materialized again.
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct DiscardUncaptured {
     pub request_id: String,
     pub capture_id: String,

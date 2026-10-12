@@ -8,6 +8,7 @@ import { X } from 'lucide-react';
 import type { CheckRun, TaskDetail } from '../api/types';
 import {
   ACTION_LABEL,
+  jsonObject,
   checkPassed,
   checkSummary,
   clock,
@@ -62,14 +63,16 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   // Accepting names the verification, the criteria version, the integration head and the
   // undelivered messages the user saw; the backend refuses if any differ (harness-adapter.md §4.2).
   // The criteria version is the one shown below, not the snapshot's, which may be newer (#16).
-  const accept = (dropping: string[]) =>
-    run('accept', {
+  const accept = (dropping: string[]) => {
+    if (!verification || !criteria || !integration) return;
+    return run('accept', {
       task_id: task.id,
-      verification_id: verification?.id,
-      criteria_version: criteria?.version,
+      verification_id: verification.id,
+      criteria_version: criteria.version,
       expected_integration: integration,
       dropping,
     });
+  };
 
   return (
     <section className="task-panel" aria-label={task.title} style={{ width: `min(${column.width}px, 100%)` }}>
@@ -239,8 +242,8 @@ function CheckView({ check, earlier }: { check: CheckRun; earlier: boolean }) {
       <summary>
         <code>{check.command}</code> · {checkSummary(check)}
       </summary>
-      <Output value={check.output.stdout} />
-      <Output value={check.output.stderr} />
+      <Output value={jsonObject(check.output).stdout} />
+      <Output value={jsonObject(check.output).stderr} />
     </details>
   );
 }

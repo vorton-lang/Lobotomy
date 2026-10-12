@@ -37,6 +37,16 @@ pub struct Blob {
     pub tail: String,
 }
 
+/// The reference replacing a large text field in the GUI's JSON content.
+#[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+pub struct BlobRef<'a> {
+    pub blob: &'a str,
+    pub size: i64,
+    pub head: &'a str,
+    pub tail: &'a str,
+}
+
 impl BlobStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
@@ -115,7 +125,8 @@ pub fn externalize(store: &BlobStore, content: &mut Value) -> Vec<Blob> {
             {
                 match store.put(text) {
                     Ok(blob) => {
-                        *value = json!({ "blob": blob.hash, "size": blob.size, "head": blob.head, "tail": blob.tail });
+                        *value =
+                            json!(BlobRef { blob: &blob.hash, size: blob.size, head: &blob.head, tail: &blob.tail });
                         blobs.push(blob);
                     }
                     Err(e) => {

@@ -51,7 +51,7 @@ const projectSnapshot = (id: string): Snapshot => ({
 
 function turn(id: string, who: string, started: number, ended: number | null, taskId: string | null = null): Turn {
   return {
-    id, role: who, harness: 'claude', task_id: taskId, attempt_id: null, input: '', state: ended === null ? 'running' : 'ended',
+    id, role: who, harness: 'claude', native_session_id: 'session', native_id: null, process_start: null, workspace_id: 'workspace', task_id: taskId, attempt_id: null, input: '', state: ended === null ? 'running' : 'ended',
     outcome: ended === null ? null : 'completed', failure: null, pid: null, done_at: null,
     registered_at: ago(started), started_at: ago(started), ended_at: ended === null ? null : ago(ended),
   };

@@ -17,6 +17,7 @@ use crate::host::HostDb;
 pub const DEFAULT_ACCOUNT: &str = "default";
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Domain {
     pub harness: String,
     pub account: String,

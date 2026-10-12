@@ -59,6 +59,7 @@ impl Drop for InstanceLock {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct LiveTurn {
     pub role: String,
     pub started_at: i64,
@@ -67,6 +68,7 @@ pub struct LiveTurn {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct LiveItem {
     pub kind: String,
     pub content: serde_json::Value,
@@ -141,11 +143,11 @@ impl Instance {
         result
     }
 
-    /// Tells the GUIs about a change in this instance: `push` is a JSON object, sent with the
-    /// instance's id added as `project` (frontend.md §3 rule 8).
-    pub fn push(&self, mut push: serde_json::Value) {
-        push["project"] = self.id.clone().into();
-        let _ = self.host.gui_push.send(push.to_string().into());
+    /// Tells the GUIs about a change. The push includes this instance's id as `project`
+    /// (frontend.md §3 rule 8).
+    pub fn push(&self, push: impl serde::Serialize) {
+        let text = serde_json::to_string(&push).expect("GUI pushes are JSON serializable");
+        let _ = self.host.gui_push.send(text.into());
     }
 
     /// Changes the live view of running turns.

@@ -123,7 +123,7 @@ function FullText({ load, label = '查看全文' }: { load: () => Promise<string
 
 /** Opens the full text of a field kept in the blob store. */
 export function BlobButton({ hash, label }: { hash: string; label?: string }) {
-  return <FullText load={async () => (await call<{ text: string }>('blob', { hash })).text} label={label} />;
+  return <FullText load={async () => (await call('blob', { hash })).text} label={label} />;
 }
 
 /**

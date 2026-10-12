@@ -485,6 +485,8 @@ fn change_line(
 /// Where the manager forwarded one of the user's messages in this project (manager-actions.md §1:
 /// "已转给 …"): a task she assigned with it, or a message to a role, with the context she attached.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "ForwardRecord"))]
 pub struct Forward {
     /// `task` or `message`.
     pub kind: &'static str,
@@ -496,6 +498,7 @@ pub struct Forward {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ForwardedContext {
     pub header: String,
     /// The user chose it.

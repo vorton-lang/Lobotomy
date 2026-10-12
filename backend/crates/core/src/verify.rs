@@ -32,6 +32,7 @@ sql_enum! {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Verification {
     pub id: String,
     pub task_id: String,
@@ -382,6 +383,7 @@ pub fn evidence_is_stale(conn: &Connection, v: &Verification) -> Result<bool> {
 /// verification, the criteria version and the integration head it expects; all must still be
 /// current.
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Accept {
     pub request_id: String,
     pub task_id: String,
@@ -498,6 +500,7 @@ impl Command for Accept {
 /// Sends the candidate back with the user's or the manager's reason; the next attempt starts
 /// (data-model.md §9.2 "退回").
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct SendBack {
     pub request_id: String,
     pub task_id: String,
@@ -644,6 +647,7 @@ impl Command for FinishPreview {
 /// The user restored the repository; the preview is written again, after the same check
 /// (data-model.md §9.2 "重试预览").
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct RetryPreview {
     pub request_id: String,
 }

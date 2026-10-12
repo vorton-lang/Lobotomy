@@ -14,6 +14,8 @@ use crate::turn::{Turn, load_turn};
 const PAGE: i64 = 100;
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(optional_fields = nullable))]
 pub struct ThreadQuery {
     pub role: String,
     /// Items before this thread sequence number, for scrolling back.
@@ -27,6 +29,7 @@ pub struct ThreadQuery {
 /// A transcript item as stored (data-model.md §7.2). `content` holds the kind's fields
 /// (harness/src/event.rs); a large field is a reference to the blob store (§7.3).
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Item {
     pub id: String,
     pub seq: i64,
@@ -40,6 +43,7 @@ pub struct Item {
 
 /// What a command was asked to do and what it returned.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct CommandRecord {
     pub name: String,
     pub args: Value,
@@ -48,6 +52,7 @@ pub struct CommandRecord {
 
 /// A page of the thread with what its items refer to.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ThreadPage {
     pub items: Vec<Item>,
     /// Older items exist.
@@ -130,6 +135,7 @@ fn command_record(conn: &Connection, id: &str) -> Result<Option<CommandRecord>> 
 // ---- search ----
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct SearchQuery {
     pub role: String,
     pub query: String,
@@ -137,14 +143,17 @@ pub struct SearchQuery {
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum MatchKind {
     Item,
     Message,
 }
 
 /// Where a match is: an item, or a message shown at the start of its turn (`seq` is the turn's
-/// first item) or among the queued ones at the end (`seq` is absent).
+/// first item) or among the queued ones at the end (`seq` is null).
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "SearchMatch"))]
 pub struct Match {
     pub kind: MatchKind,
     pub id: String,
@@ -152,6 +161,8 @@ pub struct Match {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "SearchResult"))]
 pub struct Found {
     pub matches: Vec<Match>,
     /// Older matches were left out.

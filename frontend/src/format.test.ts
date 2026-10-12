@@ -58,6 +58,7 @@ const turn = (id: string, input = '【来自 你】\n做点事'): Turn => ({
   id,
   role: 'Malkuth',
   harness: 'codex',
+  native_session_id: 'session', native_id: null, process_start: null, workspace_id: null,
   task_id: null,
   attempt_id: null,
   input,
@@ -185,6 +186,7 @@ const attempt = (seq: number, started: number, ended: number | null): Attempt =>
   code_start: null,
   done_turn_id: null,
   done_summary: null,
+  trial: null,
   candidate_id: null,
   conflicts: [],
 });
@@ -315,7 +317,7 @@ describe('a task Angela assigned for reading only', () => {
     const d = detail({ attempts: [attempt(1, 10, 20)] });
     d.attempts[0].candidate_id = 'cap1';
     d.captures = [{
-      id: 'cap1', turn_id: 't', role: 'Malkuth', task_id: 't', attempt_id: d.attempts[0].id, kind: 'candidate', base: 'b',
+      id: 'cap1', turn_id: 't', role: 'Malkuth', task_id: 't', attempt_id: d.attempts[0].id, kind: 'candidate', base: 'b', workspace_id: 'ws', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
       state: 'pinned', commit_id: 'c', detail: { changed: ['src/main.rs'] }, created_at: 20, outside: null,
     }];
     expect(unallowedChanges(d)).toEqual([]);
@@ -334,7 +336,7 @@ describe('workRange', () => {
 
   it('shows the latest round’s own work once there is some', () => {
     const capture: Capture = {
-      id: 'c2', turn_id: 'turn2', role: 'Malkuth', task_id: 't', attempt_id: 'att2', kind: 'turn',
+      id: 'c2', turn_id: 'turn2', role: 'Malkuth', task_id: 't', attempt_id: 'att2', kind: 'turn', workspace_id: 'ws', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
       base: 'base0000', state: 'pinned', commit_id: 'work2', detail: null, created_at: 50, outside: null,
     };
     const d = detail({ attempts: [attempt(1, 10, 20), attempt(2, 40, null)], verifications: [verification(1, 25, 'passed')], captures: [capture] });
@@ -460,6 +462,9 @@ describe('who a role is and how long its turn is quiet', () => {
     expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: text('hi'), b: command } })).toBe(true);
     expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: text('hi') } })).toBe(false);
     expect(toolRunning(undefined)).toBe(false);
+    const dynamic = { kind: 'future_kind', started_at: 1, content: null };
+    expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: dynamic } })).toBe(false);
+    expect(liveSize(dynamic)).toBe('future_kind:0:');
   });
 });
 
@@ -519,7 +524,7 @@ describe('reports', () => {
 describe('stoppedPaths', () => {
   it('lists the new files over the guardrail with their size, or what cannot be captured', () => {
     const capture: Capture = {
-      id: 'c', turn_id: 't', role: 'Malkuth', task_id: null, attempt_id: null, kind: 'turn', base: 'b',
+      id: 'c', turn_id: 't', role: 'Malkuth', task_id: null, attempt_id: null, kind: 'turn', base: 'b', workspace_id: 'ws', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
       state: 'oversized', commit_id: null, detail: { files: [{ path: 'big.bin', size: 2048 }], total_bytes: 2048 },
       created_at: 1, outside: null,
     };
@@ -533,7 +538,7 @@ describe('abnormalEnd', () => {
   const failed = (failure: Partial<Failure> | null, outcome: Turn['outcome'] = 'failed'): Turn => ({
     ...turn('t'),
     outcome,
-    failure: failure && { kind: 'other', message: 'x', resets_at: null, ...failure },
+    failure: failure && { unstarted: false, kind: 'other', message: 'x', resets_at: null, ...failure },
   });
 
   it('names each way a turn ends abnormally, as the thread does', () => {
@@ -602,7 +607,7 @@ describe('trialCandidate', () => {
   const first = { ...attempt(1, 10, 20), candidate_id: 'capture1' };
   const capture: Capture = {
     id: 'capture1', turn_id: 'turn1', role: 'Malkuth', task_id: 't', attempt_id: first.id,
-    kind: 'candidate', base: 'base0000', state: 'pinned', commit_id: 'candidate-commit',
+    kind: 'candidate', base: 'base0000', workspace_id: 'ws', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false }, state: 'pinned', commit_id: 'candidate-commit',
     detail: null, created_at: 20, outside: null,
   };
 

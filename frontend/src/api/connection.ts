@@ -3,6 +3,7 @@
 // client takes a new snapshot.
 
 import type { Push, RemoteError } from './types';
+import type { ReadMethod, ReadArgs, ReadResult, CommandName, CommandRequest, CommandResult } from './methods';
 
 export type Status = 'connecting' | 'open' | 'closed';
 
@@ -62,14 +63,23 @@ export class Connection {
     this.socket?.close();
   }
 
-  call<T = unknown>(method: string, params: unknown = {}): Promise<T> {
+  call<M extends ReadMethod>(method: M, ...args: ReadArgs<M>): Promise<ReadResult<M>> {
+    return this.request(method, args[0] ?? {}) as Promise<ReadResult<M>>;
+  }
+
+  command<C extends CommandName>(params: CommandRequest<C>): Promise<CommandResult<C>> {
+    return this.request('command', params) as Promise<CommandResult<C>>;
+  }
+
+  // The transport trusts the backend; generated types are not runtime validation.
+  private request(method: string, params: unknown): Promise<unknown> {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new RequestFailed({ code: 'disconnected', message: '与后端的连接已断开' }));
     }
     const id = this.nextId++;
-    return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
+    return new Promise<unknown>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
       socket.send(JSON.stringify({ id, method, params }));
     });
   }

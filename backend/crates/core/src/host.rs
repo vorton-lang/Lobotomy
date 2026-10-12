@@ -21,6 +21,7 @@ pub struct HostDb {
 
 /// A registered project (data-model.md §10.3).
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ProjectEntry {
     /// The same as the project row's id in the project's database.
     pub id: String,
@@ -34,6 +35,7 @@ pub struct ProjectEntry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum ProjectState {
     /// Registered, its repository not connected yet. Startup removes what an interrupted
     /// onboarding left (data-model.md §10.4).
