@@ -4,11 +4,9 @@
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
-use crate::id::new_id;
 use crate::task::queue_message;
 use crate::turn::{TurnState, load_turn};
 
@@ -57,20 +55,11 @@ impl Command for TellManager {
     }
 }
 
-/// A question the manager asked the user, open until a message of the user's sent after it is
-/// delivered to her (manager-actions.md §6 `ask_user`).
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Question {
-    pub id: String,
-    pub body: String,
-    pub created_at: i64,
-}
+pub use crate::question::Question;
 
+/// Angela's open questions. Queued candidate replies hide attention but do not close them.
 pub fn open_questions(conn: &Connection) -> Result<Vec<Question>> {
-    let mut stmt =
-        conn.prepare("SELECT id, body, created_at FROM question WHERE closed_at IS NULL ORDER BY created_at, id")?;
-    let rows = stmt.query_map([], |r| Ok(Question { id: r.get(0)?, body: r.get(1)?, created_at: r.get(2)? }))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    Ok(crate::question::open_questions(conn, None)?.into_iter().filter(|q| q.task_id.is_none()).collect())
 }
 
 /// The manager asks the user something that only the user decides. It is a state, not a
@@ -90,31 +79,13 @@ impl Command for AskUser {
         let Caller::Role { turn_id, .. } = caller else {
             return Err(Error::rejected("forbidden", format!("{} may not ask the user", caller.scope())));
         };
-        if load_turn(cx.tx, turn_id)?.state == TurnState::Ended {
+        let turn = load_turn(cx.tx, turn_id)?;
+        if turn.state == TurnState::Ended {
             return Err(Error::rejected("turn_ended", format!("turn {turn_id} has ended")));
         }
         if self.question.trim().is_empty() {
             return Err(Error::rejected("missing_field", "a question needs words"));
         }
-        let id = new_id("q");
-        cx.tx.execute(
-            "INSERT INTO question (id, body, turn_id, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![id, self.question, turn_id, cx.now],
-        )?;
-        cx.emit("question.asked", &id, json!({}))?;
-        Ok(id)
+        crate::question::ask(cx, &turn.role, None, turn_id, &self.question).map(|(id, _)| id)
     }
-}
-
-/// The user's message delivered in `turn_id` answers the questions asked before it was sent. If
-/// one still needs an answer, she asks again (as for an executor's question, #17).
-pub(crate) fn close_answered(cx: &mut Cx<'_>, turn_id: &str, user_sent_at: i64) -> Result<()> {
-    let closed = cx.tx.execute(
-        "UPDATE question SET closed_at = ?1, closed_in = ?2 WHERE closed_at IS NULL AND created_at <= ?3",
-        params![cx.now, turn_id, user_sent_at],
-    )?;
-    if closed > 0 {
-        cx.emit("question.closed", turn_id, json!({ "questions": closed }))?;
-    }
-    Ok(())
 }

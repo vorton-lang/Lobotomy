@@ -480,10 +480,12 @@ fn a_question_does_not_outlive_its_task() {
     let abandon = Abandon { request_id: "a1".into(), task_id: task.clone(), reason: "先不做".into() };
     db.execute(&Caller::User, &abandon).unwrap();
     let reason = || db.read(|c| load_task(c, &task)).unwrap().blocked_reason;
+    assert!(db.read(|c| lobotomy_core::question::open_questions(c, Some(ROLE))).unwrap().is_empty());
     assert_eq!(reason(), None, "a closed task asks nothing");
     db.execute(&Caller::User, &Reopen { request_id: "r1".into(), task_id: task.clone() }).unwrap();
     start(&db, &task);
     assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Executing);
+    assert!(db.read(|c| lobotomy_core::question::open_questions(c, Some(ROLE))).unwrap().is_empty());
     assert_eq!(reason(), None);
 }
 

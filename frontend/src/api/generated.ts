@@ -473,7 +473,11 @@ export type Task = { id: string, title: string, body: string, executor: string, 
  * Who paused it, as a caller scope: only the user lifts the user's pause (roles-and-tasks.md
  * §4).
  */
-paused_by: string | null, blocked_reason: string | null, criteria_version: number, queue_pos: number | null, revision: number, created_at: number, closed_at: number | null,
+paused_by: string | null,
+/**
+ * Derived from the open task question; there is no task.blocked_reason database column.
+ */
+blocked_reason: string | null, criteria_version: number, queue_pos: number | null, revision: number, created_at: number, closed_at: number | null,
 /**
  * For a task made from changes outside any task: their capture, where its work starts (#14).
  */
@@ -509,7 +513,11 @@ reply_queued: boolean, id: string, title: string, body: string, executor: string
  * Who paused it, as a caller scope: only the user lifts the user's pause (roles-and-tasks.md
  * §4).
  */
-paused_by: string | null, blocked_reason: string | null, criteria_version: number, queue_pos: number | null, revision: number, created_at: number, closed_at: number | null,
+paused_by: string | null,
+/**
+ * Derived from the open task question; there is no task.blocked_reason database column.
+ */
+blocked_reason: string | null, criteria_version: number, queue_pos: number | null, revision: number, created_at: number, closed_at: number | null,
 /**
  * For a task made from changes outside any task: their capture, where its work starts (#14).
  */

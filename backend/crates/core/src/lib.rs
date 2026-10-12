@@ -13,6 +13,7 @@ pub mod ledger;
 pub mod manager;
 pub mod project;
 mod prompts;
+pub mod question;
 pub mod quota;
 pub mod report;
 pub mod role;
