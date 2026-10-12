@@ -182,6 +182,13 @@ pub(crate) fn header_with_id(from: &str, id: &str) -> String {
     format!("【来自 {from} · {id}】")
 }
 
+/// Opens each input of the manager: the user's local time, a weak signal of the time of day
+/// (roadmap.md M4). `at` is `YYYY-MM-DD HH:MM`; `weekday` counts from Sunday, 0.
+pub(crate) fn local_time(at: &str, weekday: i64) -> String {
+    const WEEKDAYS: [&str; 7] = ["日", "一", "二", "三", "四", "五", "六"];
+    format!("【用户的本地时间】{at}（周{}）", WEEKDAYS[weekday.rem_euclid(7) as usize])
+}
+
 /// The runtime's note at the start of a turn that continues one which did not end normally.
 pub(crate) fn continue_note(interrupted: bool, failure: Option<FailureKind>) -> String {
     let how = match failure {

@@ -277,7 +277,7 @@ ask_user(question)
 
 | 使用方 | 已实现 | 设计中（未实现，列入 roadmap 待排） |
 |---|---|---|
-| Manager | 读取：`list_projects`、`read_project`、`read_task`、`read_events`、`read_ledger`、`recent_replies`。操作：`assign`、`send_to_role`、`accept`、`send_back`、`abandon`、`set_paused`、`ask_user`、`ledger_add`。回复中的 `[[att:<id>]]` 与 `[[quote:<msg_id>]]`。见 data-model.md §10.6 | `defer`（§2.2）、`propose_meeting`（§4.2）、GitHub 读工具、`request_external_action`（§5.3）；`ask_user` 的 `attachments`（§6）；`assign` 的 `links`（roles-and-tasks.md §4） |
+| Manager | 读取：`list_projects`、`read_project`、`read_task`、`read_events`、`read_diff`、`read_ledger`、`recent_replies`。操作：`assign`、`send_to_role`、`accept`、`send_back`、`abandon`、`set_paused`、`ask_user`、`ledger_add`。回复中的 `[[att:<id>]]` 与 `[[quote:<msg_id>]]`。见 data-model.md §10.6 | `defer`（§2.2）、`propose_meeting`（§4.2）、GitHub 读工具、`request_external_action`（§5.3）；`ask_user` 的 `attachments`（§6）；`assign` 的 `links`（roles-and-tasks.md §4） |
 | TL / Worker | `org_report(title, body, status, blocked_on?, trial?)`、`flag_mismatch(body)` | `org_checkpoint`（§3.5）、记录的只读查询（§3.4）、GitHub 读工具、`request_external_action`（§5.3） |
 
 运行时负责的部分不是工具：采集、集成、预览物化、对账、冲突与检查失败通知、压缩与用量、会议投递与轮数上限、权限校验、附件渲染、GitHub 轮询。其中会议投递与轮数上限（§4）、GitHub 轮询（§5.3）未实现；系统通知见 §6。

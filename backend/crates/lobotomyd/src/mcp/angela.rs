@@ -26,7 +26,7 @@ use lobotomy_core::task::{
 use lobotomy_core::turn::{TurnState, turn_by_token};
 use lobotomy_core::verify::{Accept, SendBack, task_verifications};
 use lobotomy_core::view::attachment::{Attachment, attachment};
-use lobotomy_core::view::manager::{events_read, project_read, task_read};
+use lobotomy_core::view::manager::{diff_range, events_read, project_read, task_read};
 use lobotomy_core::view::{last_event, overview};
 use lobotomy_harness::{Harness, MCP_SERVER};
 use rmcp::{
@@ -116,6 +116,16 @@ pub struct EventsArgs {
 
 const EVENTS_DEFAULT: usize = 100;
 const EVENTS_MAX: usize = 500;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiffArgs {
+    /// 项目 ID，来自 list_projects
+    pub project_id: String,
+    /// 候选成果的 capture_id（cap_…）或验证的 ID（ver_…），来自 read_task
+    pub id: String,
+    /// 只读这些文件的改动，路径与结果中 files 的 path 相同；不填时读全部
+    pub paths: Option<Vec<String>>,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -352,6 +362,30 @@ impl AngelaTools {
             let (after, limit) = (args.after.unwrap_or(0), args.limit.unwrap_or(EVENTS_DEFAULT).min(EVENTS_MAX));
             let read = db(&project, move |db| db.read(|c| events_read(c, after, limit))).await?;
             Ok(json!({ "project": args.project_id, "read": read }))
+        })
+        .await
+    }
+
+    #[tool(description = "读候选成果或验证的改动，与任务面板显示的相同。候选成果（cap_…）对比它采集时的集成版本；\
+                       验证（ver_…）对比它运行时的集成版本，就是验收后会发布的改动。结果先按文件列出增删行数，\
+                       再给出 unified diff，写明是否已被取代、验证是否已过期。放不下的文件列在 not_shown 中，\
+                       用 paths 单独读。")]
+    async fn read_diff(
+        &self,
+        Parameters(args): Parameters<DiffArgs>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        answer(&context, |reach| async move {
+            let project = match find(&reach, &args.project_id)? {
+                Ok(project) => project,
+                Err(unavailable) => return Ok(unavailable),
+            };
+            let id = args.id.clone();
+            let range = db(&project, move |db| db.read(|c| diff_range(c, &id))).await?;
+            let (store, from, to) = (project.store.clone(), range.from.clone(), range.to.clone());
+            let changes = tokio::task::spawn_blocking(move || store.diff(&from, &to)).await??;
+            let text = super::diff::render(&changes, &args.paths.unwrap_or_default());
+            Ok(json!({ "project": args.project_id, "id": args.id, "read": range, "changes": text }))
         })
         .await
     }

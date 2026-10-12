@@ -31,7 +31,7 @@
 - 全局只有一个 Angela，放在 host（data-model.md §10.6）。她能看到所有未归档的项目，工具都带项目 ID。
 - 主区是与 Angela 的对话。各项目中 Malkuth 的对话、任务面板和"等你决定"保留为直接入口。Angela 引用的成果，点开就是任务面板中同一个 diff 与试用视图（见"原则"）。
 - 她的工具：
-  - 读取：`list_projects`、`read_project`、`read_task`、`read_events`；
+  - 读取：`list_projects`、`read_project`、`read_task`、`read_events`、`read_diff`；
   - 操作：`assign`、`send_to_role`、`accept`、`send_back`、`abandon`、`set_paused`；
   - 提问与记录：`ask_user`、`ledger_add`、`read_ledger`、`recent_replies`；
   - 回复中用 `[[quote:…]]` 引用用户原话，用 `[[att:…]]` 引用附件（[manager-actions.md](manager-actions.md) §1、§2）。
@@ -39,6 +39,7 @@
   `assign` 与 `send_to_role` 只限 Manager；用户在 GUI 中建任务、发消息，走原来的命令（data-model.md §10.6 跨库操作第 2 条）。`assign` 必须写明允许的动作和停止条件（[roles-and-tasks.md](roles-and-tasks.md) §4）。
 - Angela 的指令（Manager 的思维方式、决定下一步的程序、派活与上行过滤的规则、难例）在 [manager.md](../backend/crates/lobotomyd/src/prompts/manager.md) 中，改自 Ember 的[草稿](https://github.com/vorton-lang/Ember/blob/main/manager-interviews/manager-draft.md)。指令按真实使用中的失败迭代，这些失败也作为面试的新案例（hold-out）（**语义更新**，用户确认，2026-10-11）。
   - 依据：#50 的检验标准是用户少重述、少追问、少返工，这些只能在自然协作中观察；第三轮面试中，指令中的语义规则没有守住（[Ember 第三轮](https://github.com/vorton-lang/Ember/tree/main/manager-interviews/2026-10-11-official-cli-round3)）。所以 #50 中能做成结构的原则做进运行时，见下面关于暂停、读取边界和附件的三条。
+  - 每次失败按 #60 的写法记下：场景、期望的行为、实际怎样失败、改哪一层能修复（指令、运行时或模型）。凭一次成功不算修好，要用没见过的对照场景再检验（#60）。
 - 先不定 Angela 用哪个模型（用户判断，2026-10-11）。依据：两轮面试中，候选之间没有本质差距，起作用的主要是指令、环境、记忆和约束；这些搭完整后，不同模型的操作空间会收束。以后再找默认取向正好对齐这个岗位的模型。
 - 记录（ledger）只做最小的一版：目标、决定、约束带用户原话作依据，推测单独存放；开新会话时投影进首轮输入，也可经 MCP 查询（manager-actions.md §3）。
 - 用户直接操作项目后，Angela 从事件中得知变化，不要求用户重述，也不重复旧操作（#23 §3）。用户设的暂停只有用户能解除（roles-and-tasks.md §4）。
@@ -49,11 +50,16 @@
   1. **能对话、能读。** 她的数据库与 turn 在 host 目录下；「全部」的主区是与她的对话，所有项目的"等你决定"在右侧栏；她经 MCP 读所有项目，读取结果带边界（data-model.md §10.6）。设置中可以切换她的 harness。
   2. **能操作。** 调用者 `manager`；派活、转发原话、验收、退回、放弃、暂停；回复中的引用由运行时渲染，附件带版本与当前有效性（manager-actions.md §2.1）。任务面板显示她派活时写的解读、允许的动作和停止条件，并写明任务是谁暂停的。只读调查的任务产生了文件改动时，运行时标出（roles-and-tasks.md §4）。
   3. **跟上变化。** 收件箱与唤醒、`ask_user`（manager-actions.md §6）；最小的记录与换会话时的投影，`ledger` 参数（manager-actions.md §3.4）；`flag_mismatch`（manager-actions.md §2.3）；`context`、用户手动指定回复对象、"已转给 …"标签（manager-actions.md §1.1）。
+- 验收之前补上两项（用户确认，2026-10-13，[#60](https://github.com/vorton-lang/Lobotomy/issues/60)）：
+  - 她的每条输入开头写明用户的本地时间（data-model.md §10.6"她的输入"）。指令中的"时间与节奏"把它当作弱信号。
+  - 她用 `read_diff` 读候选成果与验证的 diff（data-model.md §10.6）。
+
+  依据：验收要观察她能否先查证、再判断。她读不到 diff 时，判断出错就分不清是判断的问题，还是缺信息的问题。
 - 设计了而 M4 没有实现的部分，列在下面"待排"的"Angela 与记录"一组。
 - 实测（2026-10-11，Windows，Claude Code，haiku）：用真实 CLI 走过的只有第 2 步的 `assign`。她先读项目，再调用 `assign`，`actions`、`quote`、`stop_when` 都按工具的参数说明填写，引用的是用户那条消息的 ID。测试是 `a_real_claude_angela_assigns_a_task`，默认忽略。这只验证了一次调用，没有验证她在自然协作中的判断。第 3 步的行为只用假 CLI 测过。
 - #50 的三组开放问题属于 Angela 的判断：怎样估计用户的状态，怎样选择行动与介入时机，给出什么信息。M4 不回答这些问题，只搭出能观察它们的环境。M4 不做用户状态模型、信息价值的打分、为对照而做的多个版本，也不改通知规则。需要提前告诉用户的变化，Angela 按现有规则改变状态：用 `ask_user` 提问，要停下的任务另用 `set_paused` 暂停（manager-actions.md §6）。系统通知还没有实现，见"待排"。
 - 验收：
-  - 用户只与 Angela 对话，完成一个真实任务；
+  - 用户只与 Angela 对话，完成一个真实任务。#60 建议先验证的方向并入这一条（用户确认，2026-10-13）：Angela 独立负责一个小范围的问题，调查、给出判断和建议，在授权内推进，再带回可核查的结果。#60 的其余部分仍是研究问题；
   - 用户离开一段时间后回来，Angela 的消息给出可运行的入口、关键变化、同一版本的验证结果和真正待决的分叉，用户不重述就能给出下一步意见。从自然协作中观察重述、追问和返工，不加评价表（#50）；
   - 用户直接暂停任务或修改完成条件后，Angela 按新状态继续；
   - 查询有缺口时，Angela 讲清缺口：不把没有读到说成没有，也不把过期的结果当作当前事实；
@@ -91,12 +97,10 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 | `propose_meeting`，随会议一起做 | manager-actions.md §4.2 |
 | `ask_user` 与 `flag_mismatch` 带附件 | manager-actions.md §2.3、§6 |
 | `assign` 的 `links`，等 GitHub 接入 | roles-and-tasks.md §4 |
-| 她的每条输入开头写明用户的本地时间。现在的指令只保留了按用户原话收尾的规则 | Ember 草稿的"时间与节奏" |
 | "共识"可修改：用户直接修改、关闭、重开条目 | manager-actions.md §3.3、§3.4；roles-and-tasks.md §1.4 |
 | 下层对记录的只读查询 | manager-actions.md §3.4 |
 | 用户纠正记录后，把更新送到受影响的活跃任务 | #22 §2 |
 | 下层的语义检查点 `org_checkpoint` | manager-actions.md §3.5 |
-| 她经 MCP 读候选成果的 diff | data-model.md §10.6 |
 | 附件引用 turn 输出、集成事件与 GitHub 条目 | manager-actions.md §2.1 |
 
 ### 通知

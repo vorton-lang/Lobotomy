@@ -1249,6 +1249,9 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
     let projects = backend.backend.projects.clone();
     let archived = projects.create(&user_repo(&dir.path().join("b"))).await.unwrap().id;
     projects.archive(&archived).await.unwrap();
+    let mut now = project.db.read(|c| lobotomy_core::view::manager::task_read(c, &task)).unwrap();
+    let candidate = now.attempts[0].candidate.take().unwrap();
+    let (capture, verification) = (candidate.capture_id, &candidate.verifications[0].id);
 
     let calls = [
         "FAKE:call=list_projects".to_owned(),
@@ -1256,15 +1259,20 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
         format!(r#"FAKE:call=read_task{{"project_id":"{}","task_id":"{task}"}}"#, project.id),
         format!(r#"FAKE:call=read_events{{"project_id":"{}","limit":3}}"#, project.id),
         format!(r#"FAKE:call=read_project{{"project_id":"{archived}"}}"#),
+        format!(r#"FAKE:call=read_diff{{"project_id":"{}","id":"{verification}"}}"#, project.id),
+        format!(r#"FAKE:call=read_diff{{"project_id":"{}","id":"{capture}","paths":["other.txt"]}}"#, project.id),
     ];
     let asked = tell_angela(&angela, &calls.join("\n"));
     let turn = angela_turn_for(&angela, &asked).await;
     assert_eq!((turn.outcome, turn.workspace_id.as_deref()), (Some(Outcome::Completed), None));
+    assert!(turn.input.starts_with("【用户的本地时间】"), "{}", turn.input);
     let args = last_args(&host_dir(dir.path()).join("angela").join("work"));
     assert!(after(&args, "--append-system-prompt").contains("你是 Angela"), "she runs in her own directory");
 
     let replies = tool_replies(&angela.db, &turn.id);
-    let [list, read, task_read, events, gone] = replies.as_slice() else { panic!("five replies: {replies:#?}") };
+    let [list, read, task_read, events, gone, diff, none] = replies.as_slice() else {
+        panic!("seven replies: {replies:#?}")
+    };
     let as_of = project.db.read(lobotomy_core::view::last_event).unwrap();
     let entries = list["projects"].as_array().unwrap();
     let open = entries.iter().find(|p| p["id"] == project.id.as_str()).unwrap();
@@ -1294,6 +1302,13 @@ async fn angela_reads_every_project_with_the_bounds_of_each_read() {
     assert_eq!(events.len(), 3);
     assert_eq!(events[0]["caller"], "user");
     assert_eq!(gone["unavailable"], "已归档");
+
+    // The diff the task panel shows: what accepting would publish, and whether it still holds.
+    assert_eq!((&diff["read"]["superseded"], &diff["read"]["stale"]), (&false.into(), &false.into()));
+    let files = &diff["changes"]["files"];
+    assert_eq!((&files[0]["path"], &files[0]["change"]), (&"work.txt".into(), &"added".into()), "{diff:#}");
+    assert!(diff["changes"]["diff"].as_str().unwrap().contains("+++ b/work.txt\n"), "{diff:#}");
+    assert_eq!(none["changes"]["files"], json!([]), "only the paths asked for");
     backend.shutdown(Duration::from_secs(5)).await;
 }
 
