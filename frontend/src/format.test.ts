@@ -306,7 +306,7 @@ describe("Angela's reply", () => {
       stale: false,
       unallowed_changes: 0,
     };
-    expect(attachmentLine(v)).toContain('alpha · 「加行号」第 2 轮的验证 · 通过 · 基于集成版本 abcdef01 · 检查设置第 3 版');
+    expect(attachmentLine(v)).toContain('alpha · 「加行号」第 2 轮的验证 · 通过');
     expect(attachmentExpired(v)).toBeNull();
     expect(attachmentExpired({ ...v, stale: true })).toMatch(/^已过期/);
     expect(attachmentExpired({ ...v, superseded: true })).toBe('已被新的验证取代');

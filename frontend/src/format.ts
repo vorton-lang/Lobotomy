@@ -283,7 +283,7 @@ export function splitReply(text: string): ReplyPart[] {
 }
 
 /**
- * An attachment's line: its project, what it is, its source and the version it is bound to. The
+ * An attachment's line: its project, what it is and its source. The
  * runtime's record says all of it; Angela cannot write it.
  */
 export function attachmentLine(a: AttachmentView): string {
@@ -292,12 +292,19 @@ export function attachmentLine(a: AttachmentView): string {
     case 'task':
       return `${where}任务「${a.title}」 · ${a.executor} · ${PHASE_LABEL[a.phase]}${a.paused ? ' · 已暂停' : ''}`;
     case 'candidate':
-      return `${where}「${a.title}」第 ${a.seq} 轮的候选成果 · 提交 ${shortSha(a.commit)} · ${clock(a.at)}`;
+      return `${where}「${a.title}」第 ${a.seq} 轮的候选成果 · ${clock(a.at)}`;
     case 'verification':
-      return `${where}「${a.title}」第 ${a.seq} 轮的验证 · ${VERIFICATION_LABEL[a.state]} · 基于集成版本 ${shortSha(a.base)} · 检查设置第 ${a.config_version} 版 · ${clock(a.at)}`;
+      return `${where}「${a.title}」第 ${a.seq} 轮的验证 · ${VERIFICATION_LABEL[a.state]} · ${clock(a.at)}`;
     case 'report':
       return `${where}${a.role} 的汇报 · ${a.report_title} · ${clock(a.at)} · ${a.chars} 字`;
   }
+}
+
+/** The full version an attachment is bound to, available on hover. */
+export function attachmentMetadata(a: AttachmentView): string | undefined {
+  if (a.kind === 'candidate') return `提交 ${a.commit}`;
+  if (a.kind === 'verification') return `基于集成版本 ${a.base} · 检查设置第 ${a.config_version} 版`;
+  return undefined;
 }
 
 /** What an attachment's candidate did beyond its task's actions, or `null` (roles-and-tasks.md §4). */

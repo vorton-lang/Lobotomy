@@ -75,8 +75,9 @@ export function ItemView({
       return (
         <details className="item">
           <summary>
-            调用 {textOf(c.server)}.{textOf(c.tool)}
+            调用 {c.server === 'lobotomy' ? textOf(c.tool) : `${textOf(c.server)}.${textOf(c.tool)}`}
           </summary>
+          <div className="muted">{textOf(c.server)}.{textOf(c.tool)}</div>
           <Output value={c.arguments} />
           <Output value={c.result ?? c.error} />
         </details>
@@ -117,7 +118,7 @@ function AgentMessage({ id, role, text }: { id: string; role: string; text: stri
   const angela = useStore((s) => s.project === null);
   return (
     <div className="message other">
-      <div className="who">
+      <div className="who" title={id}>
         <Author name={role} />
         {angela && (
           <button className="link reply-to" onClick={() => setReplyTo({ id, text: previewLine(text) })}>

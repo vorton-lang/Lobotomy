@@ -3,7 +3,7 @@
 // these check what the window makes of the host snapshot. 「全部」 is the conversation with Angela
 // (roadmap.md M4 step 1).
 import { expect, test, type Page } from '@playwright/test';
-import type { AngelaStatus, Attention, HarnessView, HostSnapshot, Push, Snapshot } from '../src/api/types';
+import type { AngelaStatus, Attention, HarnessView, HostSnapshot, Push, Snapshot, Turn } from '../src/api/types';
 import { detail, role, task } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
@@ -31,6 +31,44 @@ const codexModels: HarnessView['models'] = [
   { id: 'gpt-fast', label: 'GPT-Fast', efforts: ['low', 'medium', 'high'], default_effort: 'low' },
   { id: 'gpt-deep', label: 'GPT-Deep', efforts: ['low', 'medium', 'high', 'xhigh'], default_effort: 'medium' },
 ];
+
+test('internal vocabulary stays secondary while abnormal endings remain visible', async ({ page }) => {
+  const turn = (id: string, outcome: Turn['outcome']): Turn => ({
+    id, role: 'Angela', harness: 'claude', native_session_id: 'session', native_id: null, task_id: null,
+    attempt_id: null, input: '', state: 'ended', outcome, failure: null, pid: null, process_start: null,
+    done_at: null, registered_at: 1, started_at: 1, ended_at: 2, workspace_id: null,
+  });
+  const item = (id: string, seq: number, turn_id: string, kind: 'agent_message' | 'mcp_call', content: unknown) =>
+    ({ id, seq, turn_id, kind, content, command_id: null, created_at: seq });
+  await openHost(page, { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela }, undefined, {
+    thread: {
+      items: [item('item_3', 1, 'normal', 'agent_message', { text: '候选成果及验证：\n[[att:candidate]]\n[[att:verification]]' }),
+        item('tool', 2, 'normal', 'mcp_call', { server: 'lobotomy', tool: 'assign', arguments: { task: '导出报表' }, result: 'ok' }),
+        item('external', 3, 'failed', 'mcp_call', { server: 'drive', tool: 'read', arguments: {}, result: 'ok' })],
+      turns: { normal: turn('normal', 'completed'), failed: turn('failed', 'interrupted') },
+      messages: [], commands: {}, queued: [], has_more: false,
+    },
+    refs: { quotes: {}, attachments: {
+      candidate: { project: 'alpha', project_name: 'alpha', kind: 'candidate', task_id: 'task1', title: '导出报表', seq: 1,
+        commit: 'abcdef0123456789', at: 1, superseded: true, unallowed_changes: 0 },
+      verification: { project: 'alpha', project_name: 'alpha', kind: 'verification', task_id: 'task1', title: '导出报表', seq: 1,
+        state: 'passed', base: 'base0000aaaa', config_version: 2, at: 1, superseded: false, stale: true, unallowed_changes: 0 },
+    } },
+  });
+  await expect(page.locator('.ref-attachment')).toHaveCount(2);
+  await expect(page.locator('.turn-divider.interrupted')).toContainText('被中断');
+  await expect(page.locator('.badge.expired').first()).toContainText('取代');
+  await expect(page.locator('.badge.expired').last()).toContainText('已过期');
+  await expect(page.locator('.turn-divider.completed')).toHaveText(/^\d{1,2}-\d{1,2} \d{2}:\d{2}$/);
+  await expect(page.locator('.ref-attachment').first()).toHaveAttribute('title', /abcdef0123456789/);
+  await expect(page.locator('.ref-attachment').last()).toHaveAttribute('title', /base0000aaaa.*检查设置第 2 版/);
+  await expect(page.locator('.ref-attachment').last()).not.toContainText('检查设置第 2 版');
+  await expect(page.locator('summary').filter({ hasText: 'assign' })).toHaveText('调用 assign');
+  await expect(page.locator('summary').filter({ hasText: 'drive.read' })).toHaveText('调用 drive.read');
+  await page.locator('summary').filter({ hasText: 'assign' }).click();
+  await expect(page.locator('details[open]')).toContainText('lobotomy.assign');
+  await expect(page.locator('.message.other .who')).toHaveAttribute('title', 'item_3');
+});
 
 /** Angela's snapshot has the shape of a project's, without a repository and tasks. */
 const angelaSnapshot: Snapshot = {
@@ -143,9 +181,11 @@ test('Angela’s references show the user’s words and attachments that open th
   const conversation = page.getByRole('region', { name: 'Angela', exact: true });
   await expect(conversation.getByLabel('你的原话')).toContainText('导出要带表头');
   const attachment = conversation.getByRole('button', { name: /第 1 轮的验证/ });
-  await expect(attachment).toContainText('alpha · 「导出报表」第 1 轮的验证 · 通过 · 基于集成版本 base0000 · 检查设置第 2 版');
+  await expect(attachment).toContainText('alpha · 「导出报表」第 1 轮的验证 · 通过');
+  await expect(attachment).toHaveAttribute('title', '基于集成版本 base0000aaaa · 检查设置第 2 版');
   await expect(attachment).toContainText('已过期');
-  await expect(conversation).toContainText('附件无效（task_gone）：在打开的项目中找不到；读不到的项目：gamma');
+  await expect(conversation).toContainText('附件无效：在打开的项目中找不到；读不到的项目：gamma');
+  await expect(conversation.locator('.ref-error')).toHaveAttribute('title', 'task_gone');
   expect(backend.asked.filter((a) => a.method === 'refs').map((a) => a.project)).toEqual(['angela']);
 
   await attachment.click();
@@ -193,7 +233,8 @@ test('a reply to Angela names its target, and the message shows where she forwar
   const conversation = page.getByRole('region', { name: 'Angela', exact: true });
   await expect(conversation.locator('.reply-line')).toHaveText('回复：「导出要不要带表头？」');
   const tag = conversation.getByRole('button', { name: /已转给 Malkuth/ });
-  await expect(tag).toHaveText('已转给 Malkuth（alpha · 任务「导出报表」） · 附上下文：Angela 10-11 13:58（item_1）（你指定）');
+  await expect(tag).toHaveText('已转给 Malkuth（alpha · 任务「导出报表」） · 附上下文：Angela 10-11 13:58（你指定）');
+  await expect(tag).toHaveAttribute('title', 'Angela 10-11 13:58（item_1）');
 
   await conversation.getByRole('button', { name: '回复', exact: true }).click();
   await expect(conversation.locator('.replying')).toContainText('回复 Angela：「导出要不要带表头？」');

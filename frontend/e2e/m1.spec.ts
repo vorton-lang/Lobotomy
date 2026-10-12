@@ -49,7 +49,7 @@ test('a task goes from creation to the user repository', async ({ page, backend 
   // Malkuth's report shows in the thread; the turn's end shows too; the candidate waits for
   // acceptance.
   await expect(page.locator('.report.done')).toContainText('写了 work.txt');
-  await expect(page.locator('.turn-divider').first()).toContainText('turn 正常结束');
+  await expect(page.locator('.turn-divider.completed').first()).toHaveAttribute('title', /turn 正常结束/);
   const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
   await expect(card).toBeVisible();
   await card.getByRole('button', { name: '查看并验收' }).click();

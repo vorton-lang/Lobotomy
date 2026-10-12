@@ -154,10 +154,10 @@ function RowView({
       const t = row.turn;
       const name = title(t.task_id);
       return (
-        <div className={`turn-divider ${t.outcome ?? t.state}`}>
+        <div className={`turn-divider ${t.outcome ?? t.state}`} title={[t.id, name, turnOutcome(t)].filter(Boolean).join(' · ')}>
           <span>{clock(t.started_at ?? t.registered_at)}</span>
-          {name && <span>· {name}</span>}
-          <span>· {turnOutcome(t)}</span>
+          {t.outcome !== 'completed' && name && <span>· {name}</span>}
+          {t.outcome !== 'completed' && <span>· {turnOutcome(t)}</span>}
           {t.failure && <span className="error">· {t.failure.message.split('\n')[0]}</span>}
         </div>
       );
