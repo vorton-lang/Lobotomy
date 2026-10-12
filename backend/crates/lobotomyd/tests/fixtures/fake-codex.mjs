@@ -25,11 +25,22 @@
 //                        stdout, exit code 1 (#13)
 // Every run writes the environment it sees to last-env.json and its arguments to last-args.json,
 // inside .git when its cwd is a slot (so captures do not pick them up), else in its cwd.
+// `debug models`, which the backend runs once at start, prints a model catalog and nothing else,
+// whatever the flags.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { bench } from './fake-bench.mjs';
 
 const args = process.argv.slice(2);
+if (args.includes('debug') && args.includes('models')) {
+  const levels = efforts => efforts.map(effort => ({ effort, description: effort }));
+  const catalog = JSON.stringify({ models: [
+    { slug: 'gpt-fast', display_name: 'GPT-Fast', visibility: 'list', priority: 1, default_reasoning_level: 'low', supported_reasoning_levels: levels(['low', 'medium', 'high']) },
+    { slug: 'gpt-deep', display_name: 'GPT-Deep', visibility: 'list', priority: 2, default_reasoning_level: 'medium', supported_reasoning_levels: levels(['low', 'medium', 'high', 'xhigh']) },
+  ] });
+  await new Promise(r => process.stdout.write(catalog, r));
+  process.exit(0);
+}
 const flags = new Set(args.filter(a => a.startsWith('--fake-')));
 const diag = fs.existsSync('.git') ? '.git/' : '';
 const watched = [

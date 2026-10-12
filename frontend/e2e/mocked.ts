@@ -12,7 +12,7 @@ export const hostSnapshot = (): HostSnapshot => ({
 });
 
 export const role = (taskId: string | null): RoleView => ({
-  name: 'Malkuth', kind: 'worker', harness: 'codex', model: null, slot: 'worker', task_id: taskId, unfinished: null,
+  name: 'Malkuth', kind: 'worker', harness: 'codex', model: null, effort: null, slot: 'worker', task_id: taskId, unfinished: null,
   last_turn: null, hold: null, stalled: null, outside: null, workspace: null, queued_messages: 0,
 });
 

@@ -17,7 +17,7 @@ async function openStream(page: Page) {
         seq: 1,
         project: { id: 'project', repo_path: '/project', branch: 'main', author_name: 'Test', author_email: 'test@example.com', integration: 'base', integration_rev: 1, previewed: 'base' },
         config: null, tasks: [], attention: [], quota: [], harnesses: [], live,
-        roles: [{ name: 'Malkuth', kind: 'worker', harness: 'claude', model: null, slot: null, task_id: null, unfinished: null, last_turn: null, hold: null, stalled: null, outside: null, workspace: null, queued_messages: 0 }],
+        roles: [{ name: 'Malkuth', kind: 'worker', harness: 'claude', model: null, effort: null, slot: null, task_id: null, unfinished: null, last_turn: null, hold: null, stalled: null, outside: null, workspace: null, queued_messages: 0 }],
       };
       route.send(JSON.stringify({ id, result: method === 'host' ? hostSnapshot() : method === 'snapshot' ? snapshot : thread }));
     });

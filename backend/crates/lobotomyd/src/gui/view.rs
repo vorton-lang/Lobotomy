@@ -10,7 +10,7 @@ use lobotomy_core::Error;
 use lobotomy_core::host::ProjectEntry;
 use lobotomy_core::quota::Domain;
 use lobotomy_core::view::{self, Attention, Overview, SearchQuery, ThreadQuery};
-use lobotomy_harness::{Harness, MCP_SERVER};
+use lobotomy_harness::{Harness, MCP_SERVER, Model, Permission};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -285,6 +285,35 @@ struct HarnessView {
     /// `Permission::as_str`.
     #[cfg_attr(feature = "ts-rs", ts(type = "\"full\" | \"auto_review\""))]
     permission: &'static str,
+    /// The models a role can choose on it (harness-adapter.md §1.2); empty when they are not
+    /// known, and the GUI then takes a name as typed.
+    models: Vec<ModelView>,
+    /// The efforts a role on the CLI's default model can choose: those every listed model takes.
+    efforts: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+struct ModelView {
+    id: String,
+    label: String,
+    efforts: Vec<String>,
+    /// The effort it uses when none is chosen, if the CLI says.
+    default_effort: Option<String>,
+}
+
+impl HarnessView {
+    fn new(harness: Harness, permission: Permission, models: Vec<Model>) -> Self {
+        let efforts = models.first().map_or_else(Vec::new, |first| {
+            let every = |effort: &String| models.iter().all(|m| m.efforts.contains(effort));
+            first.efforts.iter().filter(|e| every(e)).cloned().collect()
+        });
+        let models = models
+            .into_iter()
+            .map(|m| ModelView { id: m.id, label: m.label, efforts: m.efforts, default_effort: m.default_effort })
+            .collect();
+        Self { harness: harness.as_str(), permission: permission.as_str(), models, efforts }
+    }
 }
 
 pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
@@ -331,10 +360,10 @@ pub fn project_attention(project: &Project, overview: &Overview) -> Vec<Attentio
     attention(overview, &[], &results::failures(project))
 }
 
-fn harnesses(host: &Host) -> anyhow::Result<Vec<HarnessView>> {
+fn harnesses(host: &Arc<Host>) -> anyhow::Result<Vec<HarnessView>> {
     Harness::ALL
         .iter()
-        .map(|&harness| Ok(HarnessView { harness: harness.as_str(), permission: host.permission(harness)?.as_str() }))
+        .map(|&harness| Ok(HarnessView::new(harness, host.permission(harness)?, host.models(harness))))
         .collect()
 }
 
@@ -477,7 +506,16 @@ pub(super) fn binding_fixtures() -> Value {
         overview,
         attention: vec![],
         quota: vec![],
-        harnesses: vec![HarnessView { harness: "codex", permission: "auto_review" }],
+        harnesses: vec![HarnessView::new(
+            Harness::Codex,
+            Permission::AutoReview,
+            vec![Model {
+                id: "gpt".into(),
+                label: "GPT".into(),
+                efforts: vec!["low".into()],
+                default_effort: Some("low".into()),
+            }],
+        )],
         live: HashMap::new(),
     };
     let refs = Refs {

@@ -382,6 +382,7 @@ const role = (patch: Partial<RoleView>): RoleView => ({
   kind: 'worker',
   harness: 'codex',
   model: null,
+  effort: null,
   slot: 'worker',
   task_id: null,
   unfinished: null,

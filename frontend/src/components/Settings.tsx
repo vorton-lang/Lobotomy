@@ -148,20 +148,100 @@ function usePageSnapshot() {
   return useStore((s) => s.settings?.snapshot ?? null);
 }
 
-/** A role's harness; no role is bound to one (harness-adapter.md §0). */
-function RoleHarness({ target, role, harnesses }: { target: string; role: RoleView; harnesses: HarnessView[] }) {
+/**
+ * A role's harness, and its model and reasoning effort there (harness-adapter.md §0, §1.2). No
+ * role is bound to a harness. Each harness keeps the role's own model choice; "默认" leaves it to
+ * the CLI.
+ */
+function RoleRuntime({ target, role, harnesses }: { target: string; role: RoleView; harnesses: HarnessView[] }) {
   const running = role.unfinished !== null;
+  const harness = harnesses.find((h) => h.harness === role.harness);
+  const description = running
+    ? 'turn 运行中，结束后才能换 harness。模型和推理强度从下一个 turn 起生效。'
+    : '换 harness 会开新会话。换模型或推理强度从下一个 turn 起生效，会话不变。';
   return (
-    <Row label={role.name} description={running ? 'turn 运行中，结束后才能切换。' : '切换后，下一个 turn 在新会话中开始。'}>
-      <Segmented
-        name={`harness-${target}-${role.name}`}
-        label={`${role.name} 使用的 harness`}
-        value={role.harness}
-        options={harnesses.map((h) => ({ value: h.harness, label: harnessName(h.harness) }))}
-        disabled={running}
-        onChange={(harness) => runIn(target, 'set_role_harness', { role: role.name, harness })}
-      />
+    <Row label={role.name} description={description}>
+      <div className="role-runtime">
+        <Segmented
+          name={`harness-${target}-${role.name}`}
+          label={`${role.name} 使用的 harness`}
+          value={role.harness}
+          options={harnesses.map((h) => ({ value: h.harness, label: harnessName(h.harness) }))}
+          disabled={running}
+          onChange={(harness) => runIn(target, 'set_role_harness', { role: role.name, harness })}
+        />
+        {harness && <ModelChoice target={target} role={role} harness={harness} />}
+      </div>
     </Row>
+  );
+}
+
+/** The model and the effort, as the harness lists them; typed in when it lists no models. */
+function ModelChoice({ target, role, harness }: { target: string; role: RoleView; harness: HarnessView }) {
+  const name = harnessName(harness.harness);
+  const choose = (model: string | null, effort: string | null) =>
+    runIn(target, 'set_role_model', { role: role.name, harness: harness.harness, model, effort });
+  if (harness.models.length === 0) {
+    return (
+      <>
+        <Typed label={`${role.name} 在 ${name} 上的模型`} placeholder="默认模型" value={role.model} onCommit={(model) => choose(model, role.effort)} />
+        <Typed label={`${role.name} 在 ${name} 上的推理强度`} placeholder="默认强度" value={role.effort} onCommit={(effort) => choose(role.model, effort)} />
+      </>
+    );
+  }
+  const model = harness.models.find((m) => m.id === role.model);
+  const effortsOf = (id: string | null) => harness.models.find((m) => m.id === id)?.efforts ?? harness.efforts;
+  const efforts = effortsOf(role.model);
+  return (
+    <>
+      <select
+        aria-label={`${role.name} 在 ${name} 上的模型`}
+        value={role.model ?? ''}
+        onChange={(e) => {
+          const next = e.target.value || null;
+          // An effort the new model does not take goes back to its default.
+          void choose(next, role.effort !== null && effortsOf(next).includes(role.effort) ? role.effort : null);
+        }}
+      >
+        <option value="">默认模型</option>
+        {harness.models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+        {role.model !== null && !model && <option value={role.model}>{role.model}</option>}
+      </select>
+      <select aria-label={`${role.name} 在 ${name} 上的推理强度`} value={role.effort ?? ''} onChange={(e) => void choose(role.model, e.target.value || null)}>
+        <option value="">{model?.default_effort ? `默认（${model.default_effort}）` : '默认强度'}</option>
+        {efforts.map((effort) => (
+          <option key={effort} value={effort}>
+            {effort}
+          </option>
+        ))}
+        {role.effort !== null && !efforts.includes(role.effort) && <option value={role.effort}>{role.effort}</option>}
+      </select>
+    </>
+  );
+}
+
+/** A name typed in, saved when the field loses focus or on Enter; empty means the default. */
+function Typed({ label, placeholder, value, onCommit }: { label: string; placeholder: string; value: string | null; onCommit: (value: string | null) => void }) {
+  const [text, setText] = useState(value ?? '');
+  useEffect(() => setText(value ?? ''), [value]);
+  const commit = () => {
+    const next = text.trim() || null;
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <input
+      className="typed-model"
+      aria-label={label}
+      placeholder={placeholder}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && commit()}
+    />
   );
 }
 
@@ -172,7 +252,7 @@ function AngelaPage() {
   return (
     <>
       <Header title="Angela">全局协作者，所有项目共用。</Header>
-      {role && <RoleHarness target="angela" role={role} harnesses={harnesses} />}
+      {role && <RoleRuntime target="angela" role={role} harnesses={harnesses} />}
     </>
   );
 }
@@ -186,7 +266,7 @@ function ProjectGeneral({ project }: { project: string }) {
       <Header title={name}>{snapshot?.project?.repo_path}</Header>
       <h3 className="settings-section">角色</h3>
       {snapshot?.roles.map((role) => (
-        <RoleHarness key={role.name} target={project} role={role} harnesses={harnesses} />
+        <RoleRuntime key={role.name} target={project} role={role} harnesses={harnesses} />
       ))}
       <h3 className="settings-section">存储</h3>
       <Storage project={project} />

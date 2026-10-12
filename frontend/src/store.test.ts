@@ -38,7 +38,7 @@ afterEach(() => {
 
 const snapshot = (permission: 'full' | 'auto_review'): Snapshot => ({
   seq: 1, project: null, config: null, roles: [], tasks: [], attention: [], quota: [],
-  harnesses: [{ harness: 'codex', permission }], live: {},
+  harnesses: [{ harness: 'codex', permission, models: [], efforts: [] }], live: {},
 });
 
 const project = (id: string, extra: Partial<HostSnapshot['projects'][number]> = {}): HostSnapshot['projects'][number] => ({

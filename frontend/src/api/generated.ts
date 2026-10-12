@@ -218,7 +218,16 @@ export type HarnessView = { harness: string,
 /**
  * `Permission::as_str`.
  */
-permission: "full" | "auto_review", };
+permission: "full" | "auto_review",
+/**
+ * The models a role can choose on it (harness-adapter.md §1.2); empty when they are not
+ * known, and the GUI then takes a name as typed.
+ */
+models: Array<ModelView>,
+/**
+ * The efforts a role on the CLI's default model can choose: those every listed model takes.
+ */
+efforts: Array<string>, };
 
 export type Hold = { "kind": "abnormal", turn: Turn, } | { "kind": "capture_stopped", capture: Capture, } | { "kind": "session_unidentified", session_id: string, };
 
@@ -290,6 +299,12 @@ turn_id: string | null, created_at: number,
  * (manager-actions.md §1.1).
  */
 reply_to: string | null, };
+
+export type ModelView = { id: string, label: string, efforts: Array<string>,
+/**
+ * The effort it uses when none is chosen, if the CLI says.
+ */
+default_effort: string | null, };
 
 export type MoveInQueue = { request_id: string, task_id: string, to_index: number, };
 
@@ -423,7 +438,15 @@ outside: Capture | null, workspace: Workspace | null, queued_messages: number, n
 /**
  * As the role table's check allows.
  */
-kind: "manager" | "tech_lead" | "worker" | "reviewer", harness: string, model: string | null, slot: string | null, };
+kind: "manager" | "tech_lead" | "worker" | "reviewer", harness: string,
+/**
+ * The model chosen for the role on its harness; `None` leaves it to the CLI's default.
+ */
+model: string | null,
+/**
+ * The reasoning effort chosen likewise.
+ */
+effort: string | null, slot: string | null, };
 
 export type SearchMatch = { kind: MatchKind, id: string, seq: number | null, };
 
@@ -447,6 +470,8 @@ reply_to?: string | null, };
 export type SetPaused = { request_id: string, task_id: string, paused: boolean, };
 
 export type SetRoleHarness = { request_id: string, role: string, harness: string, };
+
+export type SetRoleModel = { request_id: string, role: string, harness: string, model: string | null, effort: string | null, };
 
 export type Snapshot = {
 /**
@@ -656,6 +681,7 @@ export type Commands = {
   set_paused: { params: SetPaused; result: null };
   set_permission: { params: PermissionParams; result: PermissionChanged };
   set_role_harness: { params: SetRoleHarness; result: null };
+  set_role_model: { params: SetRoleModel; result: null };
   shutdown: { params: NoParams; result: null };
   start_trial: { params: StartTrial; result: TrialView };
   stop_trial: { params: StopTrial; result: null };

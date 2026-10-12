@@ -256,7 +256,8 @@ fn upgrading_recovers_boundaries_from_events_and_keeps_unknown_history_open() {
         // Restore the prior schema, including the old task mirror, without losing its data.
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
-            "ALTER TABLE task ADD COLUMN blocked_reason TEXT;
+            "DROP TABLE role_model; ALTER TABLE role ADD COLUMN model TEXT;
+            ALTER TABLE task ADD COLUMN blocked_reason TEXT;
             UPDATE task SET blocked_reason = (SELECT body FROM question WHERE task_id = task.id AND closed_at IS NULL);
             PRAGMA user_version = 17;",
         )

@@ -3,7 +3,7 @@
 // these check what the window makes of the host snapshot. 「全部」 is the conversation with Angela
 // (roadmap.md M4 step 1).
 import { expect, test, type Page } from '@playwright/test';
-import type { AngelaStatus, Attention, HostSnapshot, Push, Snapshot } from '../src/api/types';
+import type { AngelaStatus, Attention, HarnessView, HostSnapshot, Push, Snapshot } from '../src/api/types';
 import { detail, role, task } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
@@ -26,6 +26,11 @@ const snapshotOf = (id: string): Snapshot => ({
 });
 
 const angela: AngelaStatus = { error: null, attention: [], busy: false };
+
+const codexModels: HarnessView['models'] = [
+  { id: 'gpt-fast', label: 'GPT-Fast', efforts: ['low', 'medium', 'high'], default_effort: 'low' },
+  { id: 'gpt-deep', label: 'GPT-Deep', efforts: ['low', 'medium', 'high', 'xhigh'], default_effort: 'medium' },
+];
 
 /** Angela's snapshot has the shape of a project's, without a repository and tasks. */
 const angelaSnapshot: Snapshot = {
@@ -289,9 +294,13 @@ test('a project that could not be opened says why; archived ones come back', asy
 test('the settings are a page of their own, wherever the window is', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
+  const sent: [string, Record<string, unknown>][] = [];
   const backend = await openHost(page, {
     projects: [entry('alpha'), entry('beta')], attention: [],
-    harnesses: [{ harness: 'codex', permission: 'auto_review' }], angela,
+    harnesses: [{ harness: 'codex', permission: 'auto_review', models: codexModels, efforts: ['low', 'medium', 'high'] }], angela,
+  }, (name, args) => {
+    sent.push([name, args]);
+    return null;
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const settings = page.getByRole('region', { name: '设置' });
@@ -304,6 +313,14 @@ test('the settings are a page of their own, wherever the window is', async ({ pa
   await nav.locator('.settings-nav-group').filter({ hasText: 'beta' }).getByRole('button', { name: '常规' }).click();
   await expect(settings.getByRole('radiogroup', { name: 'Malkuth 使用的 harness' })).toBeVisible();
   expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual(['angela', 'angela', 'beta']);
+  // The model and the effort, as the harness lists them (harness-adapter.md §1.2).
+  const effort = settings.getByLabel('Malkuth 在 Codex 上的推理强度');
+  await expect(effort.locator('option')).toHaveText(['默认强度', 'low', 'medium', 'high']);  await settings.getByLabel('Malkuth 在 Codex 上的模型').selectOption('gpt-deep');
+  await effort.selectOption('high');
+  expect(sent.map(([name, { role, harness, model, effort }]) => [name, role, harness, model, effort])).toEqual([
+    ['set_role_model', 'Malkuth', 'codex', 'gpt-deep', null],
+    ['set_role_model', 'Malkuth', 'codex', null, 'high'],
+  ]);
 
   await settings.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page.locator('.topbar')).toContainText('全部项目');
@@ -346,7 +363,7 @@ test('archiving from the settings asks first and leaves them usable', async ({ p
   page.on('pageerror', (error) => errors.push(error.message));
   const host: HostSnapshot = {
     projects: [entry('alpha', [], true), entry('beta')], attention: [],
-    harnesses: [{ harness: 'codex', permission: 'auto_review' }], angela,
+    harnesses: [{ harness: 'codex', permission: 'auto_review', models: codexModels, efforts: ['low', 'medium', 'high'] }], angela,
   };
   const sent: unknown[] = [];
   let finish!: () => void;

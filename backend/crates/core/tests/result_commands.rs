@@ -113,7 +113,8 @@ fn an_upgraded_database_keeps_the_summary_of_an_earlier_done() {
     // The database as migration 7 left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE task ADD COLUMN blocked_reason TEXT;
+        "DROP TABLE role_model; ALTER TABLE role ADD COLUMN model TEXT;
+         ALTER TABLE task ADD COLUMN blocked_reason TEXT;
          DROP INDEX verification_by_task; DROP INDEX message_queued_by_task;
          DROP TABLE forward_context; ALTER TABLE message DROP COLUMN reply_to; DROP TABLE ledger_evidence; DROP TABLE ledger_entry; DROP TABLE question; DROP TABLE project_cursor; DROP TABLE quote; ALTER TABLE task DROP COLUMN paused_by; ALTER TABLE task DROP COLUMN assignment;
          ALTER TABLE event DROP COLUMN command_id;

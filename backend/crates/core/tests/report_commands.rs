@@ -167,7 +167,8 @@ fn upgrading_a_database_preserves_existing_attempts_without_a_trial() {
     // The database as migration 8 left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE task ADD COLUMN blocked_reason TEXT;
+        "DROP TABLE role_model; ALTER TABLE role ADD COLUMN model TEXT;
+         ALTER TABLE task ADD COLUMN blocked_reason TEXT;
          DROP INDEX verification_by_task; DROP INDEX message_queued_by_task;
          DROP TABLE forward_context; ALTER TABLE message DROP COLUMN reply_to; DROP TABLE ledger_evidence; DROP TABLE ledger_entry; DROP TABLE question; DROP TABLE project_cursor; DROP TABLE quote; ALTER TABLE task DROP COLUMN paused_by; ALTER TABLE task DROP COLUMN assignment;
          ALTER TABLE event DROP COLUMN command_id; ALTER TABLE attempt DROP COLUMN trial; PRAGMA user_version = 8;",

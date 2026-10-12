@@ -11,6 +11,7 @@ use common::*;
 use lobotomy_core::capture::stopped_capture;
 use lobotomy_core::id::now_ms;
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, current_config, load_project};
+use lobotomy_core::role::SetRoleModel;
 use lobotomy_core::task::{Abandon, CreateTask, Phase, SendMessage, SetPaused, load_task, open_attempt};
 use lobotomy_core::turn::{
     Continue, EndTurn, Failure, FailureKind, Outcome, RegisterTurn, SetRoleHarness, TurnState, hold, load_turn,
@@ -642,7 +643,7 @@ async fn a_real_claude_turn_reports_done() {
     let backend = start_with(dir.path(), real_clis()).await;
     let db = backend.project.db.clone();
     on_claude(&db);
-    db.write(|tx| Ok(tx.execute("UPDATE role SET model = 'haiku' WHERE name = 'Malkuth'", [])?)).unwrap();
+    choose_model(&db, "Malkuth", "claude", Some("haiku"), None);
     db.execute(
         &Caller::User,
         &CreateTask {
@@ -710,7 +711,7 @@ async fn a_real_claude_turn_is_interrupted_and_continued() {
     let backend = start_with(dir.path(), real_clis()).await;
     let db = backend.project.db.clone();
     on_claude(&db);
-    db.write(|tx| Ok(tx.execute("UPDATE role SET model = 'haiku' WHERE name = 'Malkuth'", [])?)).unwrap();
+    choose_model(&db, "Malkuth", "claude", Some("haiku"), None);
     let body = "运行这条命令并等它结束：Start-Sleep -Seconds 120。然后报告完成。";
     create_task(&backend.project, body);
 
@@ -959,6 +960,18 @@ fn next_task(db: &Db) -> String {
 fn on_claude(db: &Db) {
     let switch = SetRoleHarness { request_id: "h1".into(), role: "Malkuth".into(), harness: "claude".into() };
     db.execute(&Caller::User, &switch).unwrap();
+}
+
+/// The user's choice of model and effort for a role on a harness, as the settings make it.
+fn choose_model(db: &Db, role: &str, harness: &str, model: Option<&str>, effort: Option<&str>) {
+    let choice = SetRoleModel {
+        request_id: format!("model-{role}-{harness}-{model:?}-{effort:?}"),
+        role: role.into(),
+        harness: harness.into(),
+        model: model.map(Into::into),
+        effort: effort.map(Into::into),
+    };
+    db.execute(&Caller::User, &choice).unwrap();
 }
 
 /// The arguments of the fake CLI's last run in `dir`.
@@ -1217,6 +1230,37 @@ async fn angela_receives_the_manager_prompt_on_both_harnesses_each_turn() {
         }
         backend.shutdown(Duration::from_secs(5)).await;
     }
+}
+
+/// The model and effort the user chose for a role on its harness reach the CLI (harness-adapter.md
+/// §1.2): without a choice none is passed, a new choice keeps the session, and each harness keeps
+/// its own choice.
+#[tokio::test]
+async fn a_role_runs_on_the_model_and_effort_chosen_for_its_harness() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().unwrap();
+    let work = host_dir(dir.path()).join("angela").join("work");
+    choose_model(&angela.db, "Angela", "codex", Some("gpt-deep"), Some("xhigh"));
+
+    // She starts on Claude, where nothing is chosen yet.
+    angela_turn_for(&angela, &tell_angela(&angela, "先聊聊")).await;
+    let args = last_args(&work);
+    assert!(!args.iter().any(|a| a == "--model" || a == "--effort"), "{args:?}");
+
+    choose_model(&angela.db, "Angela", "claude", Some("opus"), Some("max"));
+    angela_turn_for(&angela, &tell_angela(&angela, "继续")).await;
+    let args = last_args(&work);
+    assert_eq!((after(&args, "--model"), after(&args, "--effort")), ("opus", "max"));
+    assert!(args.iter().any(|a| a == "--resume"), "a new choice keeps the session: {args:?}");
+
+    let switch = SetRoleHarness { request_id: "h1".into(), role: "Angela".into(), harness: "codex".into() };
+    angela.db.execute(&Caller::User, &switch).unwrap();
+    angela_turn_for(&angela, &tell_angela(&angela, "换到 Codex")).await;
+    let args = last_args(&work);
+    assert_eq!(after(&args, "-m"), "gpt-deep");
+    assert!(args.iter().any(|a| a == r#"model_reasoning_effort="xhigh""#), "{args:?}");
+    backend.shutdown(Duration::from_secs(5)).await;
 }
 
 /// The user's message to Angela, as the window sends it; its id.
@@ -1581,7 +1625,7 @@ async fn a_real_claude_angela_assigns_a_task() {
     harness.claude = real_clis().claude;
     let backend = start_with(dir.path(), harness).await;
     let angela = backend.backend.angela().expect("Angela opened");
-    angela.db.write(|tx| Ok(tx.execute("UPDATE role SET model = 'haiku' WHERE name = 'Angela'", [])?)).unwrap();
+    choose_model(&angela.db, "Angela", "claude", Some("haiku"), None);
     let project = backend.project.clone();
     let ask = format!(
         "请在项目 {} 里给 Malkuth 派一个只读调查任务：看看 README 里写了什么。用 quote 引用我这条消息。\

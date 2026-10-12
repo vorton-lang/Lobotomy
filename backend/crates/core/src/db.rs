@@ -27,6 +27,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0016_task_read_indexes.sql"),
     include_str!("../migrations/0017_question_causality.sql"),
     include_str!("../migrations/0018_question_source.sql"),
+    include_str!("../migrations/0019_role_model.sql"),
 ];
 
 /// One project's database.
@@ -250,6 +251,17 @@ mod tests {
             (old.command_id.as_deref(), old.caller.as_deref(), old.caller_turn_id.as_deref()),
             (None, None, None)
         );
+    }
+
+    /// Before 0019 a role had one model, which counts as its choice on the harness it was on.
+    #[test]
+    fn a_model_chosen_before_the_choice_was_per_harness_stays_on_that_harness() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn, &MIGRATIONS[..18]).unwrap();
+        conn.execute("UPDATE role SET model = 'gpt-6-astra' WHERE name = 'Malkuth'", []).unwrap();
+        migrate(&mut conn, MIGRATIONS).unwrap();
+        let role = crate::role::load_role(&conn, "Malkuth").unwrap();
+        assert_eq!((role.harness.as_str(), role.model.as_deref(), role.effort), ("codex", Some("gpt-6-astra"), None));
     }
 
     #[test]

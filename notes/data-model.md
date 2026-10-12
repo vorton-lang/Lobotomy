@@ -395,7 +395,8 @@ Codex 被拒时的形式未知，暂不处理。
 | task | task_id | 标题、用户原话、执行者 role、阶段、暂停及设置者（用户或 Manager）、当前完成条件版本、队列位置；由任务之外的改动建成时，记下那份采集；Manager 派的任务另有允许的动作、停止条件与她的解读 | revision：每次状态变化加 1。阻塞原因不存在 task 中，由 question 派生（§3.5） |
 | criteria_version | (task_id, version) | 文本、修改者、时间 | 只追加 |
 | attempt | attempt_id | task、序号、代码起点、开工时的冲突文件、报告 `done` 的 turn、候选成果、交付说明、试用建议、结束原因 | 每个 task 最多一个未关闭的 attempt |
-| role | 名字 | 类型、harness、模型、槽位 | 名字、类型与槽位是静态配置；harness 由用户切换（§9.2） |
+| role | 名字 | 类型、harness、槽位 | 名字、类型与槽位是静态配置；harness 由用户切换（§9.2） |
+| role_model | (role, harness) | 用户为 role 在这个 harness 上选的模型与推理强度，空表示用 CLI 的默认值（harness-adapter.md §1.2） | 没有行时两者都用默认值 |
 | occupancy | role | 占用它的 task | 每个 role 最多被一个任务占用 |
 | native_session | session_id（运行时生成） | role、harness、所属任务（可空）、harness 原生 ID（可后补）、开始与结束时间 | 每个 role 每个任务最多一个当前 session（§4.1） |
 | turn | turn_id | role、native session、task 与 attempt（可空）、现场 generation、MCP token、输入、状态与结果、失败原因、pid 与进程启动时间。原始输出文件按 turn_id 命名（§7.4） | 每个 role 最多一个未结束的 turn；token 唯一 |
@@ -453,6 +454,7 @@ Codex 被拒时的形式未知，暂不处理。
 | 继续 | 当前 attempt 的最后一个 turn 为 interrupted 或 failed（§4.1），或 role 最近一次采集被挡下（harness-adapter.md §4.1） | 登记 turn：继续说明加排队的消息。采集被挡下时，说明中附上清单；被挡下的 `done` 作废。上一个 turn 没有被 harness 开始时，不加说明，原样重发它的输入并改绑它的消息（§3.4） | 启动 CLI |
 | 新建 native session | role 没有未结束的 turn | native session 记录 | — |
 | 切换 role 的 harness | harness 是已知的；role 没有未结束的 turn；与当前 harness 相同时什么都不做 | role 的 harness；结束 role 当前工作的 native session。结束了会话、且任务有进行中的 attempt 时，重新排队开工说明（§4.1） | 下一个 turn 在新 harness 的新会话中运行（harness-adapter.md §1.4，2026-10-10） |
+| 选择 role 的模型与推理强度 | harness 是已知的；名字不会被 CLI 当成选项（harness-adapter.md §1.2） | role 在这个 harness 上的选择（role_model） | 下一个 turn 用新选择，会话不变 |
 | 终止残留进程 | turn 为 unknown 且进程仍在运行 | — | 终止进程，之后按 §3.3 对账 |
 | 丢弃未能采集的内容 | 采集被挡下（超过体积护栏或有未覆盖的内容）；是 role 最近一次采集；role 没有未结束的 turn | 决定；采集回到意图 | 重新采集：超过体积护栏时不要新增的文件，有未覆盖的内容时跳过它们，其余照常采集。之后槽位可以复用 |
 | 放行新增文件 | 采集被体积护栏挡下；是 role 最近一次采集；role 没有未结束的 turn | 决定；采集回到意图 | 重新采集，不受体积护栏限制 |

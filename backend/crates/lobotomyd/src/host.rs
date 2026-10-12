@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use lobotomy_core::Error;
 use lobotomy_core::host::HostDb;
 use lobotomy_core::quota::{CheckOutcome, Domain};
 use lobotomy_harness::event::Event;
-use lobotomy_harness::{Harness, Output, Permission, claude, codex};
+use lobotomy_harness::{Harness, Model, Output, Permission, claude, codex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::{Notify, broadcast};
 
@@ -33,6 +34,9 @@ pub struct Host {
     pub shutdown_requested: Notify,
     /// Domains with a check in progress: at most one check per domain (data-model.md §8.4).
     checking: Mutex<HashSet<String>>,
+    /// Codex's model catalog, once read; [`Host::models`] starts reading it.
+    codex_models: Mutex<Vec<Model>>,
+    catalog_requested: AtomicBool,
 }
 
 /// How to start the harness CLIs. Binary detection is host state (data-model.md §10).
@@ -54,6 +58,7 @@ pub struct HarnessConfig {
 pub struct Cli {
     /// The program and any arguments that go before the adapter's own. Tests put a fake CLI here.
     pub command: Vec<String>,
+    /// The effort of roles that have none chosen. Only tests set it, to keep real turns cheap.
     pub reasoning_effort: Option<String>,
 }
 
@@ -129,7 +134,57 @@ impl Host {
             gui_push: broadcast::channel(crate::gui::PUSH_BUFFER).0,
             shutdown_requested: Notify::new(),
             checking: Mutex::new(HashSet::new()),
+            codex_models: Mutex::new(Vec::new()),
+            catalog_requested: AtomicBool::new(false),
         })
+    }
+
+    /// The models the user can choose for a role on a harness (harness-adapter.md §1.2). Codex's
+    /// come from its catalog, read once, the first time they are asked for; until it is read, or
+    /// when it cannot be, there are none.
+    pub fn models(self: &Arc<Self>, harness: Harness) -> Vec<Model> {
+        match harness {
+            Harness::Claude => claude::models(),
+            Harness::Codex => {
+                if !self.catalog_requested.swap(true, Ordering::Relaxed) {
+                    let host = self.clone();
+                    tokio::spawn(async move { host.load_models().await });
+                }
+                self.codex_models.lock().unwrap().clone()
+            }
+        }
+    }
+
+    /// Reads Codex's model catalog and tells the GUIs. It calls no model; without it, the GUI
+    /// takes a model's name as the user types it.
+    async fn load_models(&self) {
+        match tokio::time::timeout(Duration::from_secs(30), self.codex_catalog()).await {
+            Ok(Ok(models)) => {
+                *self.codex_models.lock().unwrap() = models;
+                self.changed();
+            }
+            Ok(Err(e)) => tracing::warn!(error = format!("{e:#}"), "Codex's model catalog could not be read"),
+            Err(_) => tracing::warn!("reading Codex's model catalog timed out"),
+        }
+    }
+
+    async fn codex_catalog(&self) -> anyhow::Result<Vec<Model>> {
+        let (program, prefix) = self.harness.codex.program()?;
+        let args: Vec<String> = prefix.iter().cloned().chain(codex::CATALOG_ARGS.map(String::from)).collect();
+        // Apart from the quota checks' directory: the two may run at once.
+        let cwd = self.dir.join("catalog");
+        std::fs::create_dir_all(&cwd)?;
+        let what = launch::What::Program { program, args: &args };
+        let mut spawned = launch::spawn(what, &cwd, &self.dir.join("gh-empty")).await?;
+        let io = launch::run(&mut spawned, b"", |stderr| tail(stderr, 4096)).await?;
+        let mut stdout = String::new();
+        BufReader::new(io.stdout).read_to_string(&mut stdout).await?;
+        let status = spawned.child.wait().await?;
+        spawned.reap();
+        match codex::parse_catalog(&stdout) {
+            Some(models) if status.success() => Ok(models),
+            _ => anyhow::bail!("{status}: {}", io.stderr.await.unwrap_or_default().trim()),
+        }
     }
 
     /// Where new projects keep their data, one directory per project id (data-model.md §10.3).

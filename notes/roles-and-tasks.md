@@ -9,7 +9,7 @@
 ### 1.1 角色类型与具名角色
 
 - **角色类型**是模板，规定职责、指令、工具权限与槽位策略：`manager`、`tech_lead`、`worker`、`reviewer`。
-- **具名角色**是实例，绑定一个类型、一个 harness 和一个模型。名字沿用 Lobotomy Corporation 的设定，最多 11 个：Angela，以及 10 位 Sephirah（Malkuth、Yesod、Hod、Netzach、Tiphereth A、Tiphereth B、Gebura、Chesed、Binah、Hokma）。
+- **具名角色**是实例，有一个类型和当前使用的 harness，在每个 harness 上可以选模型和推理强度（**语义更新**，用户确认，2026-10-13：原来写"绑定一个模型"；模型名属于 harness，见 harness-adapter.md §1.2）。名字沿用 Lobotomy Corporation 的设定，最多 11 个：Angela，以及 10 位 Sephirah（Malkuth、Yesod、Hod、Netzach、Tiphereth A、Tiphereth B、Gebura、Chesed、Binah、Hokma）。
 - **名字只是标识**，给用户一点 role play 的感觉，不影响工作。名字出现在 GUI、消息标题（`【来自 Binah】`）、会议中的 @、以及"等 Binah"这类状态里。角色指令中只告知 role 自己的名字，不写入游戏角色的性格。
 
 ### 1.2 v1 人员

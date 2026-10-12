@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::event::{Event, Item, ItemKind};
-use crate::{MCP_SERVER, Permission};
+use crate::{MCP_SERVER, Model, Permission};
 
 /// Finds the Claude binary: `CLAUDE_BIN`, else `claude` from PATH (harness-adapter.md §1.5).
 pub fn locate() -> PathBuf {
@@ -125,6 +125,24 @@ impl TurnArgs {
         args.extend(["--mcp-config".into(), self.mcp_config.to_string_lossy().into_owned()]);
         args
     }
+}
+
+/// The efforts `--effort` takes (Claude Code 2.1.283 help). Haiku accepts them too (2026-10-13).
+pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// The models the user can choose: the aliases `--model` takes for the latest model of each
+/// family. Claude Code has no command that lists them; its help names `fable`, `opus` and
+/// `sonnet`, and `haiku` is what the quota check uses.
+pub fn models() -> Vec<Model> {
+    [("fable", "Fable"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
+        .into_iter()
+        .map(|(id, label)| Model {
+            id: id.into(),
+            label: label.into(),
+            efforts: EFFORTS.map(String::from).to_vec(),
+            default_effort: None,
+        })
+        .collect()
 }
 
 /// A minimal call that only tells whether the quota admits a turn (data-model.md §8.4). It keeps

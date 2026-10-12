@@ -1394,6 +1394,19 @@ svg.mark {
 .setting-control input[type='number'] {
   width: 90px;
 }
+/* A role's harness, model and effort: one line where it fits, the selects under the harness
+   where it does not. */
+.role-runtime {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+}
+.role-runtime .typed-model {
+  width: 120px;
+}
 /* Choices that apply at once: radio buttons drawn as one bar. */
 .segmented {
   display: inline-flex;

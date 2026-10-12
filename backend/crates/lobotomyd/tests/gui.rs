@@ -139,9 +139,13 @@ async fn the_gui_sets_each_harness_permission_mode() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let mut gui = Client::connect(&backend).await;
+    let permissions = |snapshot: &Value| -> Value {
+        let harnesses = snapshot["harnesses"].as_array().unwrap();
+        harnesses.iter().map(|h| json!({ "harness": h["harness"], "permission": h["permission"] })).collect()
+    };
     let snapshot = gui.call("snapshot", json!({})).await.unwrap();
     assert_eq!(
-        snapshot["harnesses"],
+        permissions(&snapshot),
         json!([{ "harness": "claude", "permission": "full" }, { "harness": "codex", "permission": "full" }])
     );
 
@@ -150,7 +154,7 @@ async fn the_gui_sets_each_harness_permission_mode() {
     assert_eq!(gui.command("set_permission", set.clone()).await.unwrap(), set);
     let snapshot = gui.call("snapshot", json!({})).await.unwrap();
     assert_eq!(
-        snapshot["harnesses"],
+        permissions(&snapshot),
         json!([{ "harness": "claude", "permission": "full" }, { "harness": "codex", "permission": "auto_review" }])
     );
     assert_eq!(
@@ -167,6 +171,44 @@ async fn the_gui_sets_each_harness_permission_mode() {
     {
         assert!(gui.command("set_permission", wrong.clone()).await.is_err(), "{wrong}");
     }
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
+/// The GUI offers each harness's models and their efforts (harness-adapter.md §1.2): Claude's
+/// aliases, and Codex's catalog, read once at start. A role's choice shows in the snapshot.
+#[tokio::test]
+async fn the_gui_offers_each_harness_models_and_shows_a_roles_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let mut gui = Client::connect(&backend).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let codex = loop {
+        let snapshot = gui.call("snapshot", json!({})).await.unwrap();
+        let codex = snapshot["harnesses"][1].clone();
+        if !codex["models"].as_array().unwrap().is_empty() {
+            let ids: Vec<&str> = snapshot["harnesses"][0]["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["id"].as_str().unwrap())
+                .collect();
+            assert_eq!(ids, ["fable", "opus", "sonnet", "haiku"]);
+            break codex;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "Codex's catalog never arrived: {codex}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(codex["models"][1]["id"], "gpt-deep");
+    assert_eq!(codex["models"][1]["default_effort"], "medium");
+    assert_eq!(codex["efforts"], json!(["low", "medium", "high"]), "what every listed model takes");
+
+    let choice =
+        json!({ "request_id": "m1", "role": "Malkuth", "harness": "codex", "model": "gpt-deep", "effort": "xhigh" });
+    gui.command("set_role_model", choice).await.unwrap();
+    gui.event("role.model_changed").await;
+    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
+    let malkuth = &snapshot["roles"][0];
+    assert_eq!((&malkuth["model"], &malkuth["effort"]), (&json!("gpt-deep"), &json!("xhigh")));
     backend.shutdown(Duration::from_secs(5)).await;
 }
 

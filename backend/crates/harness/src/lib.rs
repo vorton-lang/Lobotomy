@@ -42,6 +42,18 @@ impl Harness {
     }
 }
 
+/// A model the user can choose for a role on a harness (harness-adapter.md §1.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Model {
+    /// What the CLI takes: Claude's alias, or Codex's slug.
+    pub id: String,
+    pub label: String,
+    /// The reasoning efforts it accepts, lowest first.
+    pub efforts: Vec<String>,
+    /// The effort it uses when Lobotomy passes none, if the CLI says.
+    pub default_effort: Option<String>,
+}
+
 /// Reads a harness's output one line at a time. Claude's parser keeps state between lines;
 /// Codex's does not (harness-adapter.md §1.4).
 pub enum Output {

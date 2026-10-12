@@ -215,6 +215,9 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
     let cli = instance.host.harness.cli(harness);
     let permission = instance.host.permission(harness)?;
     let mcp_url = instance.mcp_url(&turn.token);
+    // The user's choice for the role on this harness (harness-adapter.md §1.2); tests set an
+    // effort on the CLI for roles that have none.
+    let effort = role.effort.clone().or_else(|| cli.reasoning_effort.clone());
     let (args, _mcp_config) = match harness {
         Harness::Claude => {
             // Named after the turn, which tells its CLI apart on Linux (data-model.md §3.3).
@@ -228,7 +231,7 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
             let args = claude::TurnArgs {
                 session,
                 model: role.model.clone(),
-                effort: cli.reasoning_effort.clone(),
+                effort,
                 permission,
                 instructions: instructions(&role),
                 mcp_config: path.clone(),
@@ -239,7 +242,7 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
             let args = codex::TurnArgs {
                 resume: turn.native_id.clone(),
                 model: role.model.clone(),
-                reasoning_effort: cli.reasoning_effort.clone(),
+                reasoning_effort: effort,
                 permission,
                 developer_instructions: instructions(&role),
                 mcp_url,

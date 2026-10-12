@@ -50,11 +50,12 @@
   1. **能对话、能读。** 她的数据库与 turn 在 host 目录下；「全部」的主区是与她的对话，所有项目的"等你决定"在右侧栏；她经 MCP 读所有项目，读取结果带边界（data-model.md §10.6）。设置中可以切换她的 harness。
   2. **能操作。** 调用者 `manager`；派活、转发原话、验收、退回、放弃、暂停；回复中的引用由运行时渲染，附件带版本与当前有效性（manager-actions.md §2.1）。任务面板显示她派活时写的解读、允许的动作和停止条件，并写明任务是谁暂停的。只读调查的任务产生了文件改动时，运行时标出（roles-and-tasks.md §4）。
   3. **跟上变化。** 收件箱与唤醒、`ask_user`（manager-actions.md §6）；最小的记录与换会话时的投影，`ledger` 参数（manager-actions.md §3.4）；`flag_mismatch`（manager-actions.md §2.3）；`context`、用户手动指定回复对象、"已转给 …"标签（manager-actions.md §1.1）。
-- 验收之前补上两项（用户确认，2026-10-13，[#60](https://github.com/vorton-lang/Lobotomy/issues/60)）：
+- 验收之前补上三项（用户确认，2026-10-13，[#60](https://github.com/vorton-lang/Lobotomy/issues/60)）：
   - 她的每条输入开头写明用户的本地时间（data-model.md §10.6"她的输入"）。指令中的"时间与节奏"把它当作弱信号。
   - 她用 `read_diff` 读候选成果与验证的 diff（data-model.md §10.6）。
+  - 用户在设置中为每个 role 选模型和推理强度，两个 harness 各存一份（harness-adapter.md §1.2）。
 
-  依据：验收要观察她能否先查证、再判断。她读不到 diff 时，判断出错就分不清是判断的问题，还是缺信息的问题。
+  依据：验收要观察她能否先查证、再判断。她读不到 diff 时，判断出错就分不清是判断的问题，还是缺信息的问题。第三项来自验收前的试用：没有选择时，Claude role 用 CLI 默认的 Fable，Fable 的额度用完后她停了；Codex role 用默认的 `gpt-6.1-sol` 和 low，一次回复要几分钟（harness-adapter.md §1.2 的实测）。这一项不改"先不定 Angela 用哪个模型"：Lobotomy 不设默认模型，由用户选。
 - 设计了而 M4 没有实现的部分，列在下面"待排"的"Angela 与记录"一组。
 - 实测（2026-10-11，Windows，Claude Code，haiku）：用真实 CLI 走过的只有第 2 步的 `assign`。她先读项目，再调用 `assign`，`actions`、`quote`、`stop_when` 都按工具的参数说明填写，引用的是用户那条消息的 ID。测试是 `a_real_claude_angela_assigns_a_task`，默认忽略。这只验证了一次调用，没有验证她在自然协作中的判断。第 3 步的行为只用假 CLI 测过。
 - #50 的三组开放问题属于 Angela 的判断：怎样估计用户的状态，怎样选择行动与介入时机，给出什么信息。M4 不回答这些问题，只搭出能观察它们的环境。M4 不做用户状态模型、信息价值的打分、为对照而做的多个版本，也不改通知规则。需要提前告诉用户的变化，Angela 按现有规则改变状态：用 `ask_user` 提问，要停下的任务另用 `set_paused` 暂停（manager-actions.md §6）。系统通知还没有实现，见"待排"。
@@ -124,7 +125,6 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 |---|---|
 | 每次启动记录 CLI 版本；CLI 升级后新出现的工具在 Inspector 中标出 | harness-adapter.md §1.5、§1.6；data-model.md §10.2 |
 | "撤销这一轮"：用户命令，把槽位改写为上一个 turn 的采集 | harness-adapter.md §4.1；frontend.md §2 |
-| 推理强度由 Lobotomy 显式传入；现在正式运行不传，用 CLI 的默认值 | harness-adapter.md §1.6 |
 | 在官方应用中接管与交还：在途 turn 怎么处理，怎样确认外部使用已经结束，交还后核对 session、HEAD 与工作区 | [#1](https://github.com/vorton-lang/Lobotomy/issues/1)；manager-actions.md §4.3；frontend.md §2 |
 
 ### 审阅与试用

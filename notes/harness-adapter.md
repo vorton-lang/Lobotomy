@@ -49,7 +49,15 @@ Codex（消息经 stdin，位置参数为 -）
   续用：codex exec resume <id> --json ...（其余参数相同）
 ```
 
-- 参数由 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs) 与 [codex.rs](../backend/crates/harness/src/codex.rs) 拼出。方括号中的参数可以省略：模型在 role 设置了模型时传；推理强度来自后端的 CLI 配置（`host.rs` 的 `Cli`），现在只有测试设置它。
+- 参数由 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs) 与 [codex.rs](../backend/crates/harness/src/codex.rs) 拼出。方括号中的参数可以省略：模型与推理强度来自用户为 role 在这个 harness 上的选择，没有选择时不传，用 CLI 的默认值。测试可以在后端的 CLI 配置（`host.rs` 的 `Cli`）上设一个推理强度，给没有选择的 role 用。
+- **模型与推理强度由用户按 role 选择**（用户确认，2026-10-13）。设置中每个 role 一行，harness 旁边是模型和推理强度（frontend.md §7.8）。
+  - 每个 role 在每个 harness 上各存一份选择（data-model.md §9.1 的 `role_model`）。依据：模型名属于 harness，role 换到另一个 harness 再换回来时，原来的选择还在。
+  - 每个 turn 启动时读取选择。改选择不换会话：正在运行的 turn 不受影响，下一个 turn 用新选择 resume 同一个会话。
+  - 可选的模型：Claude 是 CLI 的别名 `fable`、`opus`、`sonnet`、`haiku`。Claude Code 没有列出模型的命令，帮助文本举了前三个。推理强度是 low、medium、high、xhigh、max（Claude Code 2.1.283 帮助文本）。Codex 的模型来自 `codex debug models` 输出的目录：只列 `visibility` 为 `list` 的模型，每个带支持的推理强度和默认强度。
+  - 后端在 GUI 第一次要模型列表时读一次 Codex 的目录。这个命令读 Codex 自己的缓存，不调用模型，实测 0.08 秒。它没有 `--ignore-user-config`，会读用户的 `config.toml`。读不到目录时，GUI 让用户直接输入模型名和推理强度。
+  - 运行时只检查名字不会被 CLI 当成选项（不以 `-` 开头，只含字母、数字和 `._-:[]/`），不检查模型是否存在。名字不对时，turn 按 CLI 的报错失败。
+  - 实测（Windows，2026-10-13）：两家都能在 resume 时换模型，会话的上文还在。Claude Code 2.1.283：haiku 开的会话用 `--model sonnet --effort low` resume，`system/init` 报 `claude-sonnet-5`，模型答出了上一轮的内容；haiku 也接受 `--effort high`。codex-cli 0.162.0-alpha.17.2：`gpt-6-luna` 开的会话用 `-m gpt-6-astra` resume，turn 正常完成，但先输出一条 `type` 为 `error` 的 item："This session was recorded with model `gpt-6-luna` but is resuming with `gpt-6-astra`. Consider switching back to `gpt-6-luna` as it may affect Codex performance."
+  - 实测（Windows，2026-10-13，codex-cli 0.162.0-alpha.17.2）：没有选择时，Codex 用 `gpt-6.1-sol`，推理强度是它的默认值 low。同一个 Angela 的任务（派 P2 的第一单，约 5.4 万 token 输入，约 900 token 输出，不带 MCP），`gpt-6.1-sol` 用了 344 秒；`gpt-6-astra` 用默认强度（medium）34 秒，显式指定 medium 30 秒。三份回答的内容相近。每种只测了一次，不代表模型的一般速度。
 - Claude 的角色指令按文字内联传入，不用 `--append-system-prompt-file`（§6）。
 - 两家都有 fork（`claude -p --resume <uuid> --fork-session`、`codex exec fork <id>`），实测可用，返回新 id（§1.4）。Lobotomy 没有使用 fork。
 
@@ -160,9 +168,10 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
 - 保留网页搜索与读取、子 agent。
 - 这些措施防的是失误和过度热心，不防对抗：bypass 模式下 agent 总能绕过（例如从凭据管理器取 token）。
 - 新工具提示（未实现，列入 roadmap 待排）：运行时每轮从 Claude 的 `system/init` 事件读取工具清单，与已知清单比对；CLI 升级后出现的新工具在 Inspector 中标出，由用户决定是否禁用。现在适配器只从 `system/init` 读取会话 ID 和工作目录；Inspector 也还没有做（[frontend.md](frontend.md) §2）。
-- Codex role 不读用户的 `config.toml`，模型、推理强度等由 Lobotomy 显式传入。推理强度的传入未实现：正式运行不传，用 CLI 的默认值，只有测试设置它（§1.2；列入 roadmap 待排）。Claude role 同样不读设置文件：用户为自己使用配置的 hooks 和权限规则，假定有人在场。用户在设置文件中选的模型因此也不生效，Claude role 用 CLI 的默认模型。2026-10-13 实测：用户设置的是 `opus`，Angela 的 turn 用的是 `claude-fable-5-1`。按 role 切换模型属于 Inspector 的操作，未实现（[frontend.md](frontend.md) §2，列入 roadmap 待排）。
-  - 待决：同一天 Fable 的额度用完，CLI 的提示是可以换用别的模型。额度域现在按 harness 划分（data-model.md §8）；各 role 都用同一个默认模型时，这样划分不会多停 role。按 role 切换模型之后，额度域是否要细到模型，还没有定。
+- Codex role 不读用户的 `config.toml`。Claude role 同样不读设置文件：用户为自己使用配置的 hooks 和权限规则，假定有人在场。所以用户为自己选的模型和推理强度对 role 都不生效，模型与推理强度由 Lobotomy 按用户在设置中的选择传入（§1.2）。2026-10-13 实测，在有这个设置之前：用户的 Claude 设置是 `opus`，Angela 的 turn 用的是 `claude-fable-5-1`；用户的 Codex 配置是 `gpt-6-astra` 与 medium，Angela 的 turn 用的是 `gpt-6.1-sol` 与 low。
+  - 待决：同一天 Fable 的额度用完，CLI 的提示是可以换用别的模型。额度域现在按 harness 划分（data-model.md §8）；各 role 都用同一个默认模型时，这样划分不会多停 role。现在可以按 role 选模型，额度域是否要细到模型，还没有定。
 - **全局指令文件**（用户确认，2026-10-04）：Codex role 继承用户个人的 `~/.codex/AGENTS.md`，Lobotomy 不另开 `CODEX_HOME`。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 与 `-c project_doc_max_bytes=0` 都不能排除全局 AGENTS.md（§1.4）。Claude role 的情况见 §6。
+  - 实测（2026-10-13）：Codex role 也用用户个人的 `~/.codex/skills/`。Angela 在 Codex 上的一个 turn 用命令读了 user-collaboration 和 engineering-taste 两个 skill 的 `SKILL.md`；用 §1.2 的参数直接运行 Codex 时，三次回答都说按这两个 skill 检查。待决：是否排除用户的 skills，没有定。
 - **Claude Code 2.1.283 实测**（Windows，2026-10-09）：
   - 用上面的参数启动后，`system/init` 中的工具清单为 Task、Edit、Glob、Grep、NotebookEdit、PowerShell、Read、ReportFindings、Skill、TaskCreate、TaskGet、TaskList、TaskStop、TaskUpdate、ToolSearch、WebFetch、WebSearch、Write；MCP 服务只有 lobotomy。
   - `Workflow` 是新出现的工具，会在后台启动多个 agent，可能在 turn 结束后仍在运行，所以去掉。子 agent（`Task`）在 turn 内同步完成，保留。

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use lobotomy_core::capture::{ApproveNewFiles, DiscardOutsideChanges, DiscardUncaptured};
 use lobotomy_core::project::EditProjectConfig;
+use lobotomy_core::role::SetRoleModel;
 use lobotomy_core::task::{
     Abandon, AdoptOutsideChanges, CreateTask, EditCriteria, MoveInQueue, Reopen, SendMessage, SetPaused,
 };
@@ -140,6 +141,7 @@ macro_rules! project_commands {
             Continue,
             NewNativeSession,
             SetRoleHarness,
+            SetRoleModel,
             ApproveNewFiles,
             DiscardUncaptured,
             AdoptOutsideChanges,
@@ -182,7 +184,7 @@ pub async fn run_angela(angela: &Instance, CommandParams { name, args, .. }: Com
             $(if name == <$ty as Command>::NAME { return user::<$ty>(angela, args).await; })*
         };
     }
-    user_commands!(SendMessage, Continue, NewNativeSession, SetRoleHarness);
+    user_commands!(SendMessage, Continue, NewNativeSession, SetRoleHarness, SetRoleModel);
     turn_actions(angela, &name, args).await
 }
 

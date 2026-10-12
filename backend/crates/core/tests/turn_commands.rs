@@ -1,5 +1,6 @@
 use lobotomy_core::item::{BlobStore, NewItem, STORAGE_THRESHOLD, externalize, record_item};
 use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
+use lobotomy_core::role::{SetRoleModel, load_role};
 use lobotomy_core::task::{
     Abandon, CreateTask, EditCriteria, Reopen, StartAttempt, load_task, open_attempt, queued_messages,
 };
@@ -439,6 +440,51 @@ fn a_role_switches_harness_into_a_new_session() {
     set("h3", "claude").unwrap();
     let current = db.read(|c| current_session(c, ROLE, Some(&task))).unwrap().unwrap();
     assert_eq!(current.id, session, "choosing the same harness changes nothing");
+}
+
+/// Model names belong to a harness (harness-adapter.md §1.2): each harness keeps the role's own
+/// choice, so switching away and back finds it again. Only the user chooses, and nothing that
+/// reads as an option reaches the CLI's command line.
+#[test]
+fn a_role_keeps_a_model_and_effort_per_harness() {
+    let db = db();
+    let chosen = || {
+        let role = db.read(|c| load_role(c, ROLE)).unwrap();
+        (role.harness, role.model, role.effort)
+    };
+    let choose = |caller: &Caller, request: &str, harness: &str, model: Option<&str>, effort: Option<&str>| {
+        let cmd = SetRoleModel {
+            request_id: request.into(),
+            role: ROLE.into(),
+            harness: harness.into(),
+            model: model.map(Into::into),
+            effort: effort.map(Into::into),
+        };
+        db.execute(caller, &cmd)
+    };
+    let switch = |request: &str, harness: &str| {
+        let cmd = SetRoleHarness { request_id: request.into(), role: ROLE.into(), harness: harness.into() };
+        db.execute(&Caller::User, &cmd).unwrap();
+    };
+    let some = |s: &str| Some(s.to_owned());
+    assert_eq!(chosen(), ("codex".into(), None, None), "the CLI's defaults until the user chooses");
+
+    choose(&Caller::User, "m1", "codex", Some("gpt-6-astra"), Some("medium")).unwrap();
+    choose(&Caller::User, "m2", "claude", Some("claude-opus-5-5[1m]"), None).unwrap();
+    assert_eq!(chosen(), ("codex".into(), some("gpt-6-astra"), some("medium")));
+    switch("h1", "claude");
+    assert_eq!(chosen(), ("claude".into(), some("claude-opus-5-5[1m]"), None));
+    switch("h2", "codex");
+    assert_eq!(chosen(), ("codex".into(), some("gpt-6-astra"), some("medium")), "the choice waited");
+    choose(&Caller::User, "m3", "codex", None, Some("high")).unwrap();
+    assert_eq!(chosen(), ("codex".into(), None, some("high")), "the default model, with an effort");
+
+    assert_eq!(rejection(choose(&Caller::User, "m4", "codex", Some("--yolo"), None)), "invalid_model");
+    assert_eq!(rejection(choose(&Caller::User, "m5", "codex", None, Some("high -c x=1"))), "invalid_model");
+    assert_eq!(rejection(choose(&Caller::User, "m6", "gemini", Some("pro"), None)), "unknown_harness");
+    let manager = Caller::Manager { turn_id: "turn_x".into() };
+    assert_eq!(rejection(choose(&manager, "m7", "codex", Some("gpt-6-sol"), None)), "forbidden");
+    assert_eq!(chosen(), ("codex".into(), None, some("high")));
 }
 
 /// What the GUI shows as a hold and what registering a turn refuses come from one rule (#16):

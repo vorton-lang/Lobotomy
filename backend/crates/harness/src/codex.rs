@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::event::{Event, Item, ItemKind};
-use crate::{MCP_SERVER, Permission};
+use crate::{MCP_SERVER, Model, Permission};
 
 /// Finds the Codex binary. `CODEX_BIN` wins. The desktop app ships the CLI under
 /// `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`, where the hash changes with updates, so
@@ -113,6 +113,35 @@ pub fn probe_args(permission: Permission) -> Vec<String> {
     args.extend(TRIMMED.map(String::from));
     args.extend(["-c", "model_reasoning_effort=\"low\"", "-"].map(String::from));
     args
+}
+
+/// What prints Codex's model catalog as JSON: the models, their reasoning efforts and the effort
+/// each uses by default. It reads Codex's own cache and calls no model (0.08 s, codex-cli
+/// 0.162.0-alpha.17.2). Unlike `exec`, it has no `--ignore-user-config`.
+pub const CATALOG_ARGS: [&str; 2] = ["debug", "models"];
+
+/// The models of [`CATALOG_ARGS`]'s output that Codex lists for choosing, in its order. `None`
+/// when the output is not a catalog.
+pub fn parse_catalog(json: &str) -> Option<Vec<Model>> {
+    let catalog: Value = serde_json::from_str(json).ok()?;
+    let mut listed: Vec<(i64, Model)> = catalog["models"]
+        .as_array()?
+        .iter()
+        .filter(|m| m["visibility"] == "list")
+        .filter_map(|m| {
+            let id = m["slug"].as_str()?.to_owned();
+            let efforts = m["supported_reasoning_levels"].as_array().into_iter().flatten();
+            let model = Model {
+                label: m["display_name"].as_str().unwrap_or(&id).to_owned(),
+                efforts: efforts.filter_map(|level| level["effort"].as_str().map(String::from)).collect(),
+                default_effort: m["default_reasoning_level"].as_str().map(String::from),
+                id,
+            };
+            Some((m["priority"].as_i64().unwrap_or(i64::MAX), model))
+        })
+        .collect();
+    listed.sort_by_key(|(priority, _)| *priority);
+    Some(listed.into_iter().map(|(_, model)| model).collect())
 }
 
 /// Capability trimming, the same for turns and quota checks: no user rules, config, connectors
@@ -335,5 +364,24 @@ mod tests {
                       `sandbox_mode = \"danger-full-access\"`; Codex would fall back to read-only permissions";
         assert!(permission_refused(stderr));
         assert!(!permission_refused("Error: mcp_servers.lobotomy.url = x is not allowed here"));
+    }
+
+    /// The shape of `codex debug models` (codex-cli 0.162.0-alpha.17.2), cut to the fields read.
+    #[test]
+    fn the_catalog_lists_the_models_codex_offers_in_its_order() {
+        let catalog = r#"{"models":[
+            {"slug":"gpt-b","display_name":"GPT-B","visibility":"list","priority":2,"default_reasoning_level":"medium",
+             "supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}]},
+            {"slug":"hidden","display_name":"Hidden","visibility":"hide","priority":0},
+            {"slug":"gpt-a","visibility":"list","priority":1,"supported_reasoning_levels":[{"effort":"high"}]}
+        ]}"#;
+        let models = parse_catalog(catalog).unwrap();
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["gpt-a", "gpt-b"]);
+        assert_eq!(models[0].label, "gpt-a", "no display name: the slug");
+        assert_eq!(models[0].default_effort, None);
+        assert_eq!(models[1].efforts, ["low", "medium"]);
+        assert_eq!(models[1].default_effort.as_deref(), Some("medium"));
+        assert_eq!(parse_catalog("error: not logged in"), None);
     }
 }
