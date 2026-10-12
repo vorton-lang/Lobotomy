@@ -329,7 +329,12 @@ pub fn settled(conn: &Connection, blocked: &[String]) -> Result<bool> {
     let any = |sql: &str| -> Result<bool> { Ok(conn.query_row(&format!("SELECT EXISTS ({sql})"), [], |r| r.get(0))?) };
     if any("SELECT 1 FROM turn WHERE state IN ('registered', 'running')")?
         || any("SELECT 1 FROM capture WHERE state = 'intent'")?
-        || any("SELECT 1 FROM task WHERE phase = 'verifying'")?
+        // A paused task waits in verification for the user, unless a verification started before
+        // the pause still runs (#62).
+        || any(
+            "SELECT 1 FROM task t WHERE t.phase = 'verifying'
+               AND (t.paused = 0 OR EXISTS (SELECT 1 FROM verification v WHERE v.task_id = t.id AND v.state = 'running'))",
+        )?
         || any("SELECT 1 FROM workspace WHERE state = 'materializing'")?
         || any("SELECT 1 FROM outbox WHERE state = 'pending'")?
     {
