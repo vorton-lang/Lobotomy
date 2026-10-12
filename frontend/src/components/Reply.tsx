@@ -5,7 +5,18 @@
 import { useEffect, useMemo } from 'react';
 import { ChevronRight } from 'lucide-react';
 import type { AttachmentView, QuotedMessage, Resolved } from '../api/types';
-import { attachmentAccepted, attachmentExpired, attachmentLine, attachmentMetadata, attachmentWarning, clock, previewLine, splitReply, jsonObject, textOf } from '../format';
+import {
+  attachmentAccepted,
+  attachmentExpired,
+  attachmentLine,
+  attachmentMetadata,
+  attachmentWarning,
+  clock,
+  previewLine,
+  splitReply,
+  jsonObject,
+  textOf,
+} from '../format';
 import { selectProject, useStore, wantForwards, wantRefs } from '../store';
 import { ICON, Markdown } from './common';
 
@@ -52,9 +63,16 @@ export function ForwardTags({ id }: { id: string }) {
       {forwards.map((f, i) => {
         const where = f.task_title ? `${f.project_name} · 任务「${f.task_title}」` : f.project_name;
         const what = f.kind === 'task' ? '派成任务给' : '已转给';
-        const context = f.contexts.map((c) => `${c.header.replace(/（item_[A-Za-z0-9_]+）$/, '')}${c.chosen ? '（你指定）' : ''}`).join('；');
+        const context = f.contexts
+          .map((c) => `${c.header.replace(/（item_[A-Za-z0-9_]+）$/, '')}${c.chosen ? '（你指定）' : ''}`)
+          .join('；');
         return (
-          <button key={i} className="link forward" title={f.contexts.map((c) => c.header).join('；')} onClick={() => void selectProject(f.project, f.task_id)}>
+          <button
+            key={i}
+            className="link forward"
+            title={f.contexts.map((c) => c.header).join('；')}
+            onClick={() => void selectProject(f.project, f.task_id)}
+          >
             {what} {f.role}（{where}）{context && ` · 附上下文：${context}`}
           </button>
         );
@@ -65,7 +83,12 @@ export function ForwardTags({ id }: { id: string }) {
 
 function Quote({ id }: { id: string }) {
   const quote: Resolved<QuotedMessage> | undefined = useStore((s) => s.refs.quotes[id]);
-  if (failed(quote)) return <p className="ref-error" title={id}>引用无效：{quote.error}</p>;
+  if (failed(quote))
+    return (
+      <p className="ref-error" title={id}>
+        引用无效：{quote.error}
+      </p>
+    );
   if (!quote) return <p className="muted">正在读取引用的原话…</p>;
   return (
     <blockquote className="ref-quote" aria-label="你的原话">
@@ -77,7 +100,12 @@ function Quote({ id }: { id: string }) {
 
 function Attachment({ id }: { id: string }) {
   const attachment: Resolved<AttachmentView> | undefined = useStore((s) => s.refs.attachments[id]);
-  if (failed(attachment)) return <p className="ref-error" title={id}>附件无效：{attachment.error}</p>;
+  if (failed(attachment))
+    return (
+      <p className="ref-error" title={id}>
+        附件无效：{attachment.error}
+      </p>
+    );
   if (!attachment) return <p className="muted">正在读取附件…</p>;
   const expired = attachmentExpired(attachment);
   const warning = attachmentWarning(attachment);

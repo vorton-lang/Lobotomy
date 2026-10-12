@@ -2,14 +2,25 @@ import { afterEach, expect, test, vi } from 'vitest';
 
 const sent: { id: number; text: string; streaming: boolean }[] = [];
 let reply: (event: { data: { id: number; html: string; repaired?: boolean } }) => void;
-vi.stubGlobal('Worker', class {
-  set onmessage(callback: typeof reply) { reply = callback; }
-  postMessage(message: typeof sent[number]) { sent.push(message); }
-});
+vi.stubGlobal(
+  'Worker',
+  class {
+    set onmessage(callback: typeof reply) {
+      reply = callback;
+    }
+    postMessage(message: (typeof sent)[number]) {
+      sent.push(message);
+    }
+  },
+);
 const { renderMarkdown } = await import('./render');
-afterEach(() => { sent.length = 0; });
+afterEach(() => {
+  sent.length = 0;
+});
 
-function finish(index: number, html: string, repaired?: boolean) { reply({ data: { id: sent[index].id, html, repaired } }); }
+function finish(index: number, html: string, repaired?: boolean) {
+  reply({ data: { id: sent[index].id, html, repaired } });
+}
 
 test('a live result that needed no repair also serves the completed item', async () => {
   const live = renderMarkdown('plain reply', true);

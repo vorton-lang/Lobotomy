@@ -2,7 +2,18 @@
 // holds the arguments; other items show their own content.
 
 import type { CommandRecord, Item, LiveItem } from '../api/types';
-import { jsonObject, jsonArray, asReport, commandSummary, elapsed, previewLine, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
+import {
+  jsonObject,
+  jsonArray,
+  asReport,
+  commandSummary,
+  elapsed,
+  previewLine,
+  REPORT_LABEL,
+  textOf,
+  toolSubject,
+  voidReport,
+} from '../format';
 import { setReplyTo, useStore } from '../store';
 import { Markdown, Output, useNow } from './common';
 import { Reply } from './Reply';
@@ -36,11 +47,13 @@ export function ItemView({
     case 'file_change':
       return (
         <div className="item file-change">
-          {jsonArray(content.changes).map(jsonObject).map((change) => (
-            <div key={textOf(change.path)}>
-              <span className="badge">{textOf(change.kind)}</span> <code>{textOf(change.path)}</code>
-            </div>
-          ))}
+          {jsonArray(content.changes)
+            .map(jsonObject)
+            .map((change) => (
+              <div key={textOf(change.path)}>
+                <span className="badge">{textOf(change.kind)}</span> <code>{textOf(change.path)}</code>
+              </div>
+            ))}
         </div>
       );
     case 'mcp_call': {
@@ -74,10 +87,10 @@ export function ItemView({
       const c = content;
       return (
         <details className="item">
-          <summary>
-            调用 {c.server === 'lobotomy' ? textOf(c.tool) : `${textOf(c.server)}.${textOf(c.tool)}`}
-          </summary>
-          <div className="muted">{textOf(c.server)}.{textOf(c.tool)}</div>
+          <summary>调用 {c.server === 'lobotomy' ? textOf(c.tool) : `${textOf(c.server)}.${textOf(c.tool)}`}</summary>
+          <div className="muted">
+            {textOf(c.server)}.{textOf(c.tool)}
+          </div>
           <Output value={c.arguments} />
           <Output value={c.result ?? c.error} />
         </details>
@@ -90,11 +103,13 @@ export function ItemView({
     case 'todo_list':
       return (
         <ul className="item todo">
-          {jsonArray(content.items).map(jsonObject).map((t, i) => (
-            <li key={i} className={t.completed ? 'done' : ''}>
-              {t.completed ? '☑' : '☐'} {textOf(t.text)}
-            </li>
-          ))}
+          {jsonArray(content.items)
+            .map(jsonObject)
+            .map((t, i) => (
+              <li key={i} className={t.completed ? 'done' : ''}>
+                {t.completed ? '☑' : '☐'} {textOf(t.text)}
+              </li>
+            ))}
         </ul>
       );
     case 'error':
@@ -228,5 +243,9 @@ export function LiveItemView({ item, role }: { item: LiveItem; role: string }) {
 
 export function RunningView({ role, since }: { role: string; since: number }) {
   const now = useNow();
-  return <div className="item running">{role} 正在工作 · {elapsed(since, now)}</div>;
+  return (
+    <div className="item running">
+      {role} 正在工作 · {elapsed(since, now)}
+    </div>
+  );
 }

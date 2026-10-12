@@ -36,7 +36,10 @@ export function ConnectRepo({ connected = true, onDone }: { connected?: boolean;
 
   return (
     <div className="connect-repo">
-      <p>选择一个本地 git 仓库。它需要检出在某个分支上，工作区干净。接入后，这个仓库成为集成版本的只读预览，Lobotomy 只会快进它的分支。</p>
+      <p>
+        选择一个本地 git 仓库。它需要检出在某个分支上，工作区干净。接入后，这个仓库成为集成版本的只读预览，Lobotomy
+        只会快进它的分支。
+      </p>
       {inElectron() ? (
         <button className="primary" onClick={choose} disabled={busy || !connected}>
           {path ? '重新选择仓库' : '选择仓库文件夹'}
@@ -48,7 +51,12 @@ export function ConnectRepo({ connected = true, onDone }: { connected?: boolean;
             void create(path.trim());
           }}
         >
-          <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="仓库路径，例如 C:\code\project" aria-label="仓库路径" />
+          <input
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder="仓库路径，例如 C:\code\project"
+            aria-label="仓库路径"
+          />
           <button className="primary" type="submit" disabled={busy || !connected || !path.trim()}>
             接入
           </button>

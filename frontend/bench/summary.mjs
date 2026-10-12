@@ -4,7 +4,8 @@ import fs from 'node:fs';
 const run = JSON.parse(fs.readFileSync('bench-results/latest.json', 'utf8'));
 const rows = [];
 const walk = (name, value) => {
-  if (value && typeof value === 'object') for (const [key, inner] of Object.entries(value)) walk(name ? `${name}.${key}` : key, inner);
+  if (value && typeof value === 'object')
+    for (const [key, inner] of Object.entries(value)) walk(name ? `${name}.${key}` : key, inner);
   else rows.push(`| ${name} | ${value} |`);
 };
 walk('', run.results);

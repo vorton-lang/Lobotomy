@@ -10,9 +10,7 @@ export function Sidebar({ width }: { width: number }) {
   return (
     <aside className="sidebar" style={{ width }}>
       <section className="attention" aria-label="等你决定">
-        <h3>
-          等你决定 {attention.length > 0 && <span className="count">{attention.length}</span>}
-        </h3>
+        <h3>等你决定 {attention.length > 0 && <span className="count">{attention.length}</span>}</h3>
         {attention.length === 0 && <p className="muted">现在没有需要你处理的事。</p>}
         {attention.map((a) => (
           <AttentionCard key={attentionKey(a)} attention={a} />

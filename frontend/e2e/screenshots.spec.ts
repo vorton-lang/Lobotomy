@@ -53,10 +53,15 @@ test('screenshots', async ({ page, backend }) => {
     await dialog.getByLabel('完成条件').fill('work.txt 存在，内容为 hi');
     if (title === '写 work.txt') await page.screenshot({ path: `${out}/1-new-task.png` });
     await dialog.getByRole('button', { name: '交给 Malkuth' }).click();
-    if (title === '写 work.txt') await expect(page.locator('.attention .card').filter({ hasText: '等你验收' })).toBeVisible();
+    if (title === '写 work.txt')
+      await expect(page.locator('.attention .card').filter({ hasText: '等你验收' })).toBeVisible();
   }
   await page.screenshot({ path: `${out}/2-main.png` });
-  await page.locator('.attention .card').filter({ hasText: '等你验收' }).getByRole('button', { name: '查看并验收' }).click();
+  await page
+    .locator('.attention .card')
+    .filter({ hasText: '等你验收' })
+    .getByRole('button', { name: '查看并验收' })
+    .click();
   await expect(taskPanel(page, '写 work.txt').getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${out}/3-task-panel.png` });

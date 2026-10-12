@@ -24,7 +24,11 @@ export function ProjectList({ width }: { width: number }) {
   const archived = host.projects.filter((p) => p.state === 'archived');
   return (
     <nav className="projects" aria-label="项目" style={{ width }}>
-      <button className={`project-item ${current === null ? 'selected' : ''}`} aria-current={current === null || undefined} onClick={() => selectProject(null)}>
+      <button
+        className={`project-item ${current === null ? 'selected' : ''}`}
+        aria-current={current === null || undefined}
+        onClick={() => selectProject(null)}
+      >
         <span className="project-name">全部</span>
         <Count n={totalAttention(host)} />
       </button>
@@ -67,7 +71,11 @@ function ProjectItem({ project: p, selected }: { project: ProjectStatus; selecte
           <button className="small" onClick={() => act('retry_open', { project_id: p.id })}>
             重试打开
           </button>
-          <button className="small" onClick={() => act('archive_project', { project_id: p.id })} title="数据保留；之后可以为这个仓库新建项目">
+          <button
+            className="small"
+            onClick={() => act('archive_project', { project_id: p.id })}
+            title="数据保留；之后可以为这个仓库新建项目"
+          >
             归档
           </button>
         </div>
@@ -75,7 +83,12 @@ function ProjectItem({ project: p, selected }: { project: ProjectStatus; selecte
     );
   }
   return (
-    <button className={`project-item ${selected ? 'selected' : ''}`} aria-current={selected || undefined} title={p.repo_path} onClick={() => selectProject(p.id)}>
+    <button
+      className={`project-item ${selected ? 'selected' : ''}`}
+      aria-current={selected || undefined}
+      title={p.repo_path}
+      onClick={() => selectProject(p.id)}
+    >
       {p.busy && <span className="dot running" title="有 turn 在运行" aria-label="有 turn 在运行" role="img" />}
       <span className="project-name">{p.name}</span>
       <Count n={p.attention.length} />

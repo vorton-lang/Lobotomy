@@ -16,8 +16,12 @@ const probe = vi.hoisted(() => ({
 vi.mock('./api/connection', async (original) => ({
   ...(await original<typeof import('./api/connection')>()),
   Connection: class {
-    constructor(_url: string, events: ConnectionEvents) { probe.events = events; }
-    command(params: Record<string, unknown>) { return this.call('command', params); }
+    constructor(_url: string, events: ConnectionEvents) {
+      probe.events = events;
+    }
+    command(params: Record<string, unknown>) {
+      return this.call('command', params);
+    }
     start() {}
     stop() {}
     call(method: string, params: Record<string, unknown>) {
@@ -37,18 +41,46 @@ afterEach(() => {
 });
 
 const snapshot = (permission: 'full' | 'auto_review'): Snapshot => ({
-  seq: 1, project: null, config: null, roles: [], tasks: [], attention: [], quota: [],
-  harnesses: [{ harness: 'codex', permission, models: [], efforts: [] }], live: {},
+  seq: 1,
+  project: null,
+  config: null,
+  roles: [],
+  tasks: [],
+  attention: [],
+  quota: [],
+  harnesses: [{ harness: 'codex', permission, models: [], efforts: [] }],
+  live: {},
 });
 
-const project = (id: string, extra: Partial<HostSnapshot['projects'][number]> = {}): HostSnapshot['projects'][number] => ({
-  id, name: id, data_dir: `/data/${id}`, repo_path: `/repo/${id}`, state: 'running', registered_at: 1, error: null, attention: [], busy: false, ...extra,
+const project = (
+  id: string,
+  extra: Partial<HostSnapshot['projects'][number]> = {},
+): HostSnapshot['projects'][number] => ({
+  id,
+  name: id,
+  data_dir: `/data/${id}`,
+  repo_path: `/repo/${id}`,
+  state: 'running',
+  registered_at: 1,
+  error: null,
+  attention: [],
+  busy: false,
+  ...extra,
 });
 
 /** Angela as the host shows her: open, or not with the reason. */
-const angela = (error: string | null = null, attention: Attention[] = []): AngelaStatus => ({ error, attention, busy: false });
+const angela = (error: string | null = null, attention: Attention[] = []): AngelaStatus => ({
+  error,
+  attention,
+  busy: false,
+});
 
-const host = (...ids: string[]): HostSnapshot => ({ projects: ids.map((id) => project(id)), attention: [], harnesses: [], angela: angela() });
+const host = (...ids: string[]): HostSnapshot => ({
+  projects: ids.map((id) => project(id)),
+  attention: [],
+  harnesses: [],
+  angela: angela(),
+});
 
 /** Answers the oldest request of this method. */
 async function answer(method: string, value: unknown) {
@@ -102,7 +134,13 @@ test('a reply about the project the window left is dropped', async () => {
   vi.useFakeTimers();
   connect('ws://unused');
   useStore.setState({ host: host('p1', 'p2'), project: 'p1' });
-  probe.events!.push({ type: 'events', project: 'p1', events: [{ seq: 2, kind: 'task.updated', command_id: null, caller: null, caller_turn_id: null, entity: 't', payload: {} }] });
+  probe.events!.push({
+    type: 'events',
+    project: 'p1',
+    events: [
+      { seq: 2, kind: 'task.updated', command_id: null, caller: null, caller_turn_id: null, entity: 't', payload: {} },
+    ],
+  });
   await vi.advanceTimersByTimeAsync(120);
   expect(pending('snapshot')[0].params).toEqual({ project: 'p1' });
 
@@ -124,7 +162,13 @@ test('another project’s events refresh the counts, not the window', async () =
   vi.useFakeTimers();
   connect('ws://unused');
   useStore.setState({ host: host('p1', 'p2'), project: 'p1' });
-  probe.events!.push({ type: 'events', project: 'p2', events: [{ seq: 2, kind: 'task.updated', command_id: null, caller: null, caller_turn_id: null, entity: 't', payload: {} }] });
+  probe.events!.push({
+    type: 'events',
+    project: 'p2',
+    events: [
+      { seq: 2, kind: 'task.updated', command_id: null, caller: null, caller_turn_id: null, entity: 't', payload: {} },
+    ],
+  });
   await vi.advanceTimersByTimeAsync(300);
   expect(pending('host')).toHaveLength(1);
   expect(pending('snapshot')).toHaveLength(0);
@@ -151,12 +195,17 @@ test('the window keeps its project while it stays open; at start it shows the on
   // At start: the only open project, else 「全部」.
   expect(chooseProject(others, null, true)).toBe('p3');
   expect(chooseProject(host('p1', 'p2'), null, true)).toBe(null);
-  expect(chooseProject({ projects: [failed, archived], attention: [], harnesses: [], angela: angela() }, null, true)).toBe(null);
+  expect(
+    chooseProject({ projects: [failed, archived], attention: [], harnesses: [], angela: angela() }, null, true),
+  ).toBe(null);
 });
 
 test('the total counts each project’s items, Angela’s, and the host’s quota domains once', () => {
   const accept = { kind: 'accept', task_id: 't', title: 'T', verification_id: 'v' } as const;
-  const quota = { kind: 'quota', domain: { harness: 'claude', account: '', blocked_at: 1, resets_at: null, message: null } } as const;
+  const quota = {
+    kind: 'quota',
+    domain: { harness: 'claude', account: '', blocked_at: 1, resets_at: null, message: null },
+  } as const;
   const held: Attention = { kind: 'unknown_turn', role: 'Angela', turn_id: 'turn1' };
   const counted: HostSnapshot = {
     projects: [project('p1', { attention: [accept] }), project('p2', { attention: [accept, accept] })],
@@ -202,7 +251,8 @@ test('typed commands keep the project and supplied retry id', async () => {
   useStore.setState({ project: 'p1' });
   const created = run('create_task', { title: 'Task', body: '', criteria: '', executor: 'Malkuth' }, 'retry-id');
   expect(pending('command')[0].params).toEqual({
-    name: 'create_task', project: 'p1',
+    name: 'create_task',
+    project: 'p1',
     args: { request_id: 'retry-id', title: 'Task', body: '', criteria: '', executor: 'Malkuth' },
   });
   await answer('command', { id: 'task' });

@@ -34,7 +34,17 @@ export function useNow(active = true): number {
  * virtualized thread, the row's positioning would place and clip it (#15). Clicks inside do not
  * reach the components it was opened from.
  */
-export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+export function Modal({
+  title,
+  onClose,
+  children,
+  wide,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  wide?: boolean;
+}) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);

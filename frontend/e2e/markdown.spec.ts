@@ -15,11 +15,44 @@ async function openStream(page: Page) {
       const { id, method } = JSON.parse(String(raw));
       const snapshot: Snapshot = {
         seq: 1,
-        project: { id: 'project', repo_path: '/project', branch: 'main', author_name: 'Test', author_email: 'test@example.com', integration: 'base', integration_rev: 1, previewed: 'base' },
-        config: null, tasks: [], attention: [], quota: [], harnesses: [], live,
-        roles: [{ name: 'Malkuth', kind: 'worker', harness: 'claude', model: null, effort: null, slot: null, task_id: null, unfinished: null, last_turn: null, hold: null, stalled: null, outside: null, workspace: null, queued_messages: 0 }],
+        project: {
+          id: 'project',
+          repo_path: '/project',
+          branch: 'main',
+          author_name: 'Test',
+          author_email: 'test@example.com',
+          integration: 'base',
+          integration_rev: 1,
+          previewed: 'base',
+        },
+        config: null,
+        tasks: [],
+        attention: [],
+        quota: [],
+        harnesses: [],
+        live,
+        roles: [
+          {
+            name: 'Malkuth',
+            kind: 'worker',
+            harness: 'claude',
+            model: null,
+            effort: null,
+            slot: null,
+            task_id: null,
+            unfinished: null,
+            last_turn: null,
+            hold: null,
+            stalled: null,
+            outside: null,
+            workspace: null,
+            queued_messages: 0,
+          },
+        ],
       };
-      route.send(JSON.stringify({ id, result: method === 'host' ? hostSnapshot() : method === 'snapshot' ? snapshot : thread }));
+      route.send(
+        JSON.stringify({ id, result: method === 'host' ? hostSnapshot() : method === 'snapshot' ? snapshot : thread }),
+      );
     });
   });
   await page.goto(`${origin}/?backend=ws://127.0.0.1:9999/gui&token=markdown-test`);
@@ -27,12 +60,28 @@ async function openStream(page: Page) {
   return {
     update(text: string, second?: string) {
       const message = (text: string) => ({ kind: 'agent_message' as const, content: { text }, started_at: 1 });
-      live = { turn: { role: 'Malkuth', started_at: 1, items: { reply: message(text), ...(second === undefined ? {} : { second: message(second) }) } } };
+      live = {
+        turn: {
+          role: 'Malkuth',
+          started_at: 1,
+          items: { reply: message(text), ...(second === undefined ? {} : { second: message(second) }) },
+        },
+      };
       socket.send(JSON.stringify({ type: 'live', project: PROJECT, live }));
     },
     complete(text?: string) {
       if (text !== undefined) {
-        thread.items = [{ id: 'reply', turn_id: 'turn', seq: 1, command_id: null, created_at: 1, kind: 'agent_message', content: { text } }];
+        thread.items = [
+          {
+            id: 'reply',
+            turn_id: 'turn',
+            seq: 1,
+            command_id: null,
+            created_at: 1,
+            kind: 'agent_message',
+            content: { text },
+          },
+        ];
         socket.send(JSON.stringify({ type: 'thread', project: PROJECT, role: 'Malkuth' }));
       }
       live = {};
@@ -101,7 +150,10 @@ test('streaming Markdown ignores stale worker replies and changes mode on the sa
         // oxlint-disable-next-line typescript/no-this-alias
         worker = this;
         this.addEventListener('message', (event) => {
-          if (!releasing) { pending.push(event); event.stopImmediatePropagation(); }
+          if (!releasing) {
+            pending.push(event);
+            event.stopImmediatePropagation();
+          }
         });
       }
     };
@@ -121,16 +173,23 @@ test('streaming Markdown ignores stale worker replies and changes mode on the sa
     const dom = 'react-dom/client';
     const common = '/src/components/common.tsx';
     // Vite resolves bare imports in source modules, so use its already-served dependency URLs here.
-    const { default: { createElement } } = await import(`/node_modules/.vite/deps/${react}.js`);
-    const { default: { createRoot } } = await import(`/node_modules/.vite/deps/${dom.replace('/', '_')}.js`);
+    const {
+      default: { createElement },
+    } = await import(`/node_modules/.vite/deps/${react}.js`);
+    const {
+      default: { createRoot },
+    } = await import(`/node_modules/.vite/deps/${dom.replace('/', '_')}.js`);
     const { Markdown } = await import(common);
     const host = document.createElement('section');
     host.id = 'markdown-probe';
     document.body.append(host);
     const root = createRoot(host);
-    Object.assign(window, { showMarkdown: (text: string, streaming: boolean) => root.render(createElement(Markdown, { text, streaming })) });
+    Object.assign(window, {
+      showMarkdown: (text: string, streaming: boolean) => root.render(createElement(Markdown, { text, streaming })),
+    });
   });
-  const show = (text: string, streaming: boolean) => page.evaluate(({ text, streaming }) => (window as any).showMarkdown(text, streaming), { text, streaming });
+  const show = (text: string, streaming: boolean) =>
+    page.evaluate(({ text, streaming }) => (window as any).showMarkdown(text, streaming), { text, streaming });
   const pending = () => page.evaluate(() => (window as any).markdownReplies.length);
   const release = (index: number) => page.evaluate((n) => (window as any).releaseMarkdown(n), index);
   const rendered = page.locator('#markdown-probe .markdown');

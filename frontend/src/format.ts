@@ -107,7 +107,11 @@ export function toolRunning(turn: LiveTurn | undefined): boolean {
   return Object.values(turn?.items ?? {}).some((item) => jsonObject(item.content).status === 'in_progress');
 }
 
-export const VERIFICATION_LABEL: Record<Verification['state'], string> = { running: '进行中', passed: '通过', failed: '未通过' };
+export const VERIFICATION_LABEL: Record<Verification['state'], string> = {
+  running: '进行中',
+  passed: '通过',
+  failed: '未通过',
+};
 
 export const PERMISSION_LABEL: Record<Permission, string> = { full: '完全放开', auto_review: '自动审批' };
 
@@ -144,7 +148,7 @@ export function shortSha(commit: string | null | undefined): string {
 
 /** Read only the fields a display needs from dynamic JSON; these are not wire validators. */
 export function jsonObject(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 export function jsonArray(value: unknown): unknown[] {
@@ -161,7 +165,12 @@ export function captureChanges(capture: Capture | undefined): string[] {
 
 export function isBlob(value: unknown): value is BlobRef {
   const ref = jsonObject(value);
-  return typeof ref.blob === 'string' && typeof ref.size === 'number' && typeof ref.head === 'string' && typeof ref.tail === 'string';
+  return (
+    typeof ref.blob === 'string' &&
+    typeof ref.size === 'number' &&
+    typeof ref.head === 'string' &&
+    typeof ref.tail === 'string'
+  );
 }
 
 /** A text field as the thread shows it: whole, or the head and tail of one in the blob store. */
@@ -206,7 +215,18 @@ export function commandSummary(raw: unknown): { line: string; size: string | nul
 }
 
 /** The input fields that say what a tool works on, in the order they are looked for. */
-const TOOL_SUBJECT = ['file_path', 'notebook_path', 'pattern', 'path', 'query', 'url', 'command', 'subject', 'description', 'prompt'];
+const TOOL_SUBJECT = [
+  'file_path',
+  'notebook_path',
+  'pattern',
+  'path',
+  'query',
+  'url',
+  'command',
+  'subject',
+  'description',
+  'prompt',
+];
 
 /**
  * What a tool call of the harness's own works on, in one line: the file it reads, the pattern it
@@ -258,7 +278,11 @@ export function previewLine(text: string, max = 60): string {
       .replace(/\*([^*\s][^*]*)\*/g, '$1')
       .replace(/`([^`]*)`/g, '$1')
       .trim();
-  const line = text.split('\n').map(plain).find((l) => /[\p{L}\p{N}]/u.test(l)) ?? '';
+  const line =
+    text
+      .split('\n')
+      .map(plain)
+      .find((l) => /[\p{L}\p{N}]/u.test(l)) ?? '';
   return line.length > max ? `${line.slice(0, max)}…` : line;
 }
 
@@ -429,16 +453,26 @@ export function quotaNote(domain: Domain): string {
 
 /** What a capture the runtime stopped holds back, one line per path. */
 export function stoppedPaths(capture: Capture): string[] {
-  if (capture.state === 'oversized') return jsonArray(jsonObject(capture.detail).files).map(jsonObject).map((f) => `${textOf(f.path)}（${bytes(jsonNumber(f.size))}）`);
-  return jsonArray(jsonObject(capture.detail).paths).map(jsonObject).map((p) => `${textOf(p.path)}（${textOf(p.kind)}）`);
+  if (capture.state === 'oversized')
+    return jsonArray(jsonObject(capture.detail).files)
+      .map(jsonObject)
+      .map((f) => `${textOf(f.path)}（${bytes(jsonNumber(f.size))}）`);
+  return jsonArray(jsonObject(capture.detail).paths)
+    .map(jsonObject)
+    .map((p) => `${textOf(p.path)}（${textOf(p.kind)}）`);
 }
 
-export const REPORT_LABEL: Record<ReportArgs['status'], string> = { progress: '进展', blocked: '需要你决定', done: '完成' };
+export const REPORT_LABEL: Record<ReportArgs['status'], string> = {
+  progress: '进展',
+  blocked: '需要你决定',
+  done: '完成',
+};
 
 /** Why a report the backend recorded changed nothing (#14). */
 const VOID_REPORT: Partial<Record<ReportEffect, string>> = {
   late: '这次报告没有生效：它所属的执行轮已经结束，报告没有推进任务。',
-  no_task: '这次报告没有生效：这个 turn 不属于任何任务，报告没有推进任务。它做的改动不会被验收或发布，要保留就建成任务。',
+  no_task:
+    '这次报告没有生效：这个 turn 不属于任何任务，报告没有推进任务。它做的改动不会被验收或发布，要保留就建成任务。',
 };
 
 /** The report a Lobotomy tool call recorded, if it was one. */
@@ -561,7 +595,8 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
         // A continue note is not a message; the turn's input carries it, before the messages.
         const note = continueNote(turn.input);
         if (note !== null) rows.push({ key: `input-${turn.id}`, kind: 'input', turn, note });
-        for (const message of byTurn.get(turn.id) ?? []) rows.push({ key: `msg-${message.id}`, kind: 'message', message });
+        for (const message of byTurn.get(turn.id) ?? [])
+          rows.push({ key: `msg-${message.id}`, kind: 'message', message });
       }
     }
     if (item.kind === 'input') continue;
@@ -570,7 +605,8 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
   for (const [turnId, turn] of Object.entries(live)) {
     if (turn.role !== thread.role) continue;
     const items = Object.entries(turn.items);
-    if (items.length === 0) rows.push({ key: `running-${turnId}`, kind: 'running', turnId, role: turn.role, since: turn.started_at });
+    if (items.length === 0)
+      rows.push({ key: `running-${turnId}`, kind: 'running', turnId, role: turn.role, since: turn.started_at });
     items.forEach(([itemId, item], i) =>
       rows.push({ key: `live-${turnId}-${itemId}`, kind: 'live', turnId, itemId, item, last: i === items.length - 1 }),
     );
@@ -614,7 +650,9 @@ function decisionLabel(kind: string, actor: string): string {
 
 /** What a closing decision let go: the user's messages the executor never got (#14). */
 function droppedNote(detail: unknown): string {
-  const dropped = jsonArray(jsonObject(detail).dropped_messages).map(jsonObject).map((message) => ({ body: textOf(message.body) }));
+  const dropped = jsonArray(jsonObject(detail).dropped_messages)
+    .map(jsonObject)
+    .map((message) => ({ body: textOf(message.body) }));
   if (dropped.length === 0) return '';
   const quoted = dropped.map((m) => `「${m.body.length > 40 ? `${m.body.slice(0, 40)}…` : m.body}」`).join('');
   return `；${dropped.length} 条消息没有投递：${quoted}`;
@@ -674,14 +712,25 @@ export function workRange(detail: TaskDetail): WorkRange | null {
   const verification = detail.verifications.at(-1);
   const done = verification?.commit_id && verification.state !== 'running' ? verification : null;
   if (latest && done?.attempt_id === latest.id) {
-    return { from: done.base, to: done.commit_id!, label: `第 ${latest.seq} 轮的候选成果，已合到集成版本 ${shortSha(done.base)} 上`, earlier: false };
+    return {
+      from: done.base,
+      to: done.commit_id!,
+      label: `第 ${latest.seq} 轮的候选成果，已合到集成版本 ${shortSha(done.base)} 上`,
+      earlier: false,
+    };
   }
   const captures = detail.captures.filter((c) => c.commit_id && latest && c.attempt_id === latest.id);
   const candidate = captures.filter((c) => c.kind === 'candidate').at(-1);
-  if (latest && candidate) return { from: candidate.base, to: candidate.commit_id!, label: `第 ${latest.seq} 轮的候选成果`, earlier: false };
+  if (latest && candidate)
+    return { from: candidate.base, to: candidate.commit_id!, label: `第 ${latest.seq} 轮的候选成果`, earlier: false };
   const last = captures.at(-1);
   if (latest && last) {
-    return { from: last.base, to: last.commit_id!, label: `第 ${latest.seq} 轮目前的工作（${clock(last.created_at)} 采集），还不是候选成果`, earlier: false };
+    return {
+      from: last.base,
+      to: last.commit_id!,
+      label: `第 ${latest.seq} 轮目前的工作（${clock(last.created_at)} 采集），还不是候选成果`,
+      earlier: false,
+    };
   }
   if (done) {
     const seq = detail.attempts.find((a) => a.id === done.attempt_id)?.seq;
@@ -707,8 +756,14 @@ export function deliveryReport(attempts: Attempt[]) {
 export function trialCandidate(detail: TaskDetail): string | null {
   const latest = detail.attempts.at(-1);
   if (!latest?.candidate_id) return null;
-  return detail.captures.find((capture) =>
-    capture.id === latest.candidate_id && capture.task_id === detail.task.id &&
-    capture.attempt_id === latest.id && capture.kind === 'candidate' && capture.state === 'pinned',
-  )?.commit_id ?? null;
+  return (
+    detail.captures.find(
+      (capture) =>
+        capture.id === latest.candidate_id &&
+        capture.task_id === detail.task.id &&
+        capture.attempt_id === latest.id &&
+        capture.kind === 'candidate' &&
+        capture.state === 'pinned',
+    )?.commit_id ?? null
+  );
 }

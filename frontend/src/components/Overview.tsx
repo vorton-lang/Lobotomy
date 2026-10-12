@@ -18,9 +18,7 @@ export function Overview() {
   return (
     <section className="overview" aria-label="全部项目">
       {angela?.error && <p className="error">Angela 没有打开：{angela.error}</p>}
-      <h2>
-        等你决定 {total > 0 && <span className="count">{total}</span>}
-      </h2>
+      <h2>等你决定 {total > 0 && <span className="count">{total}</span>}</h2>
       {total === 0 && <p className="muted">现在没有需要你处理的事。</p>}
       {angelaOpen(host) && angela.attention.length > 0 && (
         <section className="group" aria-label="Angela">

@@ -10,7 +10,8 @@ export function escapeHtml(text: string): string {
  */
 export function safeHref(href: string): string | null {
   try {
-    if (/^\/?[A-Za-z]:[\\/]/.test(href)) return new URL(`file:///${href.replace(/^\//, '').replaceAll('\\', '/')}`).href;
+    if (/^\/?[A-Za-z]:[\\/]/.test(href))
+      return new URL(`file:///${href.replace(/^\//, '').replaceAll('\\', '/')}`).href;
     if (/^\/[^/\\]/.test(href)) return new URL(`file://${href}`).href;
     const url = new URL(href);
     return ['http:', 'https:', 'mailto:', 'file:'].includes(url.protocol) ? url.href : null;

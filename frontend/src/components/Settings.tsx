@@ -35,7 +35,11 @@ export function Settings() {
   const page = settings.page;
   const is = (other: SettingsPage) => JSON.stringify(other) === JSON.stringify(page);
   const item = (target: SettingsPage, label: string) => (
-    <button className={`settings-item ${is(target) ? 'selected' : ''}`} aria-current={is(target) || undefined} onClick={() => showSettingsPage(target)}>
+    <button
+      className={`settings-item ${is(target) ? 'selected' : ''}`}
+      aria-current={is(target) || undefined}
+      onClick={() => showSettingsPage(target)}
+    >
       {label}
     </button>
   );
@@ -109,7 +113,13 @@ function Segmented<T extends string>({
     <div className="segmented" role="radiogroup" aria-label={label}>
       {options.map((o) => (
         <label key={o.value} className={o.value === value ? 'selected' : ''}>
-          <input type="radio" name={name} checked={o.value === value} disabled={disabled} onChange={() => onChange(o.value)} />
+          <input
+            type="radio"
+            name={name}
+            checked={o.value === value}
+            disabled={disabled}
+            onChange={() => onChange(o.value)}
+          />
           {o.label}
         </label>
       ))}
@@ -118,7 +128,9 @@ function Segmented<T extends string>({
 }
 
 const permissionNote = (permission: Permission, harness: string) =>
-  permission === 'full' ? '不审批，不用沙箱。' : `在沙箱中工作，越界的操作由 ${harness} 自动审核。管理员不允许完全放开时用这一项。`;
+  permission === 'full'
+    ? '不审批，不用沙箱。'
+    : `在沙箱中工作，越界的操作由 ${harness} 自动审核。管理员不允许完全放开时用这一项。`;
 
 /** Each harness's permission mode, for every project (harness-adapter.md §1.9). */
 function Permissions({ harnesses }: { harnesses: HarnessView[] }) {
@@ -184,8 +196,18 @@ function ModelChoice({ target, role, harness }: { target: string; role: RoleView
   if (harness.models.length === 0) {
     return (
       <>
-        <Typed label={`${role.name} 在 ${name} 上的模型`} placeholder="默认模型" value={role.model} onCommit={(model) => choose(model, role.effort)} />
-        <Typed label={`${role.name} 在 ${name} 上的推理强度`} placeholder="默认强度" value={role.effort} onCommit={(effort) => choose(role.model, effort)} />
+        <Typed
+          label={`${role.name} 在 ${name} 上的模型`}
+          placeholder="默认模型"
+          value={role.model}
+          onCommit={(model) => choose(model, role.effort)}
+        />
+        <Typed
+          label={`${role.name} 在 ${name} 上的推理强度`}
+          placeholder="默认强度"
+          value={role.effort}
+          onCommit={(effort) => choose(role.model, effort)}
+        />
       </>
     );
   }
@@ -211,7 +233,11 @@ function ModelChoice({ target, role, harness }: { target: string; role: RoleView
         ))}
         {role.model !== null && !model && <option value={role.model}>{role.model}</option>}
       </select>
-      <select aria-label={`${role.name} 在 ${name} 上的推理强度`} value={role.effort ?? ''} onChange={(e) => void choose(role.model, e.target.value || null)}>
+      <select
+        aria-label={`${role.name} 在 ${name} 上的推理强度`}
+        value={role.effort ?? ''}
+        onChange={(e) => void choose(role.model, e.target.value || null)}
+      >
         <option value="">{model?.default_effort ? `默认（${model.default_effort}）` : '默认强度'}</option>
         {efforts.map((effort) => (
           <option key={effort} value={effort}>
@@ -225,7 +251,17 @@ function ModelChoice({ target, role, harness }: { target: string; role: RoleView
 }
 
 /** A name typed in, saved when the field loses focus or on Enter; empty means the default. */
-function Typed({ label, placeholder, value, onCommit }: { label: string; placeholder: string; value: string | null; onCommit: (value: string | null) => void }) {
+function Typed({
+  label,
+  placeholder,
+  value,
+  onCommit,
+}: {
+  label: string;
+  placeholder: string;
+  value: string | null;
+  onCommit: (value: string | null) => void;
+}) {
   const [text, setText] = useState(value ?? '');
   useEffect(() => setText(value ?? ''), [value]);
   const commit = () => {
@@ -383,14 +419,18 @@ function ConfigForm({ project, version, config }: { project: string; version: nu
     }
   }, [newer, version, config, dirty]);
   const set = (patch: Partial<Form>) => setForm({ ...form, ...patch });
-  const setCheck = (i: number, patch: Partial<Check>) => set({ checks: form.checks.map((c, j) => (i === j ? { ...c, ...patch } : c)) });
+  const setCheck = (i: number, patch: Partial<Check>) =>
+    set({ checks: form.checks.map((c, j) => (i === j ? { ...c, ...patch } : c)) });
   const reset = () => {
     setBase({ version, config });
     setForm(formOf(config));
   };
   const save = async () => {
     setSaving(true);
-    const saved = await runIn(project, 'edit_project_config', { expected_version: base.version, config: configOf(form) });
+    const saved = await runIn(project, 'edit_project_config', {
+      expected_version: base.version,
+      config: configOf(form),
+    });
     setSaving(false);
     if (saved === undefined) return;
     toast(`已保存为第 ${saved.version} 版`);
@@ -412,22 +452,47 @@ function ConfigForm({ project, version, config }: { project: string; version: nu
       {form.checks.length === 0 && <p className="muted">没有检查命令：候选成果直接进入验收。</p>}
       {form.checks.map((check, i) => (
         <div key={i} className="check-row">
-          <input value={check.command} onChange={(e) => setCheck(i, { command: e.target.value })} placeholder="例如 cargo test" aria-label="检查命令" />
-          <input type="number" min={1} value={check.timeout_secs} onChange={(e) => setCheck(i, { timeout_secs: Number(e.target.value) })} aria-label="超时（秒）" />
+          <input
+            value={check.command}
+            onChange={(e) => setCheck(i, { command: e.target.value })}
+            placeholder="例如 cargo test"
+            aria-label="检查命令"
+          />
+          <input
+            type="number"
+            min={1}
+            value={check.timeout_secs}
+            onChange={(e) => setCheck(i, { timeout_secs: Number(e.target.value) })}
+            aria-label="超时（秒）"
+          />
           <span className="muted">秒</span>
-          <button type="button" className="icon" onClick={() => set({ checks: form.checks.filter((_, j) => j !== i) })} aria-label="删除">
+          <button
+            type="button"
+            className="icon"
+            onClick={() => set({ checks: form.checks.filter((_, j) => j !== i) })}
+            aria-label="删除"
+          >
             <X {...ICON} />
           </button>
         </div>
       ))}
-      <button type="button" className="small" onClick={() => set({ checks: [...form.checks, { command: '', timeout_secs: 600 }] })}>
+      <button
+        type="button"
+        className="small"
+        onClick={() => set({ checks: [...form.checks, { command: '', timeout_secs: 600 }] })}
+      >
         + 添加检查命令
       </button>
 
       <h3 className="settings-section">采集范围</h3>
       <label>
         始终排除（gitignore 写法，每行一条）
-        <textarea value={form.excluded} onChange={(e) => set({ excluded: e.target.value })} rows={3} placeholder={'target/\nnode_modules/'} />
+        <textarea
+          value={form.excluded}
+          onChange={(e) => set({ excluded: e.target.value })}
+          rows={3}
+          placeholder={'target/\nnode_modules/'}
+        />
       </label>
       <label>
         强制采集（路径前缀，每行一条）
@@ -436,9 +501,21 @@ function ConfigForm({ project, version, config }: { project: string; version: nu
 
       <h3 className="settings-section">体积护栏</h3>
       <Row label="一次采集新增的上限" description="超过任一上限时采集停下，等你决定。">
-        <input type="number" min={0} value={form.maxFiles} onChange={(e) => set({ maxFiles: Number(e.target.value) })} aria-label="新增文件数上限" />
+        <input
+          type="number"
+          min={0}
+          value={form.maxFiles}
+          onChange={(e) => set({ maxFiles: Number(e.target.value) })}
+          aria-label="新增文件数上限"
+        />
         <span className="muted">个文件</span>
-        <input type="number" min={0} value={form.maxMb} onChange={(e) => set({ maxMb: Number(e.target.value) })} aria-label="新增大小上限" />
+        <input
+          type="number"
+          min={0}
+          value={form.maxMb}
+          onChange={(e) => set({ maxMb: Number(e.target.value) })}
+          aria-label="新增大小上限"
+        />
         <span className="muted">MB</span>
       </Row>
 

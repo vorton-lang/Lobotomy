@@ -14,7 +14,12 @@ export function Consensus() {
   if (!ledger) return null;
   const groups = [
     { key: 'user', name: '全局', entries: ledger.user.filter(ledgerHolds), unavailable: null },
-    ...ledger.projects.map((p) => ({ key: p.id, name: p.name, entries: p.entries.filter(ledgerHolds), unavailable: p.unavailable })),
+    ...ledger.projects.map((p) => ({
+      key: p.id,
+      name: p.name,
+      entries: p.entries.filter(ledgerHolds),
+      unavailable: p.unavailable,
+    })),
   ].filter((g) => g.entries.length > 0 || g.unavailable);
   return (
     <section className="overview consensus" aria-label="共识">

@@ -85,11 +85,18 @@ export function stats(values: number[]) {
 /** Long tasks since `since` (ms after navigation). */
 export async function longTasks({ page }: Probe, since = 0) {
   const tasks = await page.evaluate(
-    (since) => (window as unknown as { __bench: { longtasks: { start: number; duration: number }[] } }).__bench.longtasks.filter((t) => t.start >= since),
+    (since) =>
+      (window as unknown as { __bench: { longtasks: { start: number; duration: number }[] } }).__bench.longtasks.filter(
+        (t) => t.start >= since,
+      ),
     since,
   );
   const durations = tasks.map((t) => t.duration);
-  return { count: tasks.length, total_ms: round(durations.reduce((a, b) => a + b, 0)), max_ms: round(Math.max(0, ...durations)) };
+  return {
+    count: tasks.length,
+    total_ms: round(durations.reduce((a, b) => a + b, 0)),
+    max_ms: round(Math.max(0, ...durations)),
+  };
 }
 
 /** Response times of one method since the last call for it. */
@@ -166,5 +173,9 @@ export async function memory({ cdp }: Probe) {
   await cdp.send('HeapProfiler.collectGarbage');
   const { metrics } = await cdp.send('Performance.getMetrics');
   const metric = (name: string) => metrics.find((m) => m.name === name)?.value ?? 0;
-  return { heap_mb: round(metric('JSHeapUsedSize') / 1024 / 1024), dom_nodes: metric('Nodes'), listeners: metric('JSEventListeners') };
+  return {
+    heap_mb: round(metric('JSHeapUsedSize') / 1024 / 1024),
+    dom_nodes: metric('Nodes'),
+    listeners: metric('JSEventListeners'),
+  };
 }

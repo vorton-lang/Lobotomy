@@ -11,13 +11,21 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(here, '..', '..', 'backend');
-const exe = process.env.LOBOTOMYD ?? path.join(backendDir, 'target', 'release', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
+const exe =
+  process.env.LOBOTOMYD ??
+  path.join(backendDir, 'target', 'release', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
 const fakeCodex = path.join(backendDir, 'crates', 'lobotomyd', 'tests', 'fixtures', 'fake-codex.mjs');
 const fakeClaude = path.join(backendDir, 'crates', 'lobotomyd', 'tests', 'fixtures', 'fake-claude.mjs');
 export const infoFile = path.join(os.tmpdir(), 'lobotomy-bench.json');
 
 /** Turns that make the thread: four of 600 items, then a huge output and unclosed Markdown. */
-export const TURNS = ['FAKE:many=600', 'FAKE:many=600', 'FAKE:many=600', 'FAKE:many=600', 'FAKE:huge FAKE:unclosed FAKE:marker=newest'];
+export const TURNS = [
+  'FAKE:many=600',
+  'FAKE:many=600',
+  'FAKE:many=600',
+  'FAKE:many=600',
+  'FAKE:huge FAKE:unclosed FAKE:marker=newest',
+];
 export const FIRST_TASK = '基准数据起点';
 /** Only the first turn's brief says this; every turn's divider names the task. */
 export const START_MARKER = `任务：${FIRST_TASK}（第 1 轮执行）`;
@@ -45,13 +53,16 @@ function freePort(): Promise<number> {
 
 export function startBackend(info: Pick<BenchInfo, 'backend' | 'root'>) {
   const log = fs.openSync(path.join(info.root, 'backend.log'), 'a');
-  const child = spawn(info.backend.exe, info.backend.args, { env: { ...process.env, ...info.backend.env }, stdio: ['ignore', log, log] });
+  const child = spawn(info.backend.exe, info.backend.args, {
+    env: { ...process.env, ...info.backend.env },
+    stdio: ['ignore', log, log],
+  });
   child.unref();
   return child;
 }
 
 export async function waitForFile(file: string, ms = 20_000) {
-  for (const end = Date.now() + ms; Date.now() < end; ) {
+  for (const end = Date.now() + ms; Date.now() < end;) {
     if (fs.existsSync(file)) return;
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -87,12 +98,16 @@ async function client(url: string) {
 type Snapshot = { attention: { kind: string; turn_id?: string }[] };
 
 /** Waits until the executor's turn after `previous` has ended and been captured. */
-async function turnDone(call: <T>(m: string, p?: Record<string, unknown>) => Promise<T>, previous: string | null): Promise<string> {
-  for (const end = Date.now() + 120_000; Date.now() < end; ) {
+async function turnDone(
+  call: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
+  previous: string | null,
+): Promise<string> {
+  for (const end = Date.now() + 120_000; Date.now() < end;) {
     const snapshot = await call<Snapshot>('snapshot');
     const stalled = snapshot.attention.find((a) => a.kind === 'stalled');
     if (stalled?.turn_id && stalled.turn_id !== previous) return stalled.turn_id;
-    if (snapshot.attention.some((a) => a.kind === 'hold')) throw new Error(`a turn did not end normally: ${JSON.stringify(snapshot.attention)}`);
+    if (snapshot.attention.some((a) => a.kind === 'hold'))
+      throw new Error(`a turn did not end normally: ${JSON.stringify(snapshot.attention)}`);
     await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error('a data set turn did not end in time');

@@ -32,7 +32,10 @@ export function TrialControls({ detail }: { detail: TaskDetail }) {
       }
     };
     void refresh();
-    return () => { disposed = true; clearTimeout(timer); };
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+    };
   }, [taskId, status]);
 
   const update = (trial: TrialView, keepClosed = true) => {
@@ -53,9 +56,15 @@ export function TrialControls({ detail }: { detail: TaskDetail }) {
       {latest?.trial ? (
         <>
           {latest.trial.purpose && <p>{latest.trial.purpose}</p>}
-          <p className="muted">候选版本：{candidate ? <code title={candidate}>{shortSha(candidate)}</code> : '尚未固定'}</p>
-          <pre className="trial-command"><code>{latest.trial.command}</code></pre>
-          <p className="muted">点击后会在后端所在电脑的桌面终端中运行命令，输入和输出都在该终端中。终端打开不代表应用已就绪，请查看终端输出。</p>
+          <p className="muted">
+            候选版本：{candidate ? <code title={candidate}>{shortSha(candidate)}</code> : '尚未固定'}
+          </p>
+          <pre className="trial-command">
+            <code>{latest.trial.command}</code>
+          </pre>
+          <p className="muted">
+            点击后会在后端所在电脑的桌面终端中运行命令，输入和输出都在该终端中。终端打开不代表应用已就绪，请查看终端输出。
+          </p>
           <LaunchTrial
             key={`${latest.id}:${candidate}`}
             attempt={latest}
@@ -67,10 +76,18 @@ export function TrialControls({ detail }: { detail: TaskDetail }) {
           />
           {!candidate && <p className="muted">候选成果尚未固定，固定后才能体验。</p>}
         </>
-      ) : <p className="muted">本轮未提供体验命令。</p>}
-      {status !== 'open' ? <p className="muted">连接恢复后才能更新体验状态。</p>
-        : error ? <p className="error" role="status">无法读取体验状态：{error}</p>
-        : trials === null && <p className="muted">正在读取体验状态…</p>}
+      ) : (
+        <p className="muted">本轮未提供体验命令。</p>
+      )}
+      {status !== 'open' ? (
+        <p className="muted">连接恢复后才能更新体验状态。</p>
+      ) : error ? (
+        <p className="error" role="status">
+          无法读取体验状态：{error}
+        </p>
+      ) : (
+        trials === null && <p className="muted">正在读取体验状态…</p>
+      )}
       {!!trials?.length && (
         <div className="trial-list" aria-label="已启动的体验">
           {trials.map((trial) => (
@@ -88,7 +105,13 @@ export function TrialControls({ detail }: { detail: TaskDetail }) {
   );
 }
 
-function LaunchTrial({ attempt, candidate, disabled, opened, onStarted }: {
+function LaunchTrial({
+  attempt,
+  candidate,
+  disabled,
+  opened,
+  onStarted,
+}: {
   attempt: Attempt;
   candidate: string | null;
   disabled: boolean;
@@ -108,7 +131,12 @@ function LaunchTrial({ attempt, candidate, disabled, opened, onStarted }: {
   );
 }
 
-function TrialTerminal({ trial, earlier, connected, onStopped }: {
+function TrialTerminal({
+  trial,
+  earlier,
+  connected,
+  onStopped,
+}: {
   trial: TrialView;
   earlier: boolean;
   connected: boolean;
@@ -121,7 +149,9 @@ function TrialTerminal({ trial, earlier, connected, onStopped }: {
   return (
     <article className={`card trial-terminal${earlier ? ' earlier' : ''}`} aria-label={`第 ${trial.round} 轮体验`}>
       <p>
-        <strong>第 {trial.round} 轮 · <code title={trial.candidate}>{shortSha(trial.candidate)}</code></strong>{' '}
+        <strong>
+          第 {trial.round} 轮 · <code title={trial.candidate}>{shortSha(trial.candidate)}</code>
+        </strong>{' '}
         {earlier && <span className="badge">旧轮体验</span>}{' '}
         <span className="badge">{trial.state === 'open' ? '终端已打开' : '终端已关闭'}</span>
       </p>
@@ -130,12 +160,20 @@ function TrialTerminal({ trial, earlier, connected, onStopped }: {
       {trial.state === 'open' && (
         <>
           {trial.purpose && <p>{trial.purpose}</p>}
-          <pre className="trial-command"><code>{trial.command}</code></pre>
-          <p className="muted">运行目录：<code>{trial.directory}</code></p>
+          <pre className="trial-command">
+            <code>{trial.command}</code>
+          </pre>
+          <p className="muted">
+            运行目录：<code>{trial.directory}</code>
+          </p>
         </>
       )}
       {trial.error && <p className="error">{trial.error}</p>}
-      {trial.state === 'open' && <button disabled={!connected || busy} onClick={stop}>{busy ? '正在停止…' : '停止体验'}</button>}
+      {trial.state === 'open' && (
+        <button disabled={!connected || busy} onClick={stop}>
+          {busy ? '正在停止…' : '停止体验'}
+        </button>
+      )}
     </article>
   );
 }

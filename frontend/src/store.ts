@@ -1,7 +1,15 @@
 // The GUI's state: a projection of the backend (frontend.md §0). The backend is the authority;
 // after any doubt (reconnect, resync) the store reloads instead of patching.
 
-import type { ReadMethod, ReadArgs, ReadResult, CommandName, CommandArgs, CommandParams, CommandResult } from './api/methods';
+import type {
+  ReadMethod,
+  ReadArgs,
+  ReadResult,
+  CommandName,
+  CommandArgs,
+  CommandParams,
+  CommandResult,
+} from './api/methods';
 import { useCallback, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { Connection, RequestFailed, type Status } from './api/connection';
@@ -61,9 +69,7 @@ export interface SearchState {
  * project. The settings choose their page themselves; where the window is does not change it.
  */
 export type SettingsPage =
-  | { kind: 'permissions' }
-  | { kind: 'angela' }
-  | { kind: 'project'; project: string; tab: 'general' | 'checks' };
+  { kind: 'permissions' } | { kind: 'angela' } | { kind: 'project'; project: string; tab: 'general' | 'checks' };
 
 /** The settings while they are open, with the snapshot of the page's project or of Angela. */
 export interface SettingsState {
@@ -167,7 +173,9 @@ export const angelaOpen = (host: HostSnapshot | null): boolean => host?.angela?.
  * What the window's requests are about: the project it shows, or on 「全部」 Angela when she is
  * open; `null` when there is neither.
  */
-export function scope(state: { project: string | null; host: HostSnapshot | null } = useStore.getState()): string | null {
+export function scope(
+  state: { project: string | null; host: HostSnapshot | null } = useStore.getState(),
+): string | null {
   return state.project ?? (angelaOpen(state.host) ? ANGELA : null);
 }
 
@@ -200,10 +208,14 @@ export function call<M extends ReadMethod>(method: M, ...args: ReadArgs<M>): Pro
   const params = args[0] ?? {};
   const project = scope();
   const scoped = method === 'host' || project === null || 'project' in params ? params : { ...params, project };
-  return connection.call(method, ...[scoped] as ReadArgs<M>);
+  return connection.call(method, ...([scoped] as ReadArgs<M>));
 }
 
-export function sendCommand<C extends CommandName>(name: C, args: CommandParams<C>, project = scope()): Promise<CommandResult<C>> {
+export function sendCommand<C extends CommandName>(
+  name: C,
+  args: CommandParams<C>,
+  project = scope(),
+): Promise<CommandResult<C>> {
   if (!connection) return Promise.reject(new Error('not connected'));
   return connection.command({ name, args, ...(project === null ? {} : { project }) });
 }
@@ -256,12 +268,20 @@ export function useCommand<C extends CommandName>(name: C) {
 }
 
 /** A user command about a specific project or Angela, wherever the window is. */
-export async function runIn<C extends CommandName>(project: string, name: C, args: CommandArgs<C>): Promise<CommandResult<C> | undefined> {
+export async function runIn<C extends CommandName>(
+  project: string,
+  name: C,
+  args: CommandArgs<C>,
+): Promise<CommandResult<C> | undefined> {
   return act(name, { request_id: crypto.randomUUID(), ...args } as CommandParams<C>, project);
 }
 
 /** Runtime actions take no request id; rejections are shown as toasts. */
-export async function act<C extends CommandName>(name: C, args: CommandParams<C>, project = scope()): Promise<CommandResult<C> | undefined> {
+export async function act<C extends CommandName>(
+  name: C,
+  args: CommandParams<C>,
+  project = scope(),
+): Promise<CommandResult<C> | undefined> {
   try {
     return await sendCommand(name, args, project);
   } catch (e) {
@@ -316,7 +336,8 @@ function keepSettingsPage(host: HostSnapshot) {
   const page = settings.page;
   const gone =
     (page.kind === 'angela' && !angelaOpen(host)) ||
-    (page.kind === 'project' && !host.projects.some((p) => p.id === page.project && p.state === 'running' && p.error === null));
+    (page.kind === 'project' &&
+      !host.projects.some((p) => p.id === page.project && p.state === 'running' && p.error === null));
   if (gone) showSettingsPage({ kind: 'permissions' });
 }
 
@@ -522,7 +543,11 @@ export function openSearch() {
   // 「全部」 without Angela has no thread to search.
   if (scope() === null) return;
   const search = useStore.getState().search;
-  useStore.setState({ search: search ? { ...search, focus: search.focus + 1 } : { query: '', matches: [], more: false, current: -1, jump: 0, focus: 1 } });
+  useStore.setState({
+    search: search
+      ? { ...search, focus: search.focus + 1 }
+      : { query: '', matches: [], more: false, current: -1, jump: 0, focus: 1 },
+  });
   // A task panel would cover the matches.
   selectTask(null);
 }
@@ -545,7 +570,9 @@ export async function runSearch(query: string) {
     : { matches: [], more: false };
   if (request !== searchRequest || !useStore.getState().search) return;
   const current = found.matches.length - 1;
-  useStore.setState((s) => ({ search: s.search && { ...s.search, query, ...found, current, jump: s.search.jump + 1 } }));
+  useStore.setState((s) => ({
+    search: s.search && { ...s.search, query, ...found, current, jump: s.search.jump + 1 },
+  }));
   if (current >= 0) await reveal(found.matches[current]);
 }
 
@@ -672,7 +699,12 @@ function onPush(push: Push) {
   if ((push.type === 'events' || push.type === 'resync') && forwarded.size > 0) refreshForwards();
   // The settings follow their own page's project, wherever the window is.
   const settings = useStore.getState().settings;
-  if (settings && (push.type === 'host' || push.type === 'resync' || ('project' in push && push.type === 'events' && push.project === settingsTarget(settings.page)))) {
+  if (
+    settings &&
+    (push.type === 'host' ||
+      push.type === 'resync' ||
+      ('project' in push && push.type === 'events' && push.project === settingsTarget(settings.page)))
+  ) {
     refreshSettings();
   }
   // Beyond the counts, the window shows only its own project, or Angela on 「全部」.
@@ -681,10 +713,20 @@ function onPush(push: Push) {
     case 'events': {
       refreshSnapshot();
       const selected = useStore.getState().selectedTask;
-      if (selected && push.events.some((e) => e.entity === selected || (
-        e.payload !== null && typeof e.payload === 'object' && 'task_id' in e.payload && e.payload.task_id === selected
-      ))) refreshDetail();
-      else if (selected && push.events.some((e) => e.kind.startsWith('verification.') || e.kind.startsWith('capture.'))) refreshDetail();
+      if (
+        selected &&
+        push.events.some(
+          (e) =>
+            e.entity === selected ||
+            (e.payload !== null &&
+              typeof e.payload === 'object' &&
+              'task_id' in e.payload &&
+              e.payload.task_id === selected),
+        )
+      )
+        refreshDetail();
+      else if (selected && push.events.some((e) => e.kind.startsWith('verification.') || e.kind.startsWith('capture.')))
+        refreshDetail();
       if (push.events.some((e) => e.kind.startsWith('message.'))) refreshThread();
       if (push.events.some((e) => e.kind.startsWith('turn.'))) refreshTurnStates();
       break;

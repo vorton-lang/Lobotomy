@@ -33,7 +33,13 @@ export function TopBar() {
       <span className={`status ${status}`} title={status === 'open' ? '已连接后端' : '正在重新连接后端'}>
         {status === 'open' ? '已连接' : '连接中断，正在重连'}
       </span>
-      <button className="icon" onClick={settings ? closeSettings : openSettings} aria-label="设置" aria-pressed={settings} title="设置">
+      <button
+        className="icon"
+        onClick={settings ? closeSettings : openSettings}
+        aria-label="设置"
+        aria-pressed={settings}
+        title="设置"
+      >
         <Settings {...ICON} />
       </button>
     </header>

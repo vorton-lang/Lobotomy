@@ -2,7 +2,15 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "oxc"],
   "categories": { "correctness": "error" },
-  "ignorePatterns": ["node_modules/", "dist/", "out/", "test-results/", "playwright-report/", "bench-results/", "src/api/generated.ts"],
+  "ignorePatterns": [
+    "node_modules/",
+    "dist/",
+    "out/",
+    "test-results/",
+    "playwright-report/",
+    "bench-results/",
+    "src/api/generated.ts"
+  ],
   "overrides": [
     {
       "files": ["**/*.ts", "**/*.tsx"],
