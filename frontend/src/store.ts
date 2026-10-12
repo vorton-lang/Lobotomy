@@ -224,7 +224,7 @@ export async function run<C extends CommandName>(
   args: CommandArgs<C>,
   requestId: string = crypto.randomUUID(),
 ): Promise<CommandResult<C> | undefined> {
-  return command(name, { request_id: requestId, ...args } as CommandParams<C>);
+  return act(name, { request_id: requestId, ...args } as CommandParams<C>);
 }
 
 /**
@@ -255,17 +255,13 @@ export function useCommand<C extends CommandName>(name: C) {
   return { submit, busy };
 }
 
-/** Runtime actions take no request id. */
-export async function act<C extends CommandName>(name: C, args: CommandParams<C>): Promise<CommandResult<C> | undefined> {
-  return command(name, args);
-}
-
 /** A user command about a specific project or Angela, wherever the window is. */
 export async function runIn<C extends CommandName>(project: string, name: C, args: CommandArgs<C>): Promise<CommandResult<C> | undefined> {
-  return command(name, { request_id: crypto.randomUUID(), ...args } as CommandParams<C>, project);
+  return act(name, { request_id: crypto.randomUUID(), ...args } as CommandParams<C>, project);
 }
 
-async function command<C extends CommandName>(name: C, args: CommandParams<C>, project = scope()): Promise<CommandResult<C> | undefined> {
+/** Runtime actions take no request id; rejections are shown as toasts. */
+export async function act<C extends CommandName>(name: C, args: CommandParams<C>, project = scope()): Promise<CommandResult<C> | undefined> {
   try {
     return await sendCommand(name, args, project);
   } catch (e) {

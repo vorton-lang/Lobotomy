@@ -196,11 +196,12 @@ const COMMAND_LINE = 120;
  * file, by its first line, with its size.
  */
 export function commandSummary(raw: unknown): { line: string; size: string | null } {
-  const command = isBlob(raw) ? raw.head : textOf(raw);
+  const blob = isBlob(raw) ? raw : null;
+  const command = blob ? blob.head : typeof raw === 'string' ? raw : '';
   const lines = command.split('\n');
-  if (!isBlob(raw) && lines.length === 1 && command.length <= COMMAND_LINE) return { line: command, size: null };
+  if (!blob && lines.length === 1 && command.length <= COMMAND_LINE) return { line: command, size: null };
   const line = lines[0].length > COMMAND_LINE ? `${lines[0].slice(0, COMMAND_LINE)}…` : lines[0];
-  const size = isBlob(raw) ? `${raw.size} 个字符` : `共 ${lines.length} 行，${command.length} 个字符`;
+  const size = blob ? `${blob.size} 个字符` : `共 ${lines.length} 行，${command.length} 个字符`;
   return { line, size };
 }
 

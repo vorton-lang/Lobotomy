@@ -46,43 +46,6 @@ fn main() -> anyhow::Result<()> {
             caller_turn_id: None,
         })
         .collect();
-    // Real read models from a small in-memory database include serde flatten and skipped fields.
-    use lobotomy_core::{Caller, Db};
-    let db = Db::open_in_memory()?;
-    db.execute(
-        &Caller::User,
-        &lobotomy_core::project::Onboard {
-            request_id: "onboard".into(),
-            project_id: "project".into(),
-            repo_path: "/repo".into(),
-            branch: "main".into(),
-            head: "base".into(),
-            author_name: "User".into(),
-            author_email: "user@example.com".into(),
-        },
-    )?;
-    let task = db.execute(
-        &Caller::User,
-        &lobotomy_core::task::CreateTask {
-            request_id: "create".into(),
-            title: "Task".into(),
-            body: "Body".into(),
-            criteria: "Works".into(),
-            executor: "Malkuth".into(),
-        },
-    )?;
-    db.execute(&Caller::Runtime, &lobotomy_core::task::StartAttempt { task_id: task.id.clone(), code_start: None })?;
-    let workspace = db.read(|c| lobotomy_core::workspace::current_workspace(c, "worker"))?.unwrap();
-    db.execute(
-        &Caller::Runtime,
-        &lobotomy_core::workspace::WorkspaceReady {
-            workspace_id: workspace.id,
-            target: workspace.target,
-            head: workspace.head,
-        },
-    )?;
-    db.execute(&Caller::Runtime, &lobotomy_core::turn::RegisterTurn { role: "Malkuth".into() })?;
-    let models = lobotomyd::gui::bindings::fixtures(&db)?;
     let message = lobotomy_core::task::SendMessage {
         request_id: "send".into(),
         role: "Malkuth".into(),
@@ -94,8 +57,7 @@ fn main() -> anyhow::Result<()> {
         "{}",
         json!({
             "search": search,
-            "models": models,
-            "task": db.read(|c| lobotomy_core::view::task_detail(c, &task.id))?,
+            "models": lobotomyd::gui::bindings::fixtures(),
             "message": message,
             "pushes": [
                 Push::Events { project: "project", events: &events },

@@ -194,9 +194,9 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
   - 客户端落后时的 `resync`。
 - 错误带代码：命令被拒时是拒绝的代码；参数无法解析时是 `bad_request`；其他是 `internal`（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
 
-GUI 的 12 个读方法、30 个命令的参数和结果，以及全部 6 种推送的 TypeScript 类型由 Rust 类型通过 ts-rs 生成，保存在 `frontend/src/api/generated.ts`。`api/types.ts` 复用生成类型，只保留展示层别名。`call`、`command` 和 store 的命令函数按方法名推导参数与返回类型，调用方不再自行指定响应类型。core 命令的名称和输出取自 `Command`，注册列表与实际分发共用；其余读方法和运行时动作在分发模块旁显式登记参数与结果类型，新增接口时也要更新登记。
+GUI 的 12 个读方法、30 个命令的参数和结果，以及全部 6 种推送的 TypeScript 类型由 Rust 类型通过 ts-rs 生成，保存在 `frontend/src/api/generated.ts`。`api/types.ts` 复用生成类型，只保留展示层别名。`call`、`command` 和 store 的命令函数按方法名推导参数与返回类型，调用方不再自行指定响应类型。core 命令的名称和输出取自 `Command`，注册列表与实际分发共用；其余读方法和运行时动作共用类型化路由声明：实际分发用声明中的参数类型解析请求，并用结果类型约束序列化；生成器从同一声明导出方法关联。
 
-修改相关 Rust 类型后，在 `frontend/` 运行 `npm run api:generate` 并提交生成结果。`npm run api:check` 只检查，不改生成文件；CI 在 Windows 和 Linux 上运行它，再检查前端类型并构建。检查把真实 Rust 类型经 serde 序列化得到的样本交给 TypeScript 编译器，覆盖枚举标签、flatten、跳过的字段、null、可省略的输入和任意 JSON 内容。前端另有编译期用例检查错误的方法名、参数和返回类型不能通过。
+修改相关 Rust 类型后，在 `frontend/` 运行 `npm run api:generate` 并提交生成结果。`npm run api:check` 只检查，不改生成文件；CI 在 Windows 和 Linux 上运行它，再检查前端类型并构建。检查把少量直接构造的真实 Rust DTO 经 serde 序列化得到的样本交给 TypeScript 编译器，覆盖枚举标签、flatten、跳过的字段、null、可省略的输入和任意 JSON 内容。前端另有编译期用例检查错误的方法名、参数和返回类型不能通过。
 
 生成使用显式 `ts-rs` Cargo feature；默认构建不编译 ts-rs。生成器固定把大整数映射为 `number`，因为当前协议的 JSON 数字经 `JSON.parse` 得到的是 JS number；超过安全整数范围仍可能丢精度，本次不改变 wire 格式。事件的 `kind` 是字符串，`payload` 是 `unknown`；item 内容、命令记录和其他 `serde_json::Value` 字段保留为任意 JSON。展示代码在使用处缩小类型，不能由此推断所有动态内容都有固定结构。生成类型不提供运行时校验：连接层仍信任后端响应与推送，命令报告等动态视图仍有局部类型断言。
 

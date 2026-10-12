@@ -307,11 +307,13 @@ fn error_code(e: &anyhow::Error) -> &'static str {
 /// project.
 async fn call(service: &Service, method: &str, params: Value) -> anyhow::Result<Value> {
     match method {
-        "host" => view::host_snapshot(&service.host, &service.projects, &service.angela).await,
+        name if name == view::HOST.name => {
+            view::HOST.encode(view::host_snapshot(&service.host, &service.projects, &service.angela).await?)
+        }
         "command" => {
             let params: command::CommandParams = serde_json::from_value(params)?;
-            if let Some(result) = command::host(&service.host, &service.projects, &params).await {
-                return result;
+            if let Some(result) = command::host(&service.host, &service.projects, &params).await? {
+                return Ok(result);
             }
             match service.scope(params.project.as_deref())? {
                 Scope::Project(project) => {

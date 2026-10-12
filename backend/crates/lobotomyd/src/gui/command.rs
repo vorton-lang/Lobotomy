@@ -76,56 +76,52 @@ struct PermissionParams {
 }
 
 /// Runs a host command; `None` when `name` is a project command.
-pub async fn host(host: &Arc<Host>, projects: &Projects, params: &CommandParams) -> Option<anyhow::Result<Value>> {
+pub async fn host(host: &Arc<Host>, projects: &Projects, params: &CommandParams) -> anyhow::Result<Option<Value>> {
     let args = params.args.clone();
-    let result = match params.name.as_str() {
+    Ok(Some(match params.name.as_str() {
         // A new project, connected while the backend runs (data-model.md §10.4).
-        "create_project" => {
-            async {
-                let CreateProjectParams { repo_path } = serde_json::from_value(args)?;
-                Ok(serde_json::to_value(projects.create(Path::new(&repo_path)).await?)?)
-            }
-            .await
+        name if name == CREATE_PROJECT.name => {
+            let CreateProjectParams { repo_path } = CREATE_PROJECT.decode(args)?;
+            CREATE_PROJECT.encode(projects.create(Path::new(&repo_path)).await?)?
         }
         // Archiving stops the project and keeps its data; unarchiving and opening again open it as
         // at startup (data-model.md §10.3, §10.4).
-        "archive_project" | "unarchive_project" | "retry_open" => {
-            async {
-                let ProjectParams { project_id } = serde_json::from_value(args)?;
-                match params.name.as_str() {
-                    "archive_project" => projects.archive(&project_id).await?,
-                    "unarchive_project" => projects.unarchive(&project_id).await?,
-                    _ => projects.retry_open(&project_id).await?,
-                }
-                Ok(Value::Null)
-            }
-            .await
+        name if name == ARCHIVE_PROJECT.name => {
+            let ProjectParams { project_id } = ARCHIVE_PROJECT.decode(args)?;
+            projects.archive(&project_id).await?;
+            ARCHIVE_PROJECT.encode(())?
+        }
+        name if name == UNARCHIVE_PROJECT.name => {
+            let ProjectParams { project_id } = UNARCHIVE_PROJECT.decode(args)?;
+            projects.unarchive(&project_id).await?;
+            UNARCHIVE_PROJECT.encode(())?
+        }
+        name if name == RETRY_OPEN.name => {
+            let ProjectParams { project_id } = RETRY_OPEN.decode(args)?;
+            projects.retry_open(&project_id).await?;
+            RETRY_OPEN.encode(())?
         }
         // A domain that opens lets the roles of every project go on.
-        "quota_retry" => {
-            async {
-                let HarnessParams { harness } = serde_json::from_value(args)?;
-                let domain = host.retry(&harness).await?;
-                projects.wake_all();
-                Ok(serde_json::to_value(domain)?)
-            }
-            .await
+        name if name == QUOTA_RETRY.name => {
+            let HarnessParams { harness } = QUOTA_RETRY.decode(args)?;
+            let domain = host.retry(&harness).await?;
+            projects.wake_all();
+            QUOTA_RETRY.encode(domain)?
         }
         // A host setting, not a project command: it has no event, so the windows are told to
         // take a new snapshot (harness-adapter.md §1.9).
-        "set_permission" => (|| {
-            let PermissionParams { harness, permission } = serde_json::from_value(args)?;
+        name if name == SET_PERMISSION.name => {
+            let PermissionParams { harness, permission } = SET_PERMISSION.decode(args)?;
             let set = host.set_permission(&harness, &permission)?;
             host.changed();
-            Ok(serde_json::to_value(PermissionChanged { harness, permission: set.as_str() })?)
-        })(),
-        "shutdown" => {
-            host.shutdown_requested.notify_one();
-            Ok(Value::Null)
+            SET_PERMISSION.encode(PermissionChanged { harness, permission: set.as_str() })?
         }
-        _ => return None,
-    };
-    Some(result)
+        name if name == SHUTDOWN.name => {
+            host.shutdown_requested.notify_one();
+            SHUTDOWN.encode(())?
+        }
+        _ => return Ok(None),
+    }))
 }
 
 macro_rules! project_commands {
@@ -162,13 +158,17 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: Comma
     }
     project_commands!(user_commands);
     match name.as_str() {
-        "start_trial" => Ok(serde_json::to_value(crate::trial::start(project, serde_json::from_value(args)?).await?)?),
-        "stop_trial" => {
-            let StopTrial { trial_id } = serde_json::from_value(args)?;
-            project.trials.stop(&trial_id).await?;
-            Ok(Value::Null)
+        name if name == START_TRIAL.name => {
+            START_TRIAL.encode(crate::trial::start(project, START_TRIAL.decode(args)?).await?)
         }
-        "retry_failed" => Ok(serde_json::to_value(RetryFailed { retried: results::retry_failed(project) })?),
+        name if name == STOP_TRIAL.name => {
+            let StopTrial { trial_id } = STOP_TRIAL.decode(args)?;
+            project.trials.stop(&trial_id).await?;
+            STOP_TRIAL.encode(())
+        }
+        name if name == RETRY_FAILED.name => {
+            RETRY_FAILED.encode(RetryFailed { retried: results::retry_failed(project) })
+        }
         _ => turn_actions(project, &name, args).await,
     }
 }
@@ -188,14 +188,14 @@ pub async fn run_angela(angela: &Instance, CommandParams { name, args, .. }: Com
 /// The runtime actions on a turn that the user may trigger, in any instance.
 async fn turn_actions(instance: &Instance, name: &str, args: Value) -> anyhow::Result<Value> {
     match name {
-        "interrupt" => {
-            let TurnParams { turn_id } = serde_json::from_value(args)?;
+        name if name == INTERRUPT.name => {
+            let TurnParams { turn_id } = INTERRUPT.decode(args)?;
             crate::runner::interrupt(instance, &turn_id).await?;
-            Ok(Value::Null)
+            INTERRUPT.encode(())
         }
         // "终止残留进程" (data-model.md §3.3): only the CLI of an unknown turn that still runs.
-        "terminate" => {
-            let TurnParams { turn_id } = serde_json::from_value(args)?;
+        name if name == TERMINATE.name => {
+            let TurnParams { turn_id } = TERMINATE.decode(args)?;
             let id = turn_id.clone();
             let turn = db(instance, move |db| db.read(|c| load_turn(c, &id))).await?;
             let (TurnState::Unknown, Some(pid), Some(start)) = (turn.state, turn.pid, turn.process_start) else {
@@ -205,9 +205,7 @@ async fn turn_actions(instance: &Instance, name: &str, args: Value) -> anyhow::R
                 )
                 .into());
             };
-            Ok(serde_json::to_value(Terminated {
-                terminated: lobotomy_harness::process::terminate(pid as u32, start)?,
-            })?)
+            TERMINATE.encode(Terminated { terminated: lobotomy_harness::process::terminate(pid as u32, start)? })
         }
         other => Err(Error::rejected("bad_request", format!("unknown command {other}")).into()),
     }
@@ -240,21 +238,25 @@ struct Terminated {
 
 #[cfg(feature = "ts-rs")]
 pub(super) fn bindings(out: &mut super::bindings::Bindings) {
-    use super::protocol::NoParams;
     macro_rules! export {
         ($($ty:ty),* $(,)?) => { $(out.command::<$ty>();)* };
     }
     project_commands!(export);
-    out.action::<CreateProjectParams, lobotomy_core::host::ProjectEntry>("create_project");
-    for name in ["archive_project", "unarchive_project", "retry_open"] {
-        out.action::<ProjectParams, ()>(name);
-    }
-    out.action::<HarnessParams, lobotomy_core::quota::Domain>("quota_retry");
-    out.action::<PermissionParams, PermissionChanged>("set_permission");
-    out.action::<NoParams, ()>("shutdown");
-    out.action::<crate::trial::StartTrial, crate::trial::TrialView>("start_trial");
-    out.action::<StopTrial, ()>("stop_trial");
-    out.action::<NoParams, RetryFailed>("retry_failed");
-    out.action::<TurnParams, ()>("interrupt");
-    out.action::<TurnParams, Terminated>("terminate");
+    runtime_bindings(out);
+}
+
+super::protocol::routes! {
+    runtime_bindings, action;
+    CREATE_PROJECT: CreateProjectParams => lobotomy_core::host::ProjectEntry = "create_project";
+    ARCHIVE_PROJECT: ProjectParams => () = "archive_project";
+    UNARCHIVE_PROJECT: ProjectParams => () = "unarchive_project";
+    RETRY_OPEN: ProjectParams => () = "retry_open";
+    QUOTA_RETRY: HarnessParams => lobotomy_core::quota::Domain = "quota_retry";
+    SET_PERMISSION: PermissionParams => PermissionChanged = "set_permission";
+    SHUTDOWN: super::protocol::NoParams => () = "shutdown";
+    START_TRIAL: crate::trial::StartTrial => crate::trial::TrialView = "start_trial";
+    STOP_TRIAL: StopTrial => () = "stop_trial";
+    RETRY_FAILED: super::protocol::NoParams => RetryFailed = "retry_failed";
+    INTERRUPT: TurnParams => () = "interrupt";
+    TERMINATE: TurnParams => Terminated = "terminate";
 }

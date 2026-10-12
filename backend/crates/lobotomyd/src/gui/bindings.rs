@@ -85,6 +85,6 @@ pub fn declarations() -> String {
     output
 }
 
-pub fn fixtures(db: &lobotomy_core::Db) -> anyhow::Result<serde_json::Value> {
-    view::binding_fixtures(db)
+pub fn fixtures() -> serde_json::Value {
+    view::binding_fixtures()
 }

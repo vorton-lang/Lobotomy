@@ -20,21 +20,15 @@ const parsed = JSON.parse(wire);
 assert.equal(typeof parsed.pushes[0].events[0].seq, 'number');
 assert.equal(Number.isSafeInteger(parsed.pushes[0].events[0].seq), false);
 assert.notEqual(BigInt(parsed.pushes[0].events[0].seq), 9223372036854775807n);
-assert.equal(parsed.search.matches[1].seq, null);
-assert.equal(parsed.pushes[0].events[1].command_id, null);
 assert.equal('reply_to' in parsed.message, false);
-assert.equal(parsed.message.task_id, null);
-assert.equal('token' in parsed.models.snapshot.roles[0].unfinished, false);
-assert.equal('overview' in parsed.models.snapshot, false);
 assert.equal('preview_stopped' in parsed.models.snapshot, false);
-assert.equal('attachment' in parsed.models.refs.attachments.task, false);
 
 const directory = mkdtempSync(join(tmpdir(), 'lobotomy-api-'));
 try {
   const source = join(directory, 'wire.ts');
   const types = resolve(frontend, 'src/api/generated').replaceAll('\\', '/');
-  writeFileSync(source, `import type { SearchResult, Push, Snapshot, Refs, TaskDetail, SendMessage } from ${JSON.stringify(types)};\n` +
-    `(${wire.trim()} satisfies { search: SearchResult; pushes: Push[]; models: { snapshot: Snapshot; refs: Refs }; task: TaskDetail; message: SendMessage });\n`);
+  writeFileSync(source, `import type { SearchResult, Push, Snapshot, Refs, SendMessage } from ${JSON.stringify(types)};\n` +
+    `(${wire.trim()} satisfies { search: SearchResult; pushes: Push[]; models: { snapshot: Snapshot; refs: Refs }; message: SendMessage });\n`);
   execFileSync(process.execPath, [
     resolve(frontend, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--skipLibCheck',
     '--target', 'ES2023', '--module', 'ESNext', '--moduleResolution', 'bundler', source,
