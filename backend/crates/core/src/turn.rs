@@ -359,11 +359,11 @@ pub fn hold(conn: &Connection, role: &str) -> Result<Option<Hold>> {
     })
 }
 
+/// The GUI gets this from "继续"; the turn's MCP token stays in its record (`Turn::token`).
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct TurnRegistered {
     pub turn_id: String,
-    pub token: String,
 }
 
 /// What the continue command adds to the turn it registers (data-model.md §9.2 "继续").
@@ -479,7 +479,7 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
         &turn_id,
         json!({ "role": role, "task_id": task_id, "messages": ids, "resent": resent }),
     )?;
-    Ok(TurnRegistered { turn_id, token })
+    Ok(TurnRegistered { turn_id })
 }
 
 fn require_turn_state(turn: &Turn, allowed: &[TurnState]) -> Result<()> {

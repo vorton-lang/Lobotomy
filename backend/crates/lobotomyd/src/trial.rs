@@ -25,6 +25,7 @@ pub struct TrialView {
     pub directory: String,
     pub command: String,
     pub purpose: String,
+    #[cfg_attr(feature = "ts-rs", ts(type = "\"open\" | \"closed\""))]
     pub state: &'static str,
     pub error: Option<String>,
 }

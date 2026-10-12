@@ -62,7 +62,7 @@ fn registering_a_turn_binds_the_brief_and_opens_a_session() {
     assert!(turn.input.contains("实现 adapter") && turn.input.contains("测试通过"), "{}", turn.input);
     assert!(db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty());
     assert!(db.read(|c| current_session(c, ROLE, Some(&task))).unwrap().is_some());
-    assert_eq!(db.read(|c| turn_by_token(c, &t.token)).unwrap().unwrap().id, t.turn_id);
+    assert_eq!(db.read(|c| turn_by_token(c, &turn.token)).unwrap().unwrap().id, t.turn_id);
 }
 
 #[test]

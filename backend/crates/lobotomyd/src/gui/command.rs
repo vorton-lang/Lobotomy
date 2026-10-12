@@ -72,6 +72,7 @@ struct HarnessParams {
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct PermissionParams {
     harness: String,
+    #[cfg_attr(feature = "ts-rs", ts(type = "\"full\" | \"auto_review\""))]
     permission: String,
 }
 
@@ -221,6 +222,7 @@ struct StopTrial {
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct PermissionChanged {
     harness: String,
+    #[cfg_attr(feature = "ts-rs", ts(type = "\"full\" | \"auto_review\""))]
     permission: &'static str,
 }
 

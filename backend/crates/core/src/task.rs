@@ -39,6 +39,7 @@ pub struct Task {
     pub paused: bool,
     /// Who paused it, as a caller scope: only the user lifts the user's pause (roles-and-tasks.md
     /// §4).
+    #[cfg_attr(feature = "ts-rs", ts(type = "\"user\" | \"manager\" | null"))]
     pub paused_by: Option<String>,
     /// Derived from the open task question; there is no task.blocked_reason database column.
     pub blocked_reason: Option<String>,

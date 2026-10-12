@@ -51,9 +51,12 @@ jobs:
       - name: Backend tests
         working-directory: backend
         run: cargo test --workspace --locked
+      # The default build is what ships; the ts-rs build only generates the GUI types.
       - name: Clippy
         working-directory: backend
-        run: cargo clippy --workspace --all-targets --features lobotomyd/ts-rs --locked -- -D warnings
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo clippy --workspace --all-targets --features lobotomyd/ts-rs --locked -- -D warnings
 
       - name: Frontend install
         working-directory: frontend

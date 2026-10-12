@@ -12,6 +12,8 @@ pub const HARNESSES: [&str; 2] = ["claude", "codex"];
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Role {
     pub name: String,
+    /// As the role table's check allows.
+    #[cfg_attr(feature = "ts-rs", ts(type = "\"manager\" | \"tech_lead\" | \"worker\" | \"reviewer\""))]
     pub kind: String,
     pub harness: String,
     pub model: Option<String>,

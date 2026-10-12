@@ -488,7 +488,7 @@ fn change_line(
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-rs", ts(rename = "ForwardRecord"))]
 pub struct Forward {
-    /// `task` or `message`.
+    #[cfg_attr(feature = "ts-rs", ts(type = "\"task\" | \"message\""))]
     pub kind: &'static str,
     pub role: String,
     pub task_id: Option<String>,

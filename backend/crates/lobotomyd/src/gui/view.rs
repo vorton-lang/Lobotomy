@@ -282,6 +282,8 @@ pub struct Snapshot {
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct HarnessView {
     harness: &'static str,
+    /// `Permission::as_str`.
+    #[cfg_attr(feature = "ts-rs", ts(type = "\"full\" | \"auto_review\""))]
     permission: &'static str,
 }
 

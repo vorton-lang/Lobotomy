@@ -202,11 +202,7 @@ export type FileChange = { path: string,
  */
 old: Content | null, new: Content | null, };
 
-export type Forward = { project: string, project_name: string,
-/**
- * `task` or `message`.
- */
-kind: string, role: string, task_id: string | null, task_title: string | null, at: number, contexts: Array<ForwardedContext>, };
+export type Forward = { project: string, project_name: string, kind: "task" | "message", role: string, task_id: string | null, task_title: string | null, at: number, contexts: Array<ForwardedContext>, };
 
 export type ForwardedContext = { header: string,
 /**
@@ -218,7 +214,11 @@ export type ForwardsParams = { messages: Array<string>, };
 
 export type HarnessParams = { harness: string, };
 
-export type HarnessView = { harness: string, permission: string, };
+export type HarnessView = { harness: string,
+/**
+ * `Permission::as_str`.
+ */
+permission: "full" | "auto_review", };
 
 export type Hold = { "kind": "abnormal", turn: Turn, } | { "kind": "capture_stopped", capture: Capture, } | { "kind": "session_unidentified", session_id: string, };
 
@@ -301,9 +301,9 @@ export type Outcome = "completed" | "failed" | "interrupted";
 
 export type Outside = "pending" | "adopted" | "discarded";
 
-export type PermissionChanged = { harness: string, permission: string, };
+export type PermissionChanged = { harness: string, permission: "full" | "auto_review", };
 
-export type PermissionParams = { harness: string, permission: string, };
+export type PermissionParams = { harness: string, permission: "full" | "auto_review", };
 
 export type Phase = "queued" | "executing" | "verifying" | "accepting" | "done" | "abandoned";
 
@@ -419,7 +419,11 @@ export type RoleView = { task_id: string | null, unfinished: Turn | null, last_t
 /**
  * Changes a turn outside any task left in the slot, waiting for the user (#14).
  */
-outside: Capture | null, workspace: Workspace | null, queued_messages: number, name: string, kind: string, harness: string, model: string | null, slot: string | null, };
+outside: Capture | null, workspace: Workspace | null, queued_messages: number, name: string,
+/**
+ * As the role table's check allows.
+ */
+kind: "manager" | "tech_lead" | "worker" | "reviewer", harness: string, model: string | null, slot: string | null, };
 
 export type SearchMatch = { kind: MatchKind, id: string, seq: number | null, };
 
@@ -473,7 +477,7 @@ export type Task = { id: string, title: string, body: string, executor: string, 
  * Who paused it, as a caller scope: only the user lifts the user's pause (roles-and-tasks.md
  * §4).
  */
-paused_by: string | null,
+paused_by: "user" | "manager" | null,
 /**
  * Derived from the open task question; there is no task.blocked_reason database column.
  */
@@ -513,7 +517,7 @@ reply_queued: boolean, id: string, title: string, body: string, executor: string
  * Who paused it, as a caller scope: only the user lifts the user's pause (roles-and-tasks.md
  * §4).
  */
-paused_by: string | null,
+paused_by: "user" | "manager" | null,
 /**
  * Derived from the open task question; there is no task.blocked_reason database column.
  */
@@ -565,7 +569,7 @@ after?: number | null, limit?: number | null, };
 
 export type TrialRecipe = { command: string, purpose: string, };
 
-export type TrialView = { id: string, task_id: string, attempt_id: string, round: number, candidate: string, directory: string, command: string, purpose: string, state: string, error: string | null, };
+export type TrialView = { id: string, task_id: string, attempt_id: string, round: number, candidate: string, directory: string, command: string, purpose: string, state: "open" | "closed", error: string | null, };
 
 export type Turn = { id: string, role: string, harness: string, native_session_id: string,
 /**
@@ -579,7 +583,7 @@ workspace_id: string | null, };
 
 export type TurnParams = { turn_id: string, };
 
-export type TurnRegistered = { turn_id: string, token: string, };
+export type TurnRegistered = { turn_id: string, };
 
 export type TurnState = "registered" | "running" | "ended" | "unknown";
 
