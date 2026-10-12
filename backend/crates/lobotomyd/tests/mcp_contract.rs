@@ -256,6 +256,7 @@ async fn codex() {
         permission: lobotomy_harness::Permission::Full,
         developer_instructions: String::new(),
         mcp_url: service.url.clone(),
+        disabled_skills: lobotomy_harness::codex::user_skills(),
     }
     .to_args();
     args.insert(1, "--ephemeral".into());

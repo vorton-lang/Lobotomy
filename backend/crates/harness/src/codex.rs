@@ -1,7 +1,7 @@
 //! The Codex CLI adapter: binary location, arguments and `exec --json` events
 //! (harness-adapter.md §1.2, §1.5, §1.6).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -42,6 +42,54 @@ pub struct TurnArgs {
     pub developer_instructions: String,
     /// The MCP URL with this turn's token.
     pub mcp_url: String,
+    /// The `SKILL.md` files the turn leaves out ([`user_skills`]).
+    pub disabled_skills: Vec<PathBuf>,
+}
+
+/// The skills the user installed for their own use: each `SKILL.md` under `$CODEX_HOME/skills`
+/// (by default `~/.codex/skills`) and `~/.agents/skills`, outside hidden directories such as
+/// `.system`, where Codex keeps the skills it ships. Roles leave the user's skills out and keep
+/// those of Codex and its plugins (harness-adapter.md §1.6). A repository's own skills stay.
+pub fn user_skills() -> Vec<PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
+    let codex_home =
+        std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| home.as_ref().map(|h| h.join(".codex")));
+    let mut found = Vec::new();
+    for root in
+        [codex_home.map(|c| c.join("skills")), home.map(|h| h.join(".agents").join("skills"))].into_iter().flatten()
+    {
+        collect_skills(&root, 0, &mut found);
+    }
+    found.sort();
+    found
+}
+
+/// The skills in `dir`: a directory with a `SKILL.md` is one; others are looked into, two levels
+/// at most.
+fn collect_skills(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_name().to_string_lossy().starts_with('.') || !path.is_dir() {
+            continue;
+        }
+        let skill = path.join("SKILL.md");
+        if skill.is_file() {
+            found.push(skill);
+        } else if depth < 2 {
+            collect_skills(&path, depth + 1, found);
+        }
+    }
+}
+
+/// Turns the skills off one by one: `skills.config` entries name a `SKILL.md` by path, with
+/// forward slashes as tested on Windows.
+fn skills_config(skills: &[PathBuf]) -> String {
+    let entries: Vec<String> = skills
+        .iter()
+        .map(|p| format!("{{path={}, enabled=false}}", toml_string(&p.to_string_lossy().replace('\\', "/"))))
+        .collect();
+    format!("skills.config=[{}]", entries.join(", "))
 }
 
 /// TOML basic strings accept JSON string syntax.
@@ -86,6 +134,9 @@ impl TurnArgs {
         }
         if let Some(effort) = &self.reasoning_effort {
             args.extend(["-c".into(), format!("model_reasoning_effort={}", toml_string(effort))]);
+        }
+        if !self.disabled_skills.is_empty() {
+            args.extend(["-c".into(), skills_config(&self.disabled_skills)]);
         }
         args.extend([
             "-c".into(),
@@ -322,8 +373,40 @@ mod tests {
             permission,
             developer_instructions: "你是 Malkuth。\n用 \"org_report\" 汇报。".into(),
             mcp_url: "http://127.0.0.1:1/mcp/tok_1".into(),
+            disabled_skills: vec![],
         }
         .to_args()
+    }
+
+    /// The user's skills are left out one by one; those Codex ships in `.system` stay
+    /// (harness-adapter.md §1.6).
+    #[test]
+    fn a_turn_leaves_out_the_users_own_skills() {
+        let home = tempfile::tempdir().unwrap();
+        let skills = home.path().join("skills");
+        for dir in ["mine", ".system/imagegen", "group/nested"] {
+            std::fs::create_dir_all(skills.join(dir)).unwrap();
+            std::fs::write(skills.join(dir).join("SKILL.md"), "---\nname: x\n---").unwrap();
+        }
+        std::fs::create_dir_all(skills.join("empty")).unwrap();
+        let mut found = Vec::new();
+        collect_skills(&skills, 0, &mut found);
+        found.sort();
+        assert_eq!(found, [skills.join("group/nested/SKILL.md"), skills.join("mine/SKILL.md")]);
+
+        let mut args = TurnArgs {
+            resume: None,
+            model: None,
+            reasoning_effort: None,
+            permission: Permission::Full,
+            developer_instructions: String::new(),
+            mcp_url: String::new(),
+            disabled_skills: vec![PathBuf::from(r"C:\Users\u\.codex\skills\mine\SKILL.md")],
+        };
+        let config = r#"skills.config=[{path="C:/Users/u/.codex/skills/mine/SKILL.md", enabled=false}]"#;
+        assert!(args.to_args().contains(&config.to_owned()));
+        args.disabled_skills.clear();
+        assert!(!args.to_args().iter().any(|a| a.starts_with("skills.")), "no skills of the user's: nothing to pass");
     }
 
     #[test]

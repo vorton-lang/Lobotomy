@@ -246,6 +246,7 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
                 permission,
                 developer_instructions: instructions(&role),
                 mcp_url,
+                disabled_skills: codex::user_skills(),
             };
             (args.to_args(), None)
         }

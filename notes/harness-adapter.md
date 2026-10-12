@@ -42,7 +42,7 @@ Codex（消息经 stdin，位置参数为 -）
   首轮：codex exec --json <权限参数，见 1.9>
           --skip-git-repo-check --ignore-rules --ignore-user-config
           --disable apps --disable computer_use --disable browser_use
-          [-m <m>] [-c model_reasoning_effort=<e>]
+          [-m <m>] [-c model_reasoning_effort=<e>] [-c skills.config=<用户自己装的 skill，见 1.6>]
           -c developer_instructions=... -c mcp_servers.lobotomy.url=...
           -c mcp_servers.lobotomy.default_tools_approval_mode="approve" -
           （session id 取自 thread.started 事件）
@@ -164,6 +164,7 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
 | git push | 进程环境变量 `GIT_CONFIG_*` 注入 `url.lobotomy-push-disabled://.pushInsteadOf`（`https://`、`git@`、`ssh://`）；实测 push 在本地失败，fetch 不受影响 | 同左 |
 | gh | `GH_CONFIG_DIR` 指向空目录，并从进程环境中删除 `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN`、`GITHUB_ENTERPRISE_TOKEN`（这四个变量优先于配置目录中的凭据，[#10](https://github.com/vorton-lang/Lobotomy/issues/10)），等同未登录。额度检查调用同样处理 | 同左 |
 | harness 自带的长期记忆 | 进程环境变量 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`：Claude Code 不读也不写 `~/.claude/projects/<工作目录>/memory/`。`--setting-sources ""` 关不掉它：2026-10-11 Angela 在那里写过文件。依据：长期记忆由 Lobotomy 保存（roadmap.md"原则"） | 未查 |
+| 用户自己装的 skill（见下） | 实测不加载 | `-c skills.config=[…]` 按路径逐个关掉 |
 
 - 保留网页搜索与读取、子 agent。
 - 这些措施防的是失误和过度热心，不防对抗：bypass 模式下 agent 总能绕过（例如从凭据管理器取 token）。
@@ -171,7 +172,10 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
 - Codex role 不读用户的 `config.toml`。Claude role 同样不读设置文件：用户为自己使用配置的 hooks 和权限规则，假定有人在场。所以用户为自己选的模型和推理强度对 role 都不生效，模型与推理强度由 Lobotomy 按用户在设置中的选择传入（§1.2）。2026-10-13 实测，在有这个设置之前：用户的 Claude 设置是 `opus`，Angela 的 turn 用的是 `claude-fable-5-1`；用户的 Codex 配置是 `gpt-6-astra` 与 medium，Angela 的 turn 用的是 `gpt-6.1-sol` 与 low。
   - 待决：同一天 Fable 的额度用完，CLI 的提示是可以换用别的模型。额度域现在按 harness 划分（data-model.md §8）；各 role 都用同一个默认模型时，这样划分不会多停 role。现在可以按 role 选模型，额度域是否要细到模型，还没有定。
 - **全局指令文件**（用户确认，2026-10-04）：Codex role 继承用户个人的 `~/.codex/AGENTS.md`，Lobotomy 不另开 `CODEX_HOME`。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 与 `-c project_doc_max_bytes=0` 都不能排除全局 AGENTS.md（§1.4）。Claude role 的情况见 §6。
-  - 实测（2026-10-13）：Codex role 也用用户个人的 `~/.codex/skills/`。Angela 在 Codex 上的一个 turn 用命令读了 user-collaboration 和 engineering-taste 两个 skill 的 `SKILL.md`；用 §1.2 的参数直接运行 Codex 时，三次回答都说按这两个 skill 检查。待决：是否排除用户的 skills，没有定。
+- **用户自己装的 skill 不给 role 用，官方的保留**（用户确认，2026-10-13）。依据：用户自己的 skill 写的是用户本人的协作与工程习惯，Angela 在 Codex 上的一个 turn 用命令读了 user-collaboration 和 engineering-taste 的 `SKILL.md`。Codex 与插件自带的 skill 关掉会削弱模型的能力。
+  - Codex：每个 turn 列出 `$CODEX_HOME/skills`（默认 `~/.codex/skills`）与 `~/.agents/skills` 下的 `SKILL.md`，跳过以 `.` 开头的目录（Codex 自带的 skill 在 `.system`），用 `-c skills.config=[{path=…, enabled=false}, …]` 逐个关掉。路径用正斜杠。仓库自己的 skill 不动。`-c skills.include_instructions=false` 会连官方的一起关掉，不用。
+  - Codex 实测（codex-cli 0.162.0-alpha.17.2，Windows，2026-10-13，带 §1.2 的参数）：不关时，模型说能用 imagegen、openai-docs、skill-creator、skill-installer，以及用户的 engineering-taste、great-resume、grilling、grilling-adapter、user-collaboration；按路径关掉后只剩前四个。
+  - Claude：用 `--setting-sources ""` 启动时，`system/init` 的 skill 清单中没有用户从 claude.ai 同步的 skill，例如 docx、coding-discipline（2026-10-13）。
 - **Claude Code 2.1.283 实测**（Windows，2026-10-09）：
   - 用上面的参数启动后，`system/init` 中的工具清单为 Task、Edit、Glob、Grep、NotebookEdit、PowerShell、Read、ReportFindings、Skill、TaskCreate、TaskGet、TaskList、TaskStop、TaskUpdate、ToolSearch、WebFetch、WebSearch、Write；MCP 服务只有 lobotomy。
   - `Workflow` 是新出现的工具，会在后台启动多个 agent，可能在 turn 结束后仍在运行，所以去掉。子 agent（`Task`）在 turn 内同步完成，保留。
