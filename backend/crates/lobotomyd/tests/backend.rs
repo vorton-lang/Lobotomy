@@ -1180,6 +1180,45 @@ async fn a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown() {
 
 // ---- Angela (roadmap.md M4 step 1), on the fake Claude ----
 
+/// Wiring only: both harnesses receive the complete manager prompt on initial and resumed
+/// turns. The fake CLIs do not evaluate whether a model follows the behavioral examples.
+#[tokio::test]
+async fn angela_receives_the_manager_prompt_on_both_harnesses_each_turn() {
+    let expected = include_str!("../src/prompts/manager.md").replace("{name}", "Angela");
+    for harness in ["claude", "codex"] {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = start(dir.path()).await;
+        let angela = backend.backend.angela().unwrap();
+        angela
+            .db
+            .execute(
+                &Caller::User,
+                &SetRoleHarness { request_id: "h1".into(), role: "Angela".into(), harness: harness.into() },
+            )
+            .unwrap();
+        let mut native_id = None;
+        for message in ["先聊聊", "继续讨论"] {
+            let asked = tell_angela(&angela, message);
+            let turn = angela_turn_for(&angela, &asked).await;
+            assert_eq!(turn.outcome, Some(Outcome::Completed));
+            let args = last_args(&host_dir(dir.path()).join("angela").join("work"));
+            let received = if harness == "claude" {
+                after(&args, "--append-system-prompt").to_owned()
+            } else {
+                let value = args.iter().find_map(|arg| arg.strip_prefix("developer_instructions=")).unwrap();
+                serde_json::from_str::<String>(value).unwrap()
+            };
+            assert_eq!(received, expected, "{harness} must receive the runtime prompt unchanged");
+            if let Some(id) = &native_id {
+                assert_eq!(after(&args, if harness == "claude" { "--resume" } else { "resume" }), id);
+                assert_eq!(turn.native_id.as_ref(), Some(id));
+            }
+            native_id = Some(turn.native_id.expect("the CLI identified the session"));
+        }
+        backend.shutdown(Duration::from_secs(5)).await;
+    }
+}
+
 /// The user's message to Angela, as the window sends it; its id.
 fn tell_angela(angela: &Instance, body: &str) -> String {
     let message = SendMessage {
