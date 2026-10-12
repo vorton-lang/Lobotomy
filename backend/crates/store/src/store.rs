@@ -230,6 +230,7 @@ impl Store {
 /// One side of a changed file, for display.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum Content {
     Text {
         text: String,
@@ -248,6 +249,7 @@ pub enum Content {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct FileChange {
     pub path: String,
     /// `None`: the file did not exist on that side.

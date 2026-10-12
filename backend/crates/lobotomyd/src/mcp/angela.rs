@@ -706,12 +706,14 @@ fn why(e: &anyhow::Error) -> String {
 /// the user's scope from her database, and each project's, with its tasks', from the project's. A
 /// project that cannot be read is named with the reason.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Ledgers {
     pub user: Vec<LedgerEntry>,
     pub projects: Vec<ProjectLedger>,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ProjectLedger {
     pub id: String,
     pub name: String,

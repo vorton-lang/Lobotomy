@@ -8,7 +8,7 @@ import { PROJECT, detail, hostSnapshot, role, task } from './mocked';
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
 
 const turn = (id: string, taskId: string | null): Turn => ({
-  id, role: 'Malkuth', harness: 'codex', task_id: taskId, attempt_id: null, input: '', state: 'ended', outcome: 'completed',
+  id, role: 'Malkuth', harness: 'codex', native_session_id: 'session', native_id: null, process_start: null, workspace_id: 'workspace', task_id: taskId, attempt_id: null, input: '', state: 'ended', outcome: 'completed',
   failure: null, pid: null, done_at: null, registered_at: 1, started_at: 1, ended_at: 2,
 });
 
@@ -204,7 +204,7 @@ test('a finished task’s panel leads to the task now in work', async ({ page })
 test('a message the executor never got waits for the user at acceptance', async ({ page }) => {
   const view = task('task1', '补充要求的任务', 'accepting', 1);
   const undelivered: Message = {
-    id: 'm1', seq: 1, role: 'Malkuth', source: 'user', task_id: 'task1', body: '补充：异常行要能看到原始行号', turn_id: null, created_at: 5,
+    id: 'm1', seq: 1, role: 'Malkuth', source: 'user', task_id: 'task1', body: '补充：异常行要能看到原始行号', turn_id: null, created_at: 5, reply_to: null,
   };
   const details: Record<string, TaskDetail> = { task1: detail(view, [undelivered]) };
   const state: State = {

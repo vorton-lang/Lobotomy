@@ -9,6 +9,7 @@ use crate::error::{Error, Result};
 pub const HARNESSES: [&str; 2] = ["claude", "codex"];
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Role {
     pub name: String,
     pub kind: String,

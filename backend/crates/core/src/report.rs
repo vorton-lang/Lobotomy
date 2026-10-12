@@ -12,6 +12,7 @@ use crate::turn::{Turn, TurnState, load_turn};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum ReportStatus {
     Progress,
     Blocked,
@@ -19,6 +20,8 @@ pub enum ReportStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "ReportArgs"))]
 pub struct OrgReport {
     pub title: String,
     pub body: String,
@@ -42,6 +45,7 @@ impl OrgReport {
 /// change nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum ReportEffect {
     Recorded,
     /// The same blocking reason or `done` was already recorded.

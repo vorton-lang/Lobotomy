@@ -29,6 +29,7 @@ impl Phase {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Task {
     pub id: String,
     pub title: String,
@@ -55,6 +56,7 @@ pub struct Task {
 /// What an executor may do on a task the manager assigns (roles-and-tasks.md §4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum Action {
     /// 只读调查
     ReadOnly,
@@ -77,6 +79,7 @@ impl Action {
 /// What the manager's `assign` writes besides the title, the user's words and the criteria: the
 /// actions it allows, when to stop and report instead of going further, and her interpretation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Assignment {
     pub actions: Vec<Action>,
     pub stop_when: String,
@@ -94,6 +97,7 @@ impl Assignment {
 /// 第 1 条). The runtime looks it up there by id and checks that the user wrote it; the manager
 /// only names the id (manager-actions.md §1).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Quote {
     /// The message's id in the manager's database.
     pub source_id: String,
@@ -172,12 +176,15 @@ sql_enum! {
 
 /// An executor's suggested way to try a candidate. Recording it never runs the command.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "TrialRecipe"))]
 pub struct Trial {
     pub command: String,
     pub purpose: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Attempt {
     pub id: String,
     pub task_id: String,
@@ -336,6 +343,7 @@ pub fn attempt_brief(conn: &Connection, task: &Task, seq: i64, conflicts: &[Stri
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Message {
     pub id: String,
     pub seq: i64,
@@ -534,6 +542,7 @@ pub fn queue_message(
 // ---- user commands ----
 
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct CreateTask {
     pub request_id: String,
     pub title: String,
@@ -543,6 +552,7 @@ pub struct CreateTask {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Created {
     pub id: String,
 }
@@ -593,6 +603,7 @@ fn create_task(
 /// Its first attempt starts from them, as a reopened task starts from its last candidate
 /// (data-model.md §4.6, #14).
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct AdoptOutsideChanges {
     pub request_id: String,
     pub capture_id: String,
@@ -623,6 +634,7 @@ impl Command for AdoptOutsideChanges {
 /// Edits the completion criteria. Each edit is a new version; existing evidence stays bound to
 /// the old one (data-model.md §4.4).
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct EditCriteria {
     pub request_id: String,
     pub task_id: String,
@@ -631,6 +643,7 @@ pub struct EditCriteria {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct CriteriaEdited {
     pub version: i64,
 }
@@ -672,6 +685,7 @@ impl Command for EditCriteria {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct SendMessage {
     pub request_id: String,
     pub role: String,
@@ -851,6 +865,7 @@ impl Command for SendToRole {
 /// clears it (roles-and-tasks.md §2.2). Only the user lifts the user's pause: the manager acting on
 /// an older picture must not restart what the user stopped (roles-and-tasks.md §4, #50).
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct SetPaused {
     pub request_id: String,
     pub task_id: String,
@@ -897,6 +912,7 @@ impl Command for SetPaused {
 /// tasks whose position really changes are written, and each of them gets a new revision
 /// (data-model.md §9.1). Moving a task to where it already is changes nothing and emits no event.
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct MoveInQueue {
     pub request_id: String,
     pub task_id: String,
@@ -945,6 +961,7 @@ impl Command for MoveInQueue {
 /// Stops all further work on the task and keeps its evidence. Unaccepted work never reached the
 /// integration version, so nothing needs reverting (roles-and-tasks.md §2.2).
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Abandon {
     pub request_id: String,
     pub task_id: String,
@@ -975,6 +992,7 @@ impl Command for Abandon {
 /// Reopens a closed task. The next attempt starts from the latest candidate rebased onto the
 /// integration version (data-model.md §4.6); that is resolved when the attempt starts.
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Reopen {
     pub request_id: String,
     pub task_id: String,

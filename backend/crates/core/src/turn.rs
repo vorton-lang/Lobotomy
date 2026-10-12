@@ -38,6 +38,7 @@ sql_enum! {
 
 /// Why a turn failed (data-model.md §3.2, §8.3).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Failure {
     pub kind: FailureKind,
     pub message: String,
@@ -57,6 +58,7 @@ impl Failure {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum FailureKind {
     Quota,
     /// The environment does not allow the harness's permission mode (harness-adapter.md §1.9).
@@ -65,6 +67,7 @@ pub enum FailureKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Turn {
     pub id: String,
     pub role: String,
@@ -264,6 +267,7 @@ pub fn compose_input(messages: &[Message], manager: bool, replied: impl Fn(&str)
 /// Why a role waits for the user.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum Hold {
     /// The last turn of the current attempt was interrupted or failed (harness-adapter.md §1.7).
     Abnormal { turn: Box<Turn> },
@@ -348,6 +352,7 @@ pub fn hold(conn: &Connection, role: &str) -> Result<Option<Hold>> {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct TurnRegistered {
     pub turn_id: String,
     pub token: String,
@@ -645,6 +650,7 @@ impl Command for MarkUnfinishedUnknown {
 /// began, its input goes again instead of the note (data-model.md §3.4). Only the user issues it;
 /// the runtime never continues on its own, quota failures included (data-model.md §8.5).
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Continue {
     pub request_id: String,
     pub role: String,
@@ -701,6 +707,7 @@ impl Command for Continue {
 /// Ends the role's native session; the next turn starts a fresh one. If the role is executing a
 /// task, the brief is queued again, because the new session has not seen it (data-model.md §4.1).
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct NewNativeSession {
     pub request_id: String,
     pub role: String,
@@ -755,6 +762,7 @@ fn queue_brief_again(cx: &mut Cx<'_>, role: &str) -> Result<()> {
 /// a new one with the brief, as after a new native session. Choosing the harness the role is on
 /// changes nothing.
 #[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct SetRoleHarness {
     pub request_id: String,
     pub role: String,

@@ -199,7 +199,7 @@ function ProjectGeneral({ project }: { project: string }) {
 function Storage({ project }: { project: string }) {
   const [usage, setUsage] = useState<{ files: number; bytes: number } | null>(null);
   useEffect(() => {
-    call<{ raw_output: { files: number; bytes: number } }>('disk_usage', { project }).then(
+    call('disk_usage', { project }).then(
       (u) => setUsage(u.raw_output),
       () => setUsage(null),
     );
@@ -310,7 +310,7 @@ function ConfigForm({ project, version, config }: { project: string; version: nu
   };
   const save = async () => {
     setSaving(true);
-    const saved = await runIn<{ version: number }>(project, 'edit_project_config', { expected_version: base.version, config: configOf(form) });
+    const saved = await runIn(project, 'edit_project_config', { expected_version: base.version, config: configOf(form) });
     setSaving(false);
     if (saved === undefined) return;
     toast(`已保存为第 ${saved.version} 版`);

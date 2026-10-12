@@ -13,6 +13,7 @@ macro_rules! sql_enum {
     ) => {
         $(#[$meta])*
         #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
         $vis enum $name {
             $( $(#[$vmeta])* #[serde(rename = $text)] $variant ),+
         }

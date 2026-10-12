@@ -5,7 +5,7 @@
 import { useEffect, useMemo } from 'react';
 import { ChevronRight } from 'lucide-react';
 import type { AttachmentView, QuotedMessage, Resolved } from '../api/types';
-import { attachmentExpired, attachmentLine, attachmentWarning, clock, previewLine, splitReply, textOf } from '../format';
+import { attachmentExpired, attachmentLine, attachmentWarning, clock, previewLine, splitReply, jsonObject, textOf } from '../format';
 import { selectProject, useStore, wantForwards, wantRefs } from '../store';
 import { ICON, Markdown } from './common';
 
@@ -36,7 +36,7 @@ const failed = <T extends object>(r: Resolved<T> | undefined): r is { error: str
 export function ReplyLine({ id }: { id: string }) {
   const text = useStore((s) => {
     const item = s.thread.items.find((i) => i.id === id);
-    if (item?.kind === 'agent_message') return textOf(item.content.text);
+    if (item?.kind === 'agent_message') return textOf(jsonObject(item.content).text);
     return s.thread.messages.find((m) => m.id === id)?.body;
   });
   return <div className="reply-line">回复：「{text ? previewLine(text) : '较早的一条'}」</div>;

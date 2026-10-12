@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import type { Attention, Capture, Hold } from '../api/types';
-import { abnormalEnd, bytes, harnessName, PERMISSION_LABEL, quotaNote, stoppedPaths } from '../format';
+import { jsonObject, jsonArray, jsonNumber, captureChanges, abnormalEnd, bytes, harnessName, PERMISSION_LABEL, quotaNote, stoppedPaths } from '../format';
 import { act, run, selectTask, setPermission, useCommand, useStore } from '../store';
 import { Modal } from './common';
 import { DiffPool, DiffView } from './DiffView';
@@ -56,7 +56,7 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
           <p>运行时的工作出错：{a.key}</p>
           <p className="muted">{a.reason}</p>
           <div className="actions">
-            <button onClick={() => act('retry_failed')}>重试</button>
+            <button onClick={() => act('retry_failed', {})}>重试</button>
           </div>
         </div>
       );
@@ -75,7 +75,7 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
           <p>预览已停止：{a.reason}</p>
           <p className="muted">把仓库恢复到上次预览的状态后重试。Lobotomy 不会覆盖你的文件。</p>
           <div className="actions">
-            <button onClick={() => run('retry_preview')}>重试预览</button>
+            <button onClick={() => run('retry_preview', {})}>重试预览</button>
           </div>
         </div>
       );
@@ -164,13 +164,13 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
     );
   }
   const c = hold.capture;
-  const decide = (command: string) => run(command, { capture_id: c.id });
+  const decide = (command: 'approve_new_files' | 'discard_uncaptured') => run(command, { capture_id: c.id });
   const pending = c.kind === 'candidate' && '它报告的 done 还没有生效。';
   return (
     <div className="card warn">
       {c.state === 'oversized' ? (
         <p>
-          {role} 的这次采集新增了 {c.detail?.files?.length ?? 0} 个文件，共 {bytes(c.detail?.total_bytes ?? 0)}，超过了项目设定的上限。
+          {role} 的这次采集新增了 {jsonArray(jsonObject(c.detail).files).length} 个文件，共 {bytes(jsonNumber(jsonObject(c.detail).total_bytes))}，超过了项目设定的上限。
           {pending}
         </p>
       ) : (
@@ -198,7 +198,7 @@ function UndeliveredNote({ taskId }: { taskId: string }) {
 
 /** A turn outside any task changed files; nothing writes over them until the user decides (#14). */
 function OutsideChangesCard({ role, capture }: { role: string; capture: Capture }) {
-  const changed = capture.detail?.changed ?? [];
+  const changed = captureChanges(capture);
   const [viewing, setViewing] = useState(false);
   const [adopting, setAdopting] = useState(false);
   return (

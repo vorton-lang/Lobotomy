@@ -20,7 +20,7 @@ export function TrialControls({ detail }: { detail: TaskDetail }) {
     const refresh = async () => {
       const before = revision.current;
       try {
-        const result = await call<TrialView[]>('trials', { task_id: taskId });
+        const result = await call('trials', { task_id: taskId });
         if (!disposed && before === revision.current) {
           setTrials(result);
           setError(null);
@@ -91,7 +91,7 @@ function LaunchTrial({ attempt, candidate, disabled, opened, onStarted }: {
   opened: boolean;
   onStarted: (trial: TrialView) => void;
 }) {
-  const { submit, busy } = useCommand<TrialView>('start_trial');
+  const { submit, busy } = useCommand('start_trial');
   const launch = async () => {
     if (!candidate || disabled) return;
     const result = await submit({ task_id: attempt.task_id, attempt_id: attempt.id, expected_candidate: candidate });
@@ -110,7 +110,7 @@ function TrialTerminal({ trial, earlier, connected, onStopped }: {
   connected: boolean;
   onStopped: () => void;
 }) {
-  const { submit, busy } = useCommand<null>('stop_trial');
+  const { submit, busy } = useCommand('stop_trial');
   const stop = async () => {
     if ((await submit({ trial_id: trial.id })) !== undefined) onStopped();
   };

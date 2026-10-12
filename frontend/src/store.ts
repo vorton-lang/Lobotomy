@@ -1,6 +1,7 @@
 // The GUI's state: a projection of the backend (frontend.md §0). The backend is the authority;
 // after any doubt (reconnect, resync) the store reloads instead of patching.
 
+import type { ReadMethod, ReadArgs, ReadResult, CommandName, CommandArgs, CommandParams, CommandResult } from './api/methods';
 import { useCallback, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { Connection, RequestFailed, type Status } from './api/connection';
@@ -18,7 +19,6 @@ import type {
   Refs,
   RoleView,
   SearchMatch,
-  SearchResult,
   Snapshot,
   TaskDetail,
   ThreadPage,
@@ -195,11 +195,17 @@ export function connect(url: string) {
  * 「全部」, unless they name one themselves; `host` and the host's commands need none (frontend.md
  * §3 rule 8).
  */
-export function call<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+export function call<M extends ReadMethod>(method: M, ...args: ReadArgs<M>): Promise<ReadResult<M>> {
   if (!connection) return Promise.reject(new Error('not connected'));
+  const params = args[0] ?? {};
   const project = scope();
   const scoped = method === 'host' || project === null || 'project' in params ? params : { ...params, project };
-  return connection.call<T>(method, scoped);
+  return connection.call(method, ...[scoped] as ReadArgs<M>);
+}
+
+export function sendCommand<C extends CommandName>(name: C, args: CommandParams<C>, project = scope()): Promise<CommandResult<C>> {
+  if (!connection) return Promise.reject(new Error('not connected'));
+  return connection.command({ name, args, ...(project === null ? {} : { project }) });
 }
 
 let nextToast = 1;
@@ -213,12 +219,12 @@ export function toast(text: string) {
  * Runs a user command (data-model.md §9.2). The request id makes a retry harmless. Rejections
  * are shown to the user and returned as `undefined`.
  */
-export async function run<T = unknown>(
-  name: string,
-  args: Record<string, unknown> = {},
+export async function run<C extends CommandName>(
+  name: C,
+  args: CommandArgs<C>,
   requestId: string = crypto.randomUUID(),
-): Promise<T | undefined> {
-  return act<T>(name, { request_id: requestId, ...args });
+): Promise<CommandResult<C> | undefined> {
+  return command(name, { request_id: requestId, ...args } as CommandParams<C>);
 }
 
 /**
@@ -226,17 +232,17 @@ export async function run<T = unknown>(
  * is out, `busy` is true and another submit does nothing. The request id stays the same until a
  * submit succeeds, so pressing again after a reply was lost runs the command once.
  */
-export function useCommand<T = unknown>(name: string) {
+export function useCommand<C extends CommandName>(name: C) {
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
   const requestId = useRef(crypto.randomUUID());
   const submit = useCallback(
-    async (args: Record<string, unknown>): Promise<T | undefined> => {
+    async (args: CommandArgs<C>): Promise<CommandResult<C> | undefined> => {
       if (pending.current) return undefined;
       pending.current = true;
       setBusy(true);
       try {
-        const result = await run<T>(name, args, requestId.current);
+        const result = await run(name, args, requestId.current);
         if (result !== undefined) requestId.current = crypto.randomUUID();
         return result;
       } finally {
@@ -250,18 +256,18 @@ export function useCommand<T = unknown>(name: string) {
 }
 
 /** Runtime actions take no request id. */
-export async function act<T = unknown>(name: string, args: Record<string, unknown> = {}): Promise<T | undefined> {
-  return command<T>({ name, args });
+export async function act<C extends CommandName>(name: C, args: CommandParams<C>): Promise<CommandResult<C> | undefined> {
+  return command(name, args);
 }
 
-/** A user command about `project`, or Angela, wherever the window is: the settings run these. */
-export async function runIn<T = unknown>(project: string, name: string, args: Record<string, unknown> = {}): Promise<T | undefined> {
-  return command<T>({ name, args: { request_id: crypto.randomUUID(), ...args }, project });
+/** A user command about a specific project or Angela, wherever the window is. */
+export async function runIn<C extends CommandName>(project: string, name: C, args: CommandArgs<C>): Promise<CommandResult<C> | undefined> {
+  return command(name, { request_id: crypto.randomUUID(), ...args } as CommandParams<C>, project);
 }
 
-async function command<T>(params: Record<string, unknown>): Promise<T | undefined> {
+async function command<C extends CommandName>(name: C, args: CommandParams<C>, project = scope()): Promise<CommandResult<C> | undefined> {
   try {
-    return await call<T>('command', params);
+    return await sendCommand(name, args, project);
   } catch (e) {
     toast(e instanceof RequestFailed ? `${e.remote.message}` : String(e));
     return undefined;
@@ -301,7 +307,7 @@ async function loadSettingsSnapshot() {
   const target = settings && settingsTarget(settings.page);
   if (!target) return;
   const request = ++settingsRequest;
-  const snapshot = await call<Snapshot>('snapshot', { project: target }).catch(() => null);
+  const snapshot = await call('snapshot', { project: target }).catch(() => null);
   const now = useStore.getState().settings;
   if (request !== settingsRequest || !now || settingsTarget(now.page) !== target) return;
   useStore.setState({ settings: { ...now, snapshot } });
@@ -367,7 +373,7 @@ let appliedHost = 0;
 /** Takes a new host snapshot. Returns whether the window now shows another project. */
 async function loadHost(): Promise<boolean> {
   const request = ++hostRequest;
-  const host = await call<HostSnapshot>('host');
+  const host = await call('host');
   if (request < appliedHost) return false;
   appliedHost = request;
   keepSettingsPage(host);
@@ -413,7 +419,7 @@ async function loadSnapshot() {
   const { project } = useStore.getState();
   if (scope() === null) return;
   const request = ++snapshotRequest;
-  const snapshot = await call<Snapshot>('snapshot');
+  const snapshot = await call('snapshot');
   if (request < appliedSnapshot || !showing(project)) return;
   appliedSnapshot = request;
   useStore.setState({ snapshot });
@@ -446,7 +452,7 @@ async function loadNewestThread() {
   const { project, snapshot } = useStore.getState();
   const role = mainRole(snapshot)?.name;
   if (!role) return;
-  const page = await call<ThreadPage>('thread', { role });
+  const page = await call('thread', { role });
   if (!showing(project)) return;
   useStore.setState({ thread: { ...mergePage(emptyThread(role), page, 'replace'), loaded: true }, following: true });
 }
@@ -463,7 +469,7 @@ export function loadOlder(): Promise<void> {
   older ??= (async () => {
     const { project, thread } = useStore.getState();
     if (!thread.hasMore || thread.items.length === 0) return;
-    const page = await call<ThreadPage>('thread', { role: thread.role, before: thread.items[0].seq });
+    const page = await call('thread', { role: thread.role, before: thread.items[0].seq });
     if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'older') }));
   })().finally(() => (older = null));
   return older;
@@ -473,7 +479,7 @@ async function catchUp() {
   const { project, thread } = useStore.getState();
   if (!thread.loaded) return;
   const after = thread.items.at(-1)?.seq ?? 0;
-  const page = await call<ThreadPage>('thread', { role: thread.role, after });
+  const page = await call('thread', { role: thread.role, after });
   if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'newer') }));
 }
 
@@ -481,7 +487,7 @@ async function catchUp() {
 async function refreshTurns() {
   const { project, thread } = useStore.getState();
   if (!thread.loaded) return;
-  const page = await call<ThreadPage>('thread', { role: thread.role });
+  const page = await call('thread', { role: thread.role });
   if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'newer') }));
 }
 
@@ -505,7 +511,7 @@ export function mergePage(thread: ThreadState, page: ThreadPage, mode: 'replace'
 
 export async function loadTaskDetail(taskId: string) {
   const { project } = useStore.getState();
-  const detail = await call<TaskDetail>('task', { task_id: taskId });
+  const detail = await call('task', { task_id: taskId });
   if (showing(project) && useStore.getState().selectedTask === taskId) useStore.setState({ taskDetail: detail });
 }
 
@@ -536,7 +542,7 @@ export async function runSearch(query: string) {
   const request = ++searchRequest;
   const role = useStore.getState().thread.role;
   const found = query.trim()
-    ? await call<SearchResult>('search', { role, query }).catch((e) => {
+    ? await call('search', { role, query }).catch((e) => {
         toast(String(e));
         return { matches: [], more: false };
       })
@@ -592,7 +598,7 @@ export function wantRefs(quotes: string[], attachments: string[]) {
 
 async function loadRefs() {
   if (scope() !== ANGELA || wanted.quotes.size + wanted.attachments.size === 0) return;
-  const refs = await call<Refs>('refs', { quotes: [...wanted.quotes], attachments: [...wanted.attachments] });
+  const refs = await call('refs', { quotes: [...wanted.quotes], attachments: [...wanted.attachments] });
   if (scope() === ANGELA) useStore.setState({ refs });
 }
 
@@ -609,7 +615,7 @@ export function wantForwards(messages: string[]) {
 
 async function loadForwards() {
   if (scope() !== ANGELA || forwarded.size === 0) return;
-  const forwards = await call<Record<string, Forward[]>>('forwards', { messages: [...forwarded] });
+  const forwards = await call('forwards', { messages: [...forwarded] });
   if (scope() === ANGELA) useStore.setState({ forwards });
 }
 
@@ -628,7 +634,7 @@ export function watchLedger(): () => void {
 
 async function loadLedger() {
   if (scope() !== ANGELA || ledgerViews === 0) return;
-  const ledger = await call<Ledgers>('ledger');
+  const ledger = await call('ledger');
   if (scope() === ANGELA) useStore.setState({ ledger });
 }
 

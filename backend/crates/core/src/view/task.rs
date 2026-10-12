@@ -11,6 +11,7 @@ use crate::task::{Attempt, Message, Task, list_attempts, load_task, undelivered_
 use crate::verify::{Verification, task_verifications};
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct TaskDetail {
     pub task: Task,
     pub criteria: Vec<Criteria>,
@@ -27,6 +28,7 @@ pub struct TaskDetail {
 
 /// One version of the completion criteria (data-model.md §4.4).
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Criteria {
     pub version: i64,
     pub text: String,
@@ -36,6 +38,7 @@ pub struct Criteria {
 
 /// One check command of a verification and how it ran (harness-adapter.md §4.2).
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct CheckRun {
     pub id: String,
     pub verification_id: String,
@@ -50,6 +53,7 @@ pub struct CheckRun {
 
 /// A decision about the task: who made it, and the details it records.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Decision {
     pub id: String,
     pub kind: String,
@@ -60,6 +64,7 @@ pub struct Decision {
 
 /// An integration version the task's acceptance published.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Publication {
     pub rev: i64,
     pub commit_id: String,

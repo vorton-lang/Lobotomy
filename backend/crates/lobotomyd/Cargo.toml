@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-ts-rs = ["dep:ts-rs", "lobotomy-core/ts-rs"]
+ts-rs = ["dep:ts-rs", "lobotomy-core/ts-rs", "lobotomy-store/ts-rs"]
 
 [dependencies]
 ts-rs = { workspace = true, optional = true }

@@ -13,7 +13,7 @@ use lobotomy_core::view::{self, Attention, Overview, SearchQuery, ThreadQuery};
 use lobotomy_harness::{Harness, MCP_SERVER};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::host::Host;
 use crate::instance::{Instance, LiveTurn};
@@ -38,7 +38,7 @@ pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyh
         "disk_usage" => {
             let turns = project.data_dir.join("turns");
             let (files, bytes) = tokio::task::spawn_blocking(move || directory_size(&turns)).await?;
-            json!({ "raw_output": { "files": files, "bytes": bytes } })
+            serde_json::to_value(DiskUsage { raw_output: RawOutput { files, bytes } })?
         }
         "diff" => {
             let DiffParams { from, to } = serde_json::from_value(params)?;
@@ -71,11 +71,14 @@ pub async fn answer_angela(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct ForwardsParams {
     messages: Vec<String>,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "Forward"))]
 struct ProjectForward {
     project: String,
     project_name: String,
@@ -115,6 +118,7 @@ async fn forwards(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct RefsParams {
     #[serde(default)]
     quotes: Vec<String>,
@@ -125,18 +129,22 @@ struct RefsParams {
 /// What a reference in Angela's reply shows, or why it shows nothing.
 #[derive(Serialize)]
 #[serde(untagged)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 enum Resolved<T> {
     Found(T),
     Error { error: String },
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct QuotedMessage {
     at: i64,
     body: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "AttachmentView"))]
 struct ProjectAttachment {
     project: String,
     project_name: String,
@@ -145,6 +153,7 @@ struct ProjectAttachment {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct Refs {
     quotes: HashMap<String, Resolved<QuotedMessage>>,
     attachments: HashMap<String, Resolved<ProjectAttachment>>,
@@ -223,7 +232,7 @@ async fn transcript(instance: &Instance, method: &str, params: Value) -> anyhow:
             if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(Error::rejected("bad_request", format!("not a blob hash: {hash}")).into());
             }
-            json!({ "text": instance.blobs.read(&hash)? })
+            serde_json::to_value(BlobText { text: instance.blobs.read(&hash)? })?
         }
         other => return Err(Error::rejected("bad_request", format!("unknown method {other}")).into()),
     })
@@ -238,22 +247,26 @@ async fn read<T: Serialize + Send + 'static>(
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct TaskParams {
     task_id: String,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct DiffParams {
     from: String,
     to: String,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct BlobParams {
     hash: String,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Snapshot {
     #[serde(flatten)]
     overview: Overview,
@@ -266,6 +279,7 @@ pub struct Snapshot {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct HarnessView {
     harness: &'static str,
     permission: &'static str,
@@ -324,6 +338,7 @@ fn harnesses(host: &Host) -> anyhow::Result<Vec<HarnessView>> {
 
 /// What the host shows across projects (frontend.md §2 "M3 的布局", §3 rule 8).
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct HostSnapshot {
     projects: Vec<ProjectStatus>,
     /// What waits for the user outside any project: the blocked quota domains, each once
@@ -335,6 +350,7 @@ pub struct HostSnapshot {
 
 /// Angela as the host shows her (data-model.md §10.6). Projects run without her.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct AngelaStatus {
     /// Why her instance could not be opened; she does not run.
     error: Option<String>,
@@ -346,6 +362,7 @@ struct AngelaStatus {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct ProjectStatus {
     #[serde(flatten)]
     entry: ProjectEntry,
@@ -405,4 +422,89 @@ fn directory_size(dir: &Path) -> (u64, u64) {
         .filter_map(|entry| entry.ok()?.metadata().ok())
         .filter(|meta| meta.is_file())
         .fold((0, 0), |(files, bytes), meta| (files + 1, bytes + meta.len()))
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+struct RawOutput {
+    files: u64,
+    bytes: u64,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+struct DiskUsage {
+    raw_output: RawOutput,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+struct BlobText {
+    text: String,
+}
+
+#[cfg(feature = "ts-rs")]
+pub(super) fn bindings(out: &mut super::bindings::Bindings) {
+    use super::protocol::NoParams;
+    out.method::<NoParams, HostSnapshot>("host");
+    out.method::<NoParams, Snapshot>("snapshot");
+    out.method::<TaskParams, view::TaskDetail>("task");
+    out.method::<TaskParams, Vec<crate::trial::TrialView>>("trials");
+    out.method::<NoParams, DiskUsage>("disk_usage");
+    out.method::<DiffParams, Vec<lobotomy_store::FileChange>>("diff");
+    out.method::<ThreadQuery, view::ThreadPage>("thread");
+    out.method::<SearchQuery, view::Found>("search");
+    out.method::<BlobParams, BlobText>("blob");
+    out.method::<RefsParams, Refs>("refs");
+    out.method::<ForwardsParams, HashMap<String, Vec<ProjectForward>>>("forwards");
+    out.method::<NoParams, crate::mcp::angela::Ledgers>("ledger");
+}
+
+/// Representative private/flattened read models for the cross-language contract check.
+#[cfg(feature = "ts-rs")]
+pub(super) fn binding_fixtures(db: &lobotomy_core::Db) -> anyhow::Result<Value> {
+    let overview = db.read(|c| view::overview(c, MCP_SERVER))?;
+    let live = HashMap::from([(
+        "turn".into(),
+        LiveTurn {
+            role: "Malkuth".into(),
+            started_at: 1,
+            items: std::collections::BTreeMap::from([(
+                "item".into(),
+                crate::instance::LiveItem {
+                    kind: "future_kind".into(),
+                    content: serde_json::json!([null, true, { "value": 1 }]),
+                    started_at: 1,
+                },
+            )]),
+        },
+    )]);
+    let snapshot = Snapshot {
+        overview,
+        attention: vec![],
+        quota: vec![],
+        harnesses: vec![HarnessView { harness: "codex", permission: "auto_review" }],
+        live,
+    };
+    let refs = Refs {
+        quotes: HashMap::from([
+            ("found".into(), Resolved::Found(QuotedMessage { at: 1, body: "quoted".into() })),
+            ("missing".into(), Resolved::Error { error: "missing".into() }),
+        ]),
+        attachments: HashMap::from([(
+            "task".into(),
+            Resolved::Found(ProjectAttachment {
+                project: "project".into(),
+                project_name: "Project".into(),
+                attachment: view::attachment::Attachment::Task {
+                    task_id: "task".into(),
+                    title: "Task".into(),
+                    executor: "Malkuth".into(),
+                    phase: lobotomy_core::task::Phase::Queued,
+                    paused: false,
+                },
+            }),
+        )]),
+    };
+    Ok(serde_json::json!({ "snapshot": snapshot, "refs": refs }))
 }

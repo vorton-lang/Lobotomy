@@ -15,7 +15,7 @@ use lobotomy_core::turn::{Continue, NewNativeSession, SetRoleHarness, TurnState,
 use lobotomy_core::verify::{Accept, RetryPreview, SendBack};
 use lobotomy_core::{Caller, Command, Db, Error};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::host::Host;
 use crate::instance::Instance;
@@ -45,26 +45,31 @@ where
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct TurnParams {
     turn_id: String,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct CreateProjectParams {
     repo_path: String,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct ProjectParams {
     project_id: String,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct HarnessParams {
     harness: String,
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct PermissionParams {
     harness: String,
     permission: String,
@@ -112,7 +117,7 @@ pub async fn host(host: &Arc<Host>, projects: &Projects, params: &CommandParams)
             let PermissionParams { harness, permission } = serde_json::from_value(args)?;
             let set = host.set_permission(&harness, &permission)?;
             host.changed();
-            Ok(json!({ "harness": harness, "permission": set.as_str() }))
+            Ok(serde_json::to_value(PermissionChanged { harness, permission: set.as_str() })?)
         })(),
         "shutdown" => {
             host.shutdown_requested.notify_one();
@@ -123,6 +128,31 @@ pub async fn host(host: &Arc<Host>, projects: &Projects, params: &CommandParams)
     Some(result)
 }
 
+macro_rules! project_commands {
+    ($callback:ident) => {
+        $callback!(
+            CreateTask,
+            EditCriteria,
+            SendMessage,
+            SetPaused,
+            MoveInQueue,
+            Abandon,
+            Reopen,
+            Accept,
+            SendBack,
+            Continue,
+            NewNativeSession,
+            SetRoleHarness,
+            ApproveNewFiles,
+            DiscardUncaptured,
+            AdoptOutsideChanges,
+            DiscardOutsideChanges,
+            RetryPreview,
+            EditProjectConfig,
+        );
+    };
+}
+
 /// Runs a command of one project.
 pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: CommandParams) -> anyhow::Result<Value> {
     macro_rules! user_commands {
@@ -130,38 +160,15 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: Comma
             $(if name == <$ty as Command>::NAME { return user::<$ty>(project, args).await; })*
         };
     }
-    user_commands!(
-        CreateTask,
-        EditCriteria,
-        SendMessage,
-        SetPaused,
-        MoveInQueue,
-        Abandon,
-        Reopen,
-        Accept,
-        SendBack,
-        Continue,
-        NewNativeSession,
-        SetRoleHarness,
-        ApproveNewFiles,
-        DiscardUncaptured,
-        AdoptOutsideChanges,
-        DiscardOutsideChanges,
-        RetryPreview,
-        EditProjectConfig,
-    );
+    project_commands!(user_commands);
     match name.as_str() {
         "start_trial" => Ok(serde_json::to_value(crate::trial::start(project, serde_json::from_value(args)?).await?)?),
         "stop_trial" => {
-            #[derive(Deserialize)]
-            struct StopTrial {
-                trial_id: String,
-            }
             let StopTrial { trial_id } = serde_json::from_value(args)?;
             project.trials.stop(&trial_id).await?;
             Ok(Value::Null)
         }
-        "retry_failed" => Ok(json!({ "retried": results::retry_failed(project) })),
+        "retry_failed" => Ok(serde_json::to_value(RetryFailed { retried: results::retry_failed(project) })?),
         _ => turn_actions(project, &name, args).await,
     }
 }
@@ -198,8 +205,56 @@ async fn turn_actions(instance: &Instance, name: &str, args: Value) -> anyhow::R
                 )
                 .into());
             };
-            Ok(json!({ "terminated": lobotomy_harness::process::terminate(pid as u32, start)? }))
+            Ok(serde_json::to_value(Terminated {
+                terminated: lobotomy_harness::process::terminate(pid as u32, start)?,
+            })?)
         }
         other => Err(Error::rejected("bad_request", format!("unknown command {other}")).into()),
     }
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+struct StopTrial {
+    trial_id: String,
+}
+
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+struct PermissionChanged {
+    harness: String,
+    permission: &'static str,
+}
+
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+struct RetryFailed {
+    retried: usize,
+}
+
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+struct Terminated {
+    terminated: bool,
+}
+
+#[cfg(feature = "ts-rs")]
+pub(super) fn bindings(out: &mut super::bindings::Bindings) {
+    use super::protocol::NoParams;
+    macro_rules! export {
+        ($($ty:ty),* $(,)?) => { $(out.command::<$ty>();)* };
+    }
+    project_commands!(export);
+    out.action::<CreateProjectParams, lobotomy_core::host::ProjectEntry>("create_project");
+    for name in ["archive_project", "unarchive_project", "retry_open"] {
+        out.action::<ProjectParams, ()>(name);
+    }
+    out.action::<HarnessParams, lobotomy_core::quota::Domain>("quota_retry");
+    out.action::<PermissionParams, PermissionChanged>("set_permission");
+    out.action::<NoParams, ()>("shutdown");
+    out.action::<crate::trial::StartTrial, crate::trial::TrialView>("start_trial");
+    out.action::<StopTrial, ()>("stop_trial");
+    out.action::<NoParams, RetryFailed>("retry_failed");
+    out.action::<TurnParams, ()>("interrupt");
+    out.action::<TurnParams, Terminated>("terminate");
 }

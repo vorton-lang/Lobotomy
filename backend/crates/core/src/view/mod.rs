@@ -36,6 +36,7 @@ pub use thread::{
 
 /// What the GUI's snapshot reads from the database.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Overview {
     /// The last event it includes; pushed events after it apply on top.
     pub seq: i64,
@@ -53,12 +54,14 @@ pub struct Overview {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ConfigView {
     pub version: i64,
     pub config: ProjectConfig,
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct RoleView {
     #[serde(flatten)]
     pub role: Role,
@@ -74,6 +77,7 @@ pub struct RoleView {
 }
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Stalled {
     pub task_id: String,
     pub turn_id: String,
@@ -82,6 +86,7 @@ pub struct Stalled {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct TaskView {
     #[serde(flatten)]
     pub task: Task,
@@ -185,6 +190,7 @@ fn stalled(conn: &Connection, role: &RoleView, mcp_server: &str) -> Result<Optio
 /// Something that waits for the user ("等你决定", frontend.md §2).
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum Attention {
     /// The role waits: continue, start a new session, or decide on a stopped capture.
     Hold {

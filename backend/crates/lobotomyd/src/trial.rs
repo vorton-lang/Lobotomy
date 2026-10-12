@@ -15,6 +15,7 @@ use crate::project::Project;
 use crate::{launch, runner};
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct TrialView {
     pub id: String,
     pub task_id: String,
@@ -77,6 +78,7 @@ impl Trials {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct StartTrial {
     pub task_id: String,
     pub attempt_id: String,

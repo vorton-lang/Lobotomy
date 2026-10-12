@@ -140,7 +140,7 @@ impl Host {
     /// Tells the GUIs to take a new host snapshot: a host setting or the project list changed.
     /// Neither has an event of its own.
     pub fn changed(&self) {
-        let _ = self.gui_push.send(serde_json::json!({ "type": "host" }).to_string().into());
+        let _ = self.gui_push.send(serde_json::json!(crate::gui::protocol::Push::Host).to_string().into());
     }
 
     /// `%LOCALAPPDATA%\Lobotomy` on Windows; `$XDG_STATE_HOME/lobotomy` or

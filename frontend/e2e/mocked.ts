@@ -8,6 +8,7 @@ export const hostSnapshot = (): HostSnapshot => ({
   projects: [{ id: PROJECT, name: 'project', data_dir: '/data/project', repo_path: '/project', state: 'running', registered_at: 1, error: null, attention: [], busy: false }],
   attention: [],
   harnesses: [],
+  angela: { error: null, busy: false, attention: [] },
 });
 
 export const role = (taskId: string | null): RoleView => ({
@@ -35,7 +36,7 @@ export const detail = (view: TaskView, undelivered: TaskDetail['undelivered_mess
     }],
     captures: [{
       id: `c-${view.id}`, turn_id: `t-${view.id}`, role: 'Malkuth', task_id: view.id, attempt_id: `a-${view.id}`, kind: 'candidate',
-      base: 'base0000', state: 'pinned', commit_id: '1111111111', detail: null, created_at: 2, outside: null,
+      base: 'base0000', state: 'pinned', commit_id: '1111111111', detail: null, created_at: 2, outside: null, workspace_id: 'workspace', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
     }],
     verifications: [{
       id: `v-${view.id}`, task_id: view.id, attempt_id: `a-${view.id}`, capture_id: `c-${view.id}`, base: 'base0000', config_version: 1,

@@ -4,9 +4,8 @@
 
 import { useState } from 'react';
 import { RequestFailed } from '../api/connection';
-import type { ProjectStatus } from '../api/types';
 import { inElectron } from '../bridge';
-import { call, refreshHost, selectProject } from '../store';
+import { sendCommand, refreshHost, selectProject } from '../store';
 
 export function ConnectRepo({ connected = true, onDone }: { connected?: boolean; onDone?: () => void }) {
   const [path, setPath] = useState('');
@@ -17,7 +16,7 @@ export function ConnectRepo({ connected = true, onDone }: { connected?: boolean;
     setBusy(true);
     setError(null);
     try {
-      const entry = await call<Pick<ProjectStatus, 'id'>>('command', { name: 'create_project', args: { repo_path: repo } });
+      const entry = await sendCommand('create_project', { repo_path: repo });
       await refreshHost();
       await selectProject(entry.id);
       onDone?.();

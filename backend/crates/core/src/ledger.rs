@@ -119,6 +119,7 @@ pub struct CitedEntry {
 
 /// An entry as it reads now: whether it still holds.
 #[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct LedgerEntry {
     pub id: String,
     pub kind: LedgerKind,

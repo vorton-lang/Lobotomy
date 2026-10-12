@@ -1,8 +1,8 @@
 // One transcript item (data-model.md §7.2). A Lobotomy tool call shows its command record, which
 // holds the arguments; other items show their own content.
 
-import type { CommandRecord, Item, LiveItem, Text } from '../api/types';
-import { asReport, commandSummary, elapsed, previewLine, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
+import type { CommandRecord, Item, LiveItem } from '../api/types';
+import { jsonObject, jsonArray, asReport, commandSummary, elapsed, previewLine, REPORT_LABEL, textOf, toolSubject, voidReport } from '../format';
 import { setReplyTo, useStore } from '../store';
 import { Markdown, Output, useNow } from './common';
 import { Reply } from './Reply';
@@ -20,24 +20,25 @@ export function ItemView({
   commands: Record<string, CommandRecord>;
   fold?: boolean;
 }) {
+  const content = jsonObject(item.content);
   switch (item.kind) {
     case 'agent_message':
-      return <AgentMessage id={item.id} role={role} text={textOf(item.content.text)} />;
+      return <AgentMessage id={item.id} role={role} text={textOf(content.text)} />;
     case 'reasoning':
       return (
         <details className="item reasoning">
           <summary>思考</summary>
-          <Markdown text={textOf(item.content.text)} />
+          <Markdown text={textOf(content.text)} />
         </details>
       );
     case 'command':
-      return <CommandView command={item.content.command} output={item.content.output} exitCode={item.content.exit_code} />;
+      return <CommandView command={content.command} output={content.output} exitCode={content.exit_code} />;
     case 'file_change':
       return (
         <div className="item file-change">
-          {(item.content.changes ?? []).map((change) => (
-            <div key={change.path}>
-              <span className="badge">{change.kind}</span> <code>{change.path}</code>
+          {jsonArray(content.changes).map(jsonObject).map((change) => (
+            <div key={textOf(change.path)}>
+              <span className="badge">{textOf(change.kind)}</span> <code>{textOf(change.path)}</code>
             </div>
           ))}
         </div>
@@ -70,11 +71,11 @@ export function ItemView({
           </div>
         );
       }
-      const c = item.content;
+      const c = content;
       return (
         <details className="item">
           <summary>
-            调用 {c.server}.{c.tool}
+            调用 {textOf(c.server)}.{textOf(c.tool)}
           </summary>
           <Output value={c.arguments} />
           <Output value={c.result ?? c.error} />
@@ -82,21 +83,21 @@ export function ItemView({
       );
     }
     case 'tool_call':
-      return <ToolCallView tool={item.content.tool} input={item.content.input} output={item.content.output} status={item.content.status} />;
+      return <ToolCallView tool={content.tool} input={content.input} output={content.output} status={content.status} />;
     case 'web_search':
-      return <div className="item muted">搜索：{textOf(item.content.query)}</div>;
+      return <div className="item muted">搜索：{textOf(content.query)}</div>;
     case 'todo_list':
       return (
         <ul className="item todo">
-          {(item.content.items ?? []).map((t, i) => (
+          {jsonArray(content.items).map(jsonObject).map((t, i) => (
             <li key={i} className={t.completed ? 'done' : ''}>
-              {t.completed ? '☑' : '☐'} {t.text}
+              {t.completed ? '☑' : '☐'} {textOf(t.text)}
             </li>
           ))}
         </ul>
       );
     case 'error':
-      return <div className="item error">{textOf(item.content.message)}</div>;
+      return <div className="item error">{textOf(content.message)}</div>;
     case 'input':
     case 'other':
       return (
@@ -139,12 +140,12 @@ function CommandView({
   exitCode,
   running,
 }: {
-  command: Text | undefined;
-  output: Text | null | undefined;
-  exitCode?: number | null;
+  command: unknown;
+  output: unknown;
+  exitCode?: unknown;
   running?: React.ReactNode;
 }) {
-  const failed = exitCode !== null && exitCode !== undefined && exitCode !== 0;
+  const failed = typeof exitCode === 'number' && exitCode !== 0;
   const { line, size } = commandSummary(command);
   return (
     <details className={`item command ${failed ? 'failed' : ''}`}>
@@ -152,7 +153,7 @@ function CommandView({
         <code>$ {line}</code>
         {size && <span className="muted"> · {size}</span>}
         {running}
-        {failed && <span className="error"> · 退出码 {exitCode}</span>}
+        {failed && <span className="error"> · 退出码 {typeof exitCode === 'number' ? exitCode : ''}</span>}
       </summary>
       {size && <Output value={command} />}
       <Output value={output} />
@@ -171,17 +172,17 @@ function ToolCallView({
   status,
   running,
 }: {
-  tool: string;
+  tool: unknown;
   input: unknown;
-  output?: Text | null;
-  status?: string;
+  output?: unknown;
+  status?: unknown;
   running?: React.ReactNode;
 }) {
   const subject = toolSubject(input);
   return (
     <details className={`item command ${status === 'failed' ? 'failed' : ''}`}>
       <summary>
-        <code>{tool}</code>
+        <code>{textOf(tool)}</code>
         {subject && <span className="muted"> {subject}</span>}
         {running}
         {status === 'failed' && <span className="error"> · 失败</span>}
@@ -199,20 +200,21 @@ function ToolCallView({
 export function LiveItemView({ item, role }: { item: LiveItem; role: string }) {
   const now = useNow();
   const since = <span className="running"> · 运行中 {elapsed(item.started_at, now)}</span>;
+  const content = jsonObject(item.content);
   switch (item.kind) {
     case 'command':
-      return <CommandView command={item.content.command} output={item.content.output} running={since} />;
+      return <CommandView command={content.command} output={content.output} running={since} />;
     case 'agent_message':
       return (
         <div className="message other live">
           <div className="who">
             <Author name={role} />
           </div>
-          <Markdown text={textOf(item.content.text)} streaming />
+          <Markdown text={textOf(content.text)} streaming />
         </div>
       );
     case 'tool_call':
-      return <ToolCallView tool={item.content.tool} input={item.content.input} running={since} />;
+      return <ToolCallView tool={content.tool} input={content.input} running={since} />;
     default:
       return (
         <div className="item muted">

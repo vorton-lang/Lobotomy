@@ -17,6 +17,7 @@ vi.mock('./api/connection', async (original) => ({
   ...(await original<typeof import('./api/connection')>()),
   Connection: class {
     constructor(_url: string, events: ConnectionEvents) { probe.events = events; }
+    command(params: Record<string, unknown>) { return this.call('command', params); }
     start() {}
     stop() {}
     call(method: string, params: Record<string, unknown>) {
@@ -25,7 +26,7 @@ vi.mock('./api/connection', async (original) => ({
   },
 }));
 
-import { ANGELA, chooseProject, connect, scope, selectProject, totalAttention, useStore } from './store';
+import { ANGELA, chooseProject, connect, scope, selectProject, run, totalAttention, useStore } from './store';
 
 afterEach(() => {
   // A debounced refresh still waiting would swallow the next test's.
@@ -193,4 +194,17 @@ test('on 「全部」 without Angela nothing names her', async () => {
   await answer('host', { ...host('p1', 'p2'), angela: angela('数据库是更新版本的 Lobotomy 写的') });
   expect(scope()).toBe(null);
   expect(pending('snapshot')).toHaveLength(0);
+});
+
+test('typed commands keep the project and supplied retry id', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  useStore.setState({ project: 'p1' });
+  const created = run('create_task', { title: 'Task', body: '', criteria: '', executor: 'Malkuth' }, 'retry-id');
+  expect(pending('command')[0].params).toEqual({
+    name: 'create_task', project: 'p1',
+    args: { request_id: 'retry-id', title: 'Task', body: '', criteria: '', executor: 'Malkuth' },
+  });
+  await answer('command', { id: 'task' });
+  expect(await created).toEqual({ id: 'task' });
 });

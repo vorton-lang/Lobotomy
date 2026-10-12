@@ -59,6 +59,7 @@ impl Drop for InstanceLock {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct LiveTurn {
     pub role: String,
     pub started_at: i64,
@@ -67,6 +68,7 @@ pub struct LiveTurn {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct LiveItem {
     pub kind: String,
     pub content: serde_json::Value,
