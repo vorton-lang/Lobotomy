@@ -8,6 +8,8 @@
     "start": "cargo build -p lobotomyd --manifest-path ../backend/Cargo.toml && vite build && electron .",
     "dev": "vite",
     "build": "vite build",
+    "icons:generate": "node scripts/icons.mjs",
+    "icons:check": "node scripts/icons.mjs --check",
     "api:generate": "node scripts/api-types.mjs",
     "api:check": "node scripts/api-types.mjs --check",
     "typecheck": "npm run typecheck:app && npm run typecheck:node && npm run typecheck:tests",

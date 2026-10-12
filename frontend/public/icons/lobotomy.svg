@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64">
+  <title>Lobotomy — open door</title>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="13.5" fill="#242b32" stroke="#53616b"/>
+  <path d="M18 14h9v27h20v9H18z" fill="#edf3f5"/>
+  <path d="M31 14h16v17h-6V20H31z" fill="#edf3f5"/>
+  <rect x="41" y="35" width="6" height="6" rx="1" fill="#5cd4bd"/>
+</svg>

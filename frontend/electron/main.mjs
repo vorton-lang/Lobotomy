@@ -8,7 +8,6 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -193,48 +192,16 @@ async function quit() {
 // The tray's "退出" and the end-to-end tests call it.
 globalThis.lobotomyQuit = quit;
 
-/** A small round tray icon, drawn here so the app ships no image files yet. */
+// Committed raster assets come from public/icons/lobotomy.svg (npm run icons:generate).
+const icons = path.join(here, '..', 'public', 'icons');
+const windowIcon = path.join(icons, process.platform === 'win32' ? 'lobotomy.ico' : 'lobotomy-256.png');
 function trayIcon() {
-  const size = 32;
-  const rows = [];
-  for (let y = 0; y < size; y++) {
-    const row = Buffer.alloc(1 + size * 4);
-    for (let x = 0; x < size; x++) {
-      const d = Math.hypot(x - size / 2 + 0.5, y - size / 2 + 0.5);
-      const alpha = Math.max(0, Math.min(1, size / 2 - 2 - d)) * 255;
-      row.set([0x8a, 0x5a, 0x2b, alpha], 1 + x * 4);
-    }
-    rows.push(row);
+  if (process.platform === 'win32') return path.join(icons, 'lobotomy.ico');
+  const image = nativeImage.createEmpty();
+  for (const size of [16, 24, 32, 48]) {
+    image.addRepresentation({ scaleFactor: size / 16, buffer: fs.readFileSync(path.join(icons, `lobotomy-${size}.png`)) });
   }
-  const crcTable = Array.from({ length: 256 }, (_, n) => {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    return c >>> 0;
-  });
-  const crc = (buf) => {
-    let c = 0xffffffff;
-    for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
-    return (c ^ 0xffffffff) >>> 0;
-  };
-  const chunk = (type, data) => {
-    const body = Buffer.concat([Buffer.from(type), data]);
-    const out = Buffer.alloc(8 + data.length + 4);
-    out.writeUInt32BE(data.length, 0);
-    body.copy(out, 4);
-    out.writeUInt32BE(crc(body), 8 + data.length);
-    return out;
-  };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(size, 0);
-  header.writeUInt32BE(size, 4);
-  header.set([8, 6, 0, 0, 0], 8);
-  const png = Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', header),
-    chunk('IDAT', zlib.deflateSync(Buffer.concat(rows))),
-    chunk('IEND', Buffer.alloc(0)),
-  ]);
-  return nativeImage.createFromBuffer(png);
+  return image;
 }
 
 function showWindow() {
@@ -248,7 +215,7 @@ function createWindow() {
     width: 1320,
     height: 860,
     title: 'Lobotomy',
-    icon: trayIcon(),
+    icon: windowIcon,
     // Shown once the page has painted, on the page's own background (--bg in src/styles.css), so
     // the window does not flash white first.
     show: false,
