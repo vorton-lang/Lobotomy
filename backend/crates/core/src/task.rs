@@ -369,19 +369,14 @@ pub fn undelivered_user_messages(conn: &Connection, task_id: &str) -> Result<Vec
     messages(conn, "task_id = ?1 AND state = 'queued' AND source = 'user'", task_id)
 }
 
-/// Whether a reply waits for the task's executor: a queued message from the user, or from the
-/// manager who is its user (roles-and-tasks.md §4). Registering the next turn binds it and clears
-/// the executor's question (#17).
+/// Whether a queued message can answer this task's current question. Binding uses the same rule.
 pub fn reply_queued(conn: &Connection, task: &Task) -> Result<bool> {
-    Ok(conn
-        .query_row(
-            "SELECT 1 FROM message WHERE role = ?1 AND state = 'queued' AND source IN ('user', 'manager')
-             AND (task_id IS NULL OR task_id = ?2) LIMIT 1",
-            params![task.executor, task.id],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some())
+    for question in crate::question::open_questions(conn, &task.executor)? {
+        if question.task_id.as_deref() == Some(&task.id) && question.reply_queued(conn)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// A closed task's queued messages are not delivered: its executor no longer works on it
@@ -450,6 +445,7 @@ pub(crate) fn enter_execution(
     code_start: Option<&str>,
     conflicts: &[String],
 ) -> Result<AttemptStarted> {
+    crate::question::close_task(cx, &task.id)?;
     let seq: i64 =
         cx.tx
             .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| r.get(0))?;
@@ -482,6 +478,7 @@ pub(crate) fn close_task(cx: &mut Cx<'_>, task: &Task, phase: Phase) -> Result<(
     cx.tx.execute("DELETE FROM occupancy WHERE task_id = ?1", [&task.id])?;
     crate::turn::end_task_sessions(cx, &task.id)?;
     drop_queued(cx, &task.id)?;
+    crate::question::close_task(cx, &task.id)?;
     cx.tx.execute(
         "UPDATE task SET phase = ?2, closed_at = ?3, queue_pos = NULL, blocked_reason = NULL WHERE id = ?1",
         params![task.id, phase.as_str(), cx.now],

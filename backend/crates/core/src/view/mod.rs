@@ -136,7 +136,12 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
         });
     }
     let preview_stopped = if project.is_some() { preview_stopped(conn)? } else { None };
-    let questions = crate::manager::open_questions(conn)?;
+    let mut questions = Vec::new();
+    for question in crate::manager::open_questions(conn)? {
+        if !question.reply_queued(conn)? {
+            questions.push(question);
+        }
+    }
     Ok(Overview { seq, project, config, roles, tasks, preview_stopped, questions })
 }
 

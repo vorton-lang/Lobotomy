@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
+use crate::question::set_task_question;
 use crate::task::{Phase, Task, Trial, load_task, open_attempt};
 use crate::turn::{Turn, TurnState, load_turn};
 
@@ -89,15 +90,18 @@ impl Command for OrgReport {
 
         let effect = match self.status {
             ReportStatus::Progress => {
-                set_blocked(cx, &task, None)?;
+                set_task_question(cx, &task, None, &turn.id)?;
                 ReportEffect::Recorded
             }
             ReportStatus::Blocked => {
                 let reason = self.blocked_on.clone().unwrap_or_else(|| self.title.clone());
-                if task.blocked_reason.as_deref() == Some(reason.as_str()) {
+                if crate::question::open_questions(cx.tx, role)?
+                    .iter()
+                    .any(|q| q.task_id.as_deref() == Some(&task.id) && q.turn_id == turn.id && q.body == reason)
+                {
                     ReportEffect::Unchanged
                 } else {
-                    set_blocked(cx, &task, Some(&reason))?;
+                    set_task_question(cx, &task, Some(&reason), &turn.id)?;
                     ReportEffect::Recorded
                 }
             }
@@ -118,7 +122,7 @@ impl Command for OrgReport {
                             self.trial.as_ref().map(serde_json::to_string).transpose()?
                         ],
                     )?;
-                    set_blocked(cx, &task, None)?;
+                    set_task_question(cx, &task, None, &turn.id)?;
                     ReportEffect::Recorded
                 }
             }
@@ -174,16 +178,4 @@ impl Command for FlagMismatch {
         cx.emit("mismatch.flagged", &turn.id, json!({ "role": role, "task_id": turn.task_id, "body": self.body }))?;
         Ok(())
     }
-}
-
-pub(crate) fn set_blocked(cx: &mut Cx<'_>, task: &Task, reason: Option<&str>) -> Result<()> {
-    if task.blocked_reason.as_deref() == reason {
-        return Ok(());
-    }
-    cx.tx.execute(
-        "UPDATE task SET blocked_reason = ?2, revision = revision + 1 WHERE id = ?1",
-        params![task.id, reason],
-    )?;
-    cx.emit("task.blocked_changed", &task.id, json!({ "blocked_reason": reason }))?;
-    Ok(())
 }

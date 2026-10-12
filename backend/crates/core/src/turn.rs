@@ -242,7 +242,12 @@ fn is_abnormal(turn: &Turn) -> bool {
 /// The text written to the CLI's stdin: the bound messages in arrival order. The manager's input
 /// names each of the user's messages, so that she can quote it (manager-actions.md §1), and says
 /// what one replies to when the user chose it (§1.1); `replied` looks that up.
-pub fn compose_input(messages: &[Message], manager: bool, replied: impl Fn(&str) -> Option<Replied>) -> String {
+pub fn compose_input(
+    messages: &[Message],
+    manager: bool,
+    questions: &[crate::question::Question],
+    replied: impl Fn(&str) -> Option<Replied>,
+) -> String {
     messages
         .iter()
         .map(|m| {
@@ -254,6 +259,9 @@ pub fn compose_input(messages: &[Message], manager: bool, replied: impl Fn(&str)
             if let Some(target) = m.reply_to.as_deref().and_then(&replied) {
                 header.push('\n');
                 header.push_str(&prompts::replying_to(&target));
+            }
+            if !questions.is_empty() {
+                header.push_str(&prompts::question_reply(m, questions));
             }
             format!("{header}\n{}", m.body)
         })
@@ -415,6 +423,7 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     }
 
     let messages = queued_messages(cx.tx, role)?;
+    let questions = crate::question::open_questions(cx.tx, role)?;
     let (note, resend) = continuation.map_or((None, None), |c| (c.note, c.resend));
     let mut parts = Vec::new();
     if let Some(note) = note {
@@ -423,9 +432,15 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     if let Some(turn) = resend {
         parts.push(turn.input.clone());
     }
+    // A question is context, not a reason to launch an otherwise empty turn.
+    if !questions.is_empty() && (!parts.is_empty() || !messages.is_empty()) {
+        parts.push(prompts::open_questions(&questions, &messages));
+    }
     if !messages.is_empty() {
         let kind: String = cx.tx.query_row("SELECT kind FROM role WHERE name = ?1", [role], |r| r.get(0))?;
-        parts.push(compose_input(&messages, kind == "manager", |id| crate::task::replied(cx.tx, id).ok().flatten()));
+        parts.push(compose_input(&messages, kind == "manager", &questions, |id| {
+            crate::task::replied(cx.tx, id).ok().flatten()
+        }));
     }
     if parts.is_empty() {
         return Err(Error::rejected("nothing_to_deliver", format!("{role} has no queued messages")));
@@ -451,20 +466,7 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     for m in &messages {
         cx.tx.execute("UPDATE message SET state = 'bound', turn_id = ?2 WHERE id = ?1", params![m.id, turn_id])?;
     }
-    // The executor's question stands until a message from the user, or from the manager who is its
-    // user (manager-actions.md §0), goes to it. Once the message is bound, the executor gets it; if
-    // it still needs an answer, it asks again (#17).
-    let answerers = [Caller::User.scope(), "manager".to_owned()];
-    if let Some(task) = &task
-        && task.blocked_reason.is_some()
-        && messages.iter().any(|m| answerers.contains(&m.source))
-    {
-        crate::report::set_blocked(cx, task, None)?;
-    }
-    // The same for the manager's questions to the user (manager-actions.md §6 `ask_user`).
-    if let Some(sent) = messages.iter().filter(|m| m.source == Caller::User.scope()).map(|m| m.created_at).max() {
-        crate::manager::close_answered(cx, &turn_id, sent)?;
-    }
+    crate::question::close_answered(cx, &turn_id, &questions, &messages)?;
     ids.extend(messages.iter().map(|m| m.id.clone()));
     let resent = resend.map(|t| t.id.as_str());
     cx.emit(

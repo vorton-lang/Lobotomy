@@ -81,7 +81,6 @@ fn her_question_waits_for_a_message_sent_after_it() {
     send(&db, "m1", None, "看看现状");
     let t1 = register(&db);
     send(&db, "m2", None, "顺便问一下进度");
-    std::thread::sleep(std::time::Duration::from_millis(3));
     let asker = Caller::Role { role: ROLE.into(), turn_id: t1.turn_id.clone() };
     let ask = AskUser { question: "导出先做 CSV 还是 Excel？".into() };
     let id = db.execute(&asker, &ask).unwrap();
@@ -98,7 +97,6 @@ fn her_question_waits_for_a_message_sent_after_it() {
     assert_eq!(open().len(), 1, "m2 was sent before the question");
     end_turn(&db, &t2.turn_id);
     pin_captures(&db);
-    std::thread::sleep(std::time::Duration::from_millis(3));
     send(&db, "m3", None, "先做 CSV");
     register(&db);
     assert!(open().is_empty(), "the answer closes it");

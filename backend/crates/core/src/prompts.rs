@@ -10,6 +10,31 @@ use crate::turn::FailureKind;
 /// How many paths a note lists before it summarizes.
 const LISTED: usize = 50;
 
+/// The current lifecycle snapshot accompanies old messages even in a fresh native session.
+pub(crate) fn open_questions(questions: &[crate::question::Question], messages: &[crate::task::Message]) -> String {
+    let lines = questions.iter().map(|q| {
+        let state = if messages.iter().any(|m| q.accepts(m)) {
+            "本 turn 交付了提问之后的回复；若仍需回答，请再次提问"
+        } else {
+            "仍在等待回答；本 turn 的消息不能当作对这个问题的回复或授权"
+        };
+        format!("- {}：{}\n  {state}", q.id, q.body)
+    });
+    format!(
+        "【Lobotomy：当前问题】\n{}\n关联只表示后续消息已经交付，不代表问题已解决，也不扩大动作权限。",
+        lines.collect::<Vec<_>>().join("\n")
+    )
+}
+
+pub(crate) fn question_reply(message: &crate::task::Message, questions: &[crate::question::Question]) -> String {
+    let replies: Vec<&str> = questions.iter().filter(|q| q.accepts(message)).map(|q| q.id.as_str()).collect();
+    if replies.is_empty() {
+        format!("\n（消息 {}：仅作上下文，未关联当前问题）", message.id)
+    } else {
+        format!("\n（消息 {}：提问之后的回复，关联 {}）", message.id, replies.join("、"))
+    }
+}
+
 /// The manager's name, as messages and briefs name her (roles-and-tasks.md §1.1).
 pub const MANAGER: &str = "Angela";
 
