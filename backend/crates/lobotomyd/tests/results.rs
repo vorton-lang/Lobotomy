@@ -56,7 +56,7 @@ async fn a_second_reopen_starts_from_the_latest_candidate() {
     let dir = tempfile::tempdir().unwrap();
     let project = open_project(dir.path(), fake_codex()).await;
     let db = &project.db;
-    let task = create_task(db, "reopen twice");
+    let task = create_task(&project, "reopen twice");
     start_attempt(&project, &task).await;
     let a = make_candidate(&project, "candidate A").await;
 
@@ -128,7 +128,7 @@ if (original === 'candidate A') {{
     db.execute(&Caller::User, &EditProjectConfig { request_id: "checks".into(), expected_version: version, config })
         .unwrap();
 
-    let a = create_task(db, "old verifier");
+    let a = create_task(&project, "old verifier");
     start_attempt(&project, &a).await;
     make_candidate(&project, "candidate A").await;
     let va = db.execute(&Caller::Runtime, &StartVerification { task_id: a.clone() }).unwrap();
@@ -136,7 +136,7 @@ if (original === 'candidate A') {{
     wait_for_file(&started_a).await;
 
     db.execute(&Caller::User, &Abandon { request_id: "abandon-A".into(), task_id: a, reason: String::new() }).unwrap();
-    let b = create_task(db, "next verifier");
+    let b = create_task(&project, "next verifier");
     start_attempt(&project, &b).await;
     make_candidate(&project, "candidate B").await;
     let vb = db.execute(&Caller::Runtime, &StartVerification { task_id: b.clone() }).unwrap();

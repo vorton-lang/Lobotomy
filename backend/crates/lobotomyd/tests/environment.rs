@@ -25,7 +25,7 @@ async fn harness_processes_do_not_see_gh_tokens() {
     let backend = start(dir.path()).await;
 
     // A role turn.
-    create_task(&backend.project.db, "anything");
+    create_task(&backend.project, "anything");
     ended_turn(&backend.project.db).await;
     let env = seen_env(&slot(dir.path()));
     for name in REMOVED_VARS {
