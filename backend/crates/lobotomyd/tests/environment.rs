@@ -32,6 +32,7 @@ async fn harness_processes_do_not_see_gh_tokens() {
         assert_eq!(env[name], Value::Null, "{name} reached the turn");
     }
     assert_eq!(env["GH_CONFIG_DIR"], backend.project.empty_gh_config_dir().to_string_lossy().as_ref());
+    assert_eq!(env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1", "memory is Lobotomy's, not the harness's");
 
     // A quota check.
     let host = backend.project.host.clone();

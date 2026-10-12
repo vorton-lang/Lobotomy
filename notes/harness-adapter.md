@@ -155,11 +155,13 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
 | 用户自己的设置（hooks、权限规则） | `--setting-sources ""`：不读用户、项目和本地的设置文件 | `--ignore-user-config` |
 | git push | 进程环境变量 `GIT_CONFIG_*` 注入 `url.lobotomy-push-disabled://.pushInsteadOf`（`https://`、`git@`、`ssh://`）；实测 push 在本地失败，fetch 不受影响 | 同左 |
 | gh | `GH_CONFIG_DIR` 指向空目录，并从进程环境中删除 `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN`、`GITHUB_ENTERPRISE_TOKEN`（这四个变量优先于配置目录中的凭据，[#10](https://github.com/vorton-lang/Lobotomy/issues/10)），等同未登录。额度检查调用同样处理 | 同左 |
+| harness 自带的长期记忆 | 进程环境变量 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`：Claude Code 不读也不写 `~/.claude/projects/<工作目录>/memory/`。`--setting-sources ""` 关不掉它：2026-10-11 Angela 在那里写过文件。依据：长期记忆由 Lobotomy 保存（roadmap.md"原则"） | 未查 |
 
 - 保留网页搜索与读取、子 agent。
 - 这些措施防的是失误和过度热心，不防对抗：bypass 模式下 agent 总能绕过（例如从凭据管理器取 token）。
 - 新工具提示（未实现，列入 roadmap 待排）：运行时每轮从 Claude 的 `system/init` 事件读取工具清单，与已知清单比对；CLI 升级后出现的新工具在 Inspector 中标出，由用户决定是否禁用。现在适配器只从 `system/init` 读取会话 ID 和工作目录；Inspector 也还没有做（[frontend.md](frontend.md) §2）。
-- Codex role 不读用户的 `config.toml`，模型、推理强度等由 Lobotomy 显式传入。推理强度的传入未实现：正式运行不传，用 CLI 的默认值，只有测试设置它（§1.2；列入 roadmap 待排）。Claude role 同样不读设置文件：用户为自己使用配置的 hooks 和权限规则，假定有人在场。
+- Codex role 不读用户的 `config.toml`，模型、推理强度等由 Lobotomy 显式传入。推理强度的传入未实现：正式运行不传，用 CLI 的默认值，只有测试设置它（§1.2；列入 roadmap 待排）。Claude role 同样不读设置文件：用户为自己使用配置的 hooks 和权限规则，假定有人在场。用户在设置文件中选的模型因此也不生效，Claude role 用 CLI 的默认模型。2026-10-13 实测：用户设置的是 `opus`，Angela 的 turn 用的是 `claude-fable-5-1`。按 role 切换模型属于 Inspector 的操作，未实现（[frontend.md](frontend.md) §2，列入 roadmap 待排）。
+  - 待决：同一天 Fable 的额度用完，CLI 的提示是可以换用别的模型。额度域现在按 harness 划分（data-model.md §8）；各 role 都用同一个默认模型时，这样划分不会多停 role。按 role 切换模型之后，额度域是否要细到模型，还没有定。
 - **全局指令文件**（用户确认，2026-10-04）：Codex role 继承用户个人的 `~/.codex/AGENTS.md`，Lobotomy 不另开 `CODEX_HOME`。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 与 `-c project_doc_max_bytes=0` 都不能排除全局 AGENTS.md（§1.4）。Claude role 的情况见 §6。
 - **Claude Code 2.1.283 实测**（Windows，2026-10-09）：
   - 用上面的参数启动后，`system/init` 中的工具清单为 Task、Edit、Glob、Grep、NotebookEdit、PowerShell、Read、ReportFindings、Skill、TaskCreate、TaskGet、TaskList、TaskStop、TaskUpdate、ToolSearch、WebFetch、WebSearch、Write；MCP 服务只有 lobotomy。

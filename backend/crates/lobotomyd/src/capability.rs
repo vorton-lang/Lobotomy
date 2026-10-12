@@ -9,7 +9,8 @@ pub const REMOVED_VARS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_T
 
 /// Variables to set: `git push` fails locally, and `gh` reads an empty config directory. git also
 /// skips the system's attribute file, so line endings in a slot follow the repository only
-/// (harness-adapter.md §3).
+/// (harness-adapter.md §3). Claude Code neither reads nor writes its own auto memory: long-term
+/// memory is Lobotomy's (roadmap.md "长期记忆由 Lobotomy 保存").
 pub fn env(gh_config_dir: &Path) -> Vec<(String, String)> {
     let mut env = vec![("GIT_CONFIG_COUNT".to_owned(), "3".to_owned())];
     for (i, prefix) in ["https://", "git@", "ssh://"].iter().enumerate() {
@@ -18,5 +19,6 @@ pub fn env(gh_config_dir: &Path) -> Vec<(String, String)> {
     }
     env.push(("GH_CONFIG_DIR".to_owned(), gh_config_dir.to_string_lossy().into_owned()));
     env.push(("GIT_ATTR_NOSYSTEM".to_owned(), "1".to_owned()));
+    env.push(("CLAUDE_CODE_DISABLE_AUTO_MEMORY".to_owned(), "1".to_owned()));
     env
 }

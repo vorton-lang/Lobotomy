@@ -32,7 +32,10 @@ import { bench } from './fake-bench.mjs';
 const args = process.argv.slice(2);
 const flags = new Set(args.filter(a => a.startsWith('--fake-')));
 const diag = fs.existsSync('.git') ? '.git/' : '';
-const watched = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_CONFIG_DIR'];
+const watched = [
+  'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_CONFIG_DIR',
+  'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
+];
 fs.writeFileSync(`${diag}last-env.json`, JSON.stringify(Object.fromEntries(watched.map(k => [k, process.env[k] ?? null]))));
 const config = name => {
   const i = args.findIndex((a, j) => args[j - 1] === '-c' && a.startsWith(`${name}=`));
