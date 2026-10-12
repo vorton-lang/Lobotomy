@@ -59,13 +59,7 @@ pub use crate::question::Question;
 
 /// Angela's open questions. Queued candidate replies hide attention but do not close them.
 pub fn open_questions(conn: &Connection) -> Result<Vec<Question>> {
-    let roles = crate::role::list_roles(conn)?;
-    let mut questions = Vec::new();
-    for role in roles {
-        questions
-            .extend(crate::question::open_questions(conn, &role.name)?.into_iter().filter(|q| q.task_id.is_none()));
-    }
-    Ok(questions)
+    Ok(crate::question::open_questions(conn, None)?.into_iter().filter(|q| q.task_id.is_none()).collect())
 }
 
 /// The manager asks the user something that only the user decides. It is a state, not a
@@ -92,6 +86,6 @@ impl Command for AskUser {
         if self.question.trim().is_empty() {
             return Err(Error::rejected("missing_field", "a question needs words"));
         }
-        crate::question::ask(cx, &turn.role, None, turn_id, &self.question)
+        crate::question::ask(cx, &turn.role, None, turn_id, &self.question).map(|(id, _)| id)
     }
 }

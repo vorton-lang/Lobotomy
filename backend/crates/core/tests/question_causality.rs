@@ -1,8 +1,10 @@
 mod common;
 
 use common::*;
+use lobotomy_core::question::Question;
 use lobotomy_core::report::ReportStatus;
-use lobotomy_core::task::{SendToRole, load_task, reply_queued};
+use lobotomy_core::task::{SendToRole, load_task};
+use lobotomy_core::view::{Attention, overview};
 use lobotomy_core::{Caller, Db};
 
 fn message(db: &Db, manager: bool, request: &str, task: &str, body: &str) {
@@ -34,7 +36,7 @@ fn an_older_continue_message_does_not_answer_a_new_question() {
         let first = register(&db);
         message(&db, manager, "old", &task, "继续");
         report(&db, &first.turn_id, ReportStatus::Blocked, Some("修复 MissingSeparator？")).unwrap();
-        let waiting = || db.read(|c| reply_queued(c, &load_task(c, &task)?)).unwrap();
+        let waiting = || reply_queued(&db, &task);
         assert!(!waiting(), "an older message is context, not a queued answer (manager={manager})");
         end_turn(&db, &first.turn_id);
         pin_captures(&db);
@@ -48,7 +50,7 @@ fn an_older_continue_message_does_not_answer_a_new_question() {
             db.read(|c| load_task(c, &task)).unwrap().blocked_reason.as_deref(),
             Some("修复 MissingSeparator？")
         );
-        assert!(attention(&db).iter().any(|a| matches!(a, lobotomy_core::view::Attention::TaskBlocked { .. })));
+        assert!(attention(&db).iter().any(|a| matches!(a, Attention::TaskBlocked { .. })));
         finish(&db, &contextual.turn_id);
         message(&db, manager, "new", &task, "请修复这个生成器错误");
         // Equal and backwards wall clocks cannot alter causality or input order.
@@ -73,13 +75,17 @@ fn an_older_continue_message_does_not_answer_a_new_question() {
     }
 }
 
-fn questions(db: &Db) -> Vec<lobotomy_core::question::Question> {
-    db.read(|c| lobotomy_core::question::open_questions(c, ROLE)).unwrap()
+fn questions(db: &Db) -> Vec<Question> {
+    db.read(|c| lobotomy_core::question::open_questions(c, Some(ROLE))).unwrap()
 }
 
-fn attention(db: &Db) -> Vec<lobotomy_core::view::Attention> {
-    db.read(|c| Ok(lobotomy_core::view::attention(&lobotomy_core::view::overview(c, "lobotomy")?, &[], &[], |_| false)))
+fn reply_queued(db: &Db, task: &str) -> bool {
+    db.read(|c| Ok(overview(c, "lobotomy")?.tasks.into_iter().find(|t| t.task.id == task).unwrap().reply_queued))
         .unwrap()
+}
+
+fn attention(db: &Db) -> Vec<Attention> {
+    db.read(|c| Ok(lobotomy_core::view::attention(&overview(c, "lobotomy")?, &[], &[], |_| false))).unwrap()
 }
 
 fn finish(db: &Db, turn: &str) {
@@ -102,9 +108,7 @@ fn a_question_generation_survives_duplicates_but_not_reasking_or_replacing() {
     assert!(attention(&db).is_empty(), "a duplicate must not invalidate the queued reply");
 
     report(&db, &first.turn_id, ReportStatus::Blocked, Some("Q2")).unwrap();
-    assert!(
-        matches!(attention(&db).as_slice(), [lobotomy_core::view::Attention::TaskBlocked { reason, .. }] if reason == "Q2")
-    );
+    assert!(matches!(attention(&db).as_slice(), [Attention::TaskBlocked { reason, .. }] if reason == "Q2"));
     finish(&db, &first.turn_id);
     let next = register(&db);
     let q2 = questions(&db)[0].clone();
@@ -112,7 +116,9 @@ fn a_question_generation_survives_duplicates_but_not_reasking_or_replacing() {
     assert_eq!(report(&db, &next.turn_id, ReportStatus::Blocked, Some("Q2")).unwrap(), ReportEffect::Recorded);
     let reasked = questions(&db)[0].clone();
     assert_ne!(reasked.id, q2.id, "a new turn explicitly reasks, even with identical words");
-    assert!(!db.read(|c| reasked.reply_queued(c)).unwrap());
+    assert!(
+        !db.read(|c| Ok(lobotomy_core::task::queued_messages(c, ROLE)?.iter().any(|m| reasked.accepts(m)))).unwrap()
+    );
     report(&db, &next.turn_id, ReportStatus::Progress, None).unwrap();
     assert!(questions(&db).is_empty());
     report(&db, &next.turn_id, ReportStatus::Blocked, Some("Q2")).unwrap();
@@ -161,7 +167,7 @@ fn manager_questions_match_individually_by_enqueue_order_and_recipient() {
         },
     )
     .unwrap();
-    assert!(matches!(attention(&db).as_slice(), [lobotomy_core::view::Attention::Question { id, .. }] if id == &q2));
+    assert!(matches!(attention(&db).as_slice(), [Attention::Question { id, .. }] if id == &q2));
     finish(&db, &first.turn_id);
     let second = register(&db);
     assert_eq!(questions(&db).iter().map(|q| &q.id).collect::<Vec<_>>(), [&q2]);
@@ -233,7 +239,7 @@ fn restarting_and_continuing_do_not_turn_context_into_an_answer_or_lift_a_pause(
 #[test]
 fn upgrading_recovers_boundaries_from_events_and_keeps_unknown_history_open() {
     use lobotomy_core::manager::AskUser;
-    for known_history in [false, true] {
+    for (version, known_history) in [(16, false), (16, true), (17, false), (17, true)] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("question.db");
         let db = onboard(Db::open(&path).unwrap());
@@ -247,28 +253,55 @@ fn upgrading_recovers_boundaries_from_events_and_keeps_unknown_history_open() {
         send(&db, "answer", None, "answer both");
         finish(&db, &first.turn_id);
         drop(db);
-        // Restore the actual v16 question schema, retaining its existing rows and event log.
+        // Restore the prior schema, including the old task mirror, without losing its data.
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DELETE FROM question WHERE task_id IS NOT NULL;
+            "ALTER TABLE task ADD COLUMN blocked_reason TEXT;
+            UPDATE task SET blocked_reason = (SELECT body FROM question WHERE task_id = task.id AND closed_at IS NULL);
+            PRAGMA user_version = 17;",
+        )
+        .unwrap();
+        if version == 16 {
+            conn.execute_batch(
+                "DELETE FROM question WHERE task_id IS NOT NULL;
             DROP INDEX question_open_by_role; DROP INDEX question_open_by_task;
             ALTER TABLE question DROP COLUMN role; ALTER TABLE question DROP COLUMN task_id;
             ALTER TABLE question DROP COLUMN after_message_seq; PRAGMA user_version = 16;
             UPDATE message SET created_at = 1; UPDATE event SET created_at = 1; UPDATE question SET created_at = 1;",
-        )
-        .unwrap();
+            )
+            .unwrap();
+        }
         if !known_history {
             conn.execute("DELETE FROM event WHERE kind IN ('question.asked', 'task.blocked_changed')", []).unwrap();
         }
         drop(conn);
         let db = Db::open(&path).unwrap();
+        assert!(
+            db.read(|c| Ok(c.prepare("SELECT blocked_reason FROM task")?.column_count())).is_err(),
+            "the mirror column is physically absent"
+        );
+        assert_eq!(db.read(|c| load_task(c, &task)).unwrap().blocked_reason.as_deref(), Some("worker Q"));
+        // The public DTO reads the question itself, not a stale copy in task.
+        db.write(|tx| {
+            tx.execute("UPDATE question SET body = 'current Q' WHERE task_id = ?1", [&task])?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(db.read(|c| load_task(c, &task)).unwrap()).unwrap()["blocked_reason"],
+            "current Q"
+        );
+        let can_answer = version == 17 || known_history;
         assert_eq!(questions(&db).len(), 2);
         let manager = questions(&db).into_iter().find(|q| q.id == manager_q).unwrap();
-        assert_eq!(db.read(|c| manager.reply_queued(c)).unwrap(), known_history);
-        assert_eq!(db.read(|c| reply_queued(c, &load_task(c, &task)?)).unwrap(), known_history);
+        assert_eq!(
+            db.read(|c| Ok(lobotomy_core::task::queued_messages(c, ROLE)?.iter().any(|m| manager.accepts(m)))).unwrap(),
+            can_answer
+        );
+        assert_eq!(reply_queued(&db, &task), can_answer);
         let delivered = register(&db);
-        assert_eq!(questions(&db).is_empty(), known_history);
-        if !known_history {
+        assert_eq!(questions(&db).is_empty(), can_answer);
+        if !can_answer {
             finish(&db, &delivered.turn_id);
             send(&db, "fresh", None, "new answer");
             register(&db);
@@ -286,13 +319,13 @@ fn a_message_for_another_task_is_context_but_a_role_wide_reply_can_answer() {
     let first = register(&db);
     report(&db, &first.turn_id, ReportStatus::Blocked, Some("Q")).unwrap();
     send(&db, "other-reply", Some(&other), "other task answer");
-    assert!(!db.read(|c| reply_queued(c, &load_task(c, &task)?)).unwrap());
+    assert!(!reply_queued(&db, &task));
     finish(&db, &first.turn_id);
     let context = register(&db);
     assert_eq!(questions(&db).len(), 1);
     finish(&db, &context.turn_id);
     send(&db, "role-wide", None, "answer current question");
-    assert!(db.read(|c| reply_queued(c, &load_task(c, &task)?)).unwrap());
+    assert!(reply_queued(&db, &task));
     register(&db);
     assert!(questions(&db).is_empty());
 }

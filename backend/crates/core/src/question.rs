@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::command::Cx;
 use crate::error::Result;
 use crate::id::new_id;
-use crate::task::{Message, Task, load_task, queued_messages};
+use crate::task::Message;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Question {
@@ -30,16 +30,13 @@ impl Question {
             && (message.source == "user" || (self.task_id.is_some() && message.source == "manager"))
             && (message.task_id.is_none() || message.task_id == self.task_id)
     }
-
-    pub fn reply_queued(&self, conn: &Connection) -> Result<bool> {
-        Ok(queued_messages(conn, &self.role)?.iter().any(|m| self.accepts(m)))
-    }
 }
 
-pub fn open_questions(conn: &Connection, role: &str) -> Result<Vec<Question>> {
+/// All current questions, optionally restricted to the role receiving a turn.
+pub fn open_questions(conn: &Connection, role: Option<&str>) -> Result<Vec<Question>> {
     let mut stmt = conn.prepare(
         "SELECT id, body, created_at, role, task_id, turn_id, after_message_seq FROM question
-         WHERE role = ?1 AND closed_at IS NULL ORDER BY rowid",
+         WHERE closed_at IS NULL AND (?1 IS NULL OR role = ?1) ORDER BY role, rowid",
     )?;
     let rows = stmt.query_map([role], |r| {
         Ok(Question {
@@ -55,12 +52,22 @@ pub fn open_questions(conn: &Connection, role: &str) -> Result<Vec<Question>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-pub(crate) fn ask(cx: &mut Cx<'_>, role: &str, task_id: Option<&str>, turn_id: &str, body: &str) -> Result<String> {
-    if let Some(question) = open_questions(cx.tx, role)?
+/// Returns the id and whether a new question was asked. All callers share the duplicate rule.
+pub(crate) fn ask(
+    cx: &mut Cx<'_>,
+    role: &str,
+    task_id: Option<&str>,
+    turn_id: &str,
+    body: &str,
+) -> Result<(String, bool)> {
+    if let Some(question) = open_questions(cx.tx, Some(role))?
         .into_iter()
         .find(|q| q.task_id.as_deref() == task_id && q.turn_id == turn_id && q.body == body)
     {
-        return Ok(question.id);
+        return Ok((question.id, false));
+    }
+    if let Some(task) = task_id {
+        retire_task(cx, task)?;
     }
     let id = new_id("q");
     cx.tx.execute(
@@ -68,16 +75,27 @@ pub(crate) fn ask(cx: &mut Cx<'_>, role: &str, task_id: Option<&str>, turn_id: &
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, (SELECT COALESCE(MAX(seq), 0) FROM message))",
         params![id, body, turn_id, cx.now, role, task_id],
     )?;
+    if let Some(task) = task_id {
+        task_changed(cx, task, Some(body))?;
+    }
     cx.emit("question.asked", &id, json!({ "role": role, "task_id": task_id }))?;
-    Ok(id)
+    Ok((id, true))
 }
 
-/// Superseding, withdrawing or leaving an attempt retires its question without claiming an answer.
-pub(crate) fn close_task(cx: &Cx<'_>, task_id: &str) -> Result<()> {
-    cx.tx.execute(
+/// Retires a task's question during a phase transition or replacement. The enclosing command
+/// updates the task revision and emits its final state, not an intermediate withdrawal.
+pub(crate) fn retire_task(cx: &Cx<'_>, task_id: &str) -> Result<usize> {
+    Ok(cx.tx.execute(
         "UPDATE question SET closed_at = ?2 WHERE task_id = ?1 AND closed_at IS NULL",
         params![task_id, cx.now],
-    )?;
+    )?)
+}
+
+/// Progress/done withdraw the current question without claiming that a message answered it.
+pub(crate) fn withdraw_task(cx: &mut Cx<'_>, task_id: &str) -> Result<()> {
+    if retire_task(cx, task_id)? > 0 {
+        task_changed(cx, task_id, None)?;
+    }
     Ok(())
 }
 
@@ -98,25 +116,16 @@ pub(crate) fn close_answered(
             params![q.id, cx.now, turn_id],
         )?;
         if let Some(task_id) = &q.task_id {
-            set_task_question(cx, &load_task(cx.tx, task_id)?, None, turn_id)?;
+            task_changed(cx, task_id, None)?;
         }
         cx.emit("question.closed", &q.id, json!({ "turn_id": turn_id, "messages": answers }))?;
     }
     Ok(())
 }
 
-pub(crate) fn set_task_question(cx: &mut Cx<'_>, task: &Task, reason: Option<&str>, turn_id: &str) -> Result<()> {
-    if reason.is_none() && task.blocked_reason.is_none() {
-        return Ok(());
-    }
-    close_task(cx, &task.id)?;
-    if let Some(reason) = reason {
-        ask(cx, &task.executor, Some(&task.id), turn_id, reason)?;
-    }
-    cx.tx.execute(
-        "UPDATE task SET blocked_reason = ?2, revision = revision + 1 WHERE id = ?1",
-        params![task.id, reason],
-    )?;
-    cx.emit("task.blocked_changed", &task.id, json!({ "blocked_reason": reason }))?;
+/// Preserve task revision/event contracts without storing a second copy of the question.
+fn task_changed(cx: &mut Cx<'_>, task_id: &str, reason: Option<&str>) -> Result<()> {
+    cx.tx.execute("UPDATE task SET revision = revision + 1 WHERE id = ?1", [task_id])?;
+    cx.emit("task.blocked_changed", task_id, json!({ "blocked_reason": reason }))?;
     Ok(())
 }

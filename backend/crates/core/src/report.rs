@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
-use crate::question::set_task_question;
+use crate::question;
 use crate::task::{Phase, Task, Trial, load_task, open_attempt};
 use crate::turn::{Turn, TurnState, load_turn};
 
@@ -90,20 +90,13 @@ impl Command for OrgReport {
 
         let effect = match self.status {
             ReportStatus::Progress => {
-                set_task_question(cx, &task, None, &turn.id)?;
+                question::withdraw_task(cx, &task.id)?;
                 ReportEffect::Recorded
             }
             ReportStatus::Blocked => {
                 let reason = self.blocked_on.clone().unwrap_or_else(|| self.title.clone());
-                if crate::question::open_questions(cx.tx, role)?
-                    .iter()
-                    .any(|q| q.task_id.as_deref() == Some(&task.id) && q.turn_id == turn.id && q.body == reason)
-                {
-                    ReportEffect::Unchanged
-                } else {
-                    set_task_question(cx, &task, Some(&reason), &turn.id)?;
-                    ReportEffect::Recorded
-                }
+                let (_, asked) = question::ask(cx, role, Some(&task.id), &turn.id, &reason)?;
+                if asked { ReportEffect::Recorded } else { ReportEffect::Unchanged }
             }
             ReportStatus::Done => {
                 if turn.done_at.is_some() {
@@ -122,7 +115,7 @@ impl Command for OrgReport {
                             self.trial.as_ref().map(serde_json::to_string).transpose()?
                         ],
                     )?;
-                    set_task_question(cx, &task, None, &turn.id)?;
+                    question::withdraw_task(cx, &task.id)?;
                     ReportEffect::Recorded
                 }
             }

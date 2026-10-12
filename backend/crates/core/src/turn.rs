@@ -423,7 +423,7 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     }
 
     let messages = queued_messages(cx.tx, role)?;
-    let questions = crate::question::open_questions(cx.tx, role)?;
+    let questions = crate::question::open_questions(cx.tx, Some(role))?;
     let (note, resend) = continuation.map_or((None, None), |c| (c.note, c.resend));
     let mut parts = Vec::new();
     if let Some(note) = note {

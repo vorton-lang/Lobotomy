@@ -39,6 +39,7 @@ pub struct Task {
     /// Who paused it, as a caller scope: only the user lifts the user's pause (roles-and-tasks.md
     /// §4).
     pub paused_by: Option<String>,
+    /// Derived from the open task question; there is no task.blocked_reason database column.
     pub blocked_reason: Option<String>,
     pub criteria_version: i64,
     pub queue_pos: Option<i64>,
@@ -101,7 +102,8 @@ pub struct Quote {
     pub body: String,
 }
 
-const TASK_COLUMNS: &str = "id, title, body, executor, phase, paused, blocked_reason, criteria_version, \
+const TASK_COLUMNS: &str = "id, title, body, executor, phase, paused, \
+    (SELECT body FROM question WHERE task_id = task.id AND closed_at IS NULL) AS blocked_reason, criteria_version, \
                             queue_pos, revision, created_at, closed_at, origin_capture, paused_by, assignment";
 
 fn task_from_row(r: &Row<'_>) -> rusqlite::Result<Task> {
@@ -369,16 +371,6 @@ pub fn undelivered_user_messages(conn: &Connection, task_id: &str) -> Result<Vec
     messages(conn, "task_id = ?1 AND state = 'queued' AND source = 'user'", task_id)
 }
 
-/// Whether a queued message can answer this task's current question. Binding uses the same rule.
-pub fn reply_queued(conn: &Connection, task: &Task) -> Result<bool> {
-    for question in crate::question::open_questions(conn, &task.executor)? {
-        if question.task_id.as_deref() == Some(&task.id) && question.reply_queued(conn)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 /// A closed task's queued messages are not delivered: its executor no longer works on it
 /// (data-model.md §4.2, #14). The runtime's own, such as a criteria update, lose their point too.
 pub(crate) fn drop_queued(cx: &mut Cx<'_>, task_id: &str) -> Result<()> {
@@ -445,7 +437,7 @@ pub(crate) fn enter_execution(
     code_start: Option<&str>,
     conflicts: &[String],
 ) -> Result<AttemptStarted> {
-    crate::question::close_task(cx, &task.id)?;
+    crate::question::retire_task(cx, &task.id)?;
     let seq: i64 =
         cx.tx
             .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| r.get(0))?;
@@ -455,10 +447,7 @@ pub(crate) fn enter_execution(
         "INSERT INTO attempt (id, task_id, seq, started_at, code_start, conflicts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![attempt_id, task.id, seq, cx.now, code_start, conflicts],
     )?;
-    cx.tx.execute(
-        "UPDATE task SET phase = 'executing', blocked_reason = NULL, queue_pos = NULL WHERE id = ?1",
-        [&task.id],
-    )?;
+    cx.tx.execute("UPDATE task SET phase = 'executing', queue_pos = NULL WHERE id = ?1", [&task.id])?;
     bump_revision(cx, &task.id)?;
     Ok(AttemptStarted { attempt_id, seq })
 }
@@ -478,9 +467,9 @@ pub(crate) fn close_task(cx: &mut Cx<'_>, task: &Task, phase: Phase) -> Result<(
     cx.tx.execute("DELETE FROM occupancy WHERE task_id = ?1", [&task.id])?;
     crate::turn::end_task_sessions(cx, &task.id)?;
     drop_queued(cx, &task.id)?;
-    crate::question::close_task(cx, &task.id)?;
+    crate::question::retire_task(cx, &task.id)?;
     cx.tx.execute(
-        "UPDATE task SET phase = ?2, closed_at = ?3, queue_pos = NULL, blocked_reason = NULL WHERE id = ?1",
+        "UPDATE task SET phase = ?2, closed_at = ?3, queue_pos = NULL WHERE id = ?1",
         params![task.id, phase.as_str(), cx.now],
     )?;
     bump_revision(cx, &task.id)
