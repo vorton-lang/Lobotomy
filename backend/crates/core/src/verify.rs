@@ -179,7 +179,9 @@ pub fn verification_plan(conn: &Connection, id: &str) -> Result<VerificationPlan
     })
 }
 
-/// Starts verifying the task's candidate against the current integration version.
+/// Starts verifying the task's candidate against the current integration version. A paused task
+/// keeps its candidate and waits in verification; it is verified once the pause is lifted
+/// (roles-and-tasks.md §2.2, #62).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StartVerification {
     pub task_id: String,
@@ -194,6 +196,9 @@ impl Command for StartVerification {
         let task = load_task(cx.tx, &self.task_id)?;
         if task.phase != Phase::Verifying {
             return Err(Error::rejected("not_verifying", format!("task {} is {}", task.id, task.phase.as_str())));
+        }
+        if task.paused {
+            return Err(Error::rejected("paused", format!("task {} is paused", task.id)));
         }
         if let Some(v) = latest_verification(cx.tx, &task.id)?
             && v.state == VerificationState::Running
@@ -290,6 +295,12 @@ impl Command for FinishVerification {
         let current = task.phase == Phase::Verifying
             && last_candidate(cx.tx, &task.id)?.is_some_and(|(_, capture)| capture == v.capture_id);
         if !current {
+            return Ok(state);
+        }
+        // A verification that was running when the task was paused keeps its checks, but moves
+        // the task neither to acceptance nor back to execution; it is verified again once the
+        // pause is lifted (roles-and-tasks.md §2.2, #62).
+        if task.paused {
             return Ok(state);
         }
         if state == VerificationState::Passed {

@@ -512,7 +512,7 @@ details[open] > summary::before {
   min-width: 0;
 }
 
-/* The project list (frontend.md §2 "M3 的布局"). */
+/* The project list (frontend.md §2). */
 .projects {
   width: 200px;
   flex-shrink: 0;

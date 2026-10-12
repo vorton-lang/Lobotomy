@@ -9,6 +9,7 @@ use lobotomy_core::Caller;
 use lobotomy_core::manager::{AskUser, Cursor, TellManager, cursors, open_questions};
 use lobotomy_core::report::{FlagMismatch, ReportStatus};
 use lobotomy_core::task::{SendMessage, SetPaused, queued_messages};
+use lobotomy_core::verify::{FinishVerification, StartVerification};
 use lobotomy_core::view::manager::{changes_since, settled};
 use lobotomy_core::view::{Attention, attention, last_event, overview};
 
@@ -37,6 +38,23 @@ fn a_project_settles_when_nothing_moves_on_without_the_user() {
     assert!(!is_settled(&db, &[]), "the answer goes in the next turn");
     db.execute(&Caller::User, &SetPaused { request_id: "p1".into(), task_id: task, paused: true }).unwrap();
     assert!(is_settled(&db, &[]), "a paused task's messages wait");
+}
+
+/// #62: a paused task waits in verification for the user; only checks already running move on.
+#[test]
+fn a_paused_task_waiting_in_verification_settles_once_its_checks_end() {
+    let db = db();
+    let (task, commit) = candidate(&db);
+    assert!(!is_settled(&db, &[]), "the candidate is verified");
+    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
+    let pause = |key: &str, paused| SetPaused { request_id: key.into(), task_id: task.clone(), paused };
+    db.execute(&Caller::User, &pause("p1", true)).unwrap();
+    assert!(!is_settled(&db, &[]), "the checks still run");
+    let finish = FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![], blobs: vec![] };
+    db.execute(&Caller::Runtime, &finish).unwrap();
+    assert!(is_settled(&db, &[]), "the paused task waits for the user");
+    db.execute(&Caller::User, &pause("p2", false)).unwrap();
+    assert!(!is_settled(&db, &[]), "the resumed task is verified again");
 }
 
 #[test]

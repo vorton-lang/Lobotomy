@@ -1,4 +1,4 @@
-// The project list (frontend.md §2 "M3 的布局"): 「全部」 first, then each project with how many
+// The project list (frontend.md §2): 「全部」 first, then each project with how many
 // items wait for the user in it and whether a turn of it runs. A project that could not be opened
 // says why and can be opened again or archived. Archived projects are folded at the end, each
 // with 「取消归档」; 「+ 新项目」 connects another repository (data-model.md §10.3, §10.4).

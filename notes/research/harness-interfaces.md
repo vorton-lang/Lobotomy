@@ -10,6 +10,7 @@
   - 两个 ACP adapter 本身就封装在原生接口之上（Claude 的基于 Agent SDK，Codex 的基于 app-server）。走 ACP 并不减少对原生接口的依赖，还要多承担一层第三方代码。
   - ACP 缺少对 Lobotomy 必需的能力：没有注入角色指令的标准方式，fork 和压缩事件也不稳定（见 §2）。
 - **多 harness 仍需要内部抽象。** 内部接口的会话语义可以向 ACP v1 看齐，以后给长尾 harness 加一个通用的 ACP adapter。
+  - 注（2026-10-12）：M2 接入 Claude 后没有抽出内部接口，按 harness 不同的代码仍按 `Harness` 枚举匹配。第三种 harness 的接入方式见 [harness-adapter.md](../harness-adapter.md) §1.3 第 7 条。
 
 ## 2. ACP 现状
 
@@ -52,6 +53,7 @@
   - 商业或托管服务不允许。
 - **Lobotomy 的立场**：按正常方式调用用户自己安装的未修改 CLI，由用户自行登录，Lobotomy 不接触凭据。
 - **剩余风险**：多个长期会话并发可能超出"普通个人使用"的额度预期。同时运行的 role 数量需显式可控。
+  - 注（2026-10-12）：M3 定为不设跨项目的并发上限，以额度域作为实际的限制，真实使用中出现问题再加上限，见 [data-model.md](../data-model.md) §10.5。
 
 ## 5. 本机观察（2026-10-01 / 02）
 

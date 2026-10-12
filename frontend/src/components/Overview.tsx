@@ -1,4 +1,4 @@
-// 「全部」 (frontend.md §2 "M3 的布局"): what waits for the user in every project, grouped by
+// 「全部」 (frontend.md §2): what waits for the user in every project, grouped by
 // project. An item is acted on in its project: 「前往」 shows the project and opens the task the
 // item is about. Blocked quota domains belong to no project; they are listed once under 「本机」 and
 // retried here (data-model.md §10.5). Angela's own items, such as a turn to continue, are acted on

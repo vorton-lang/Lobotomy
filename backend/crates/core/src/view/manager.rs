@@ -10,8 +10,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{Attention, Overview, last_event};
-use crate::capture::{load_capture, unallowed_changes};
-use crate::error::Result;
+use crate::capture::{CaptureKind, load_capture, unallowed_changes};
+use crate::error::{Error, Result};
 use crate::project::load_project;
 use crate::report::{OrgReport, ReportEffect};
 use crate::task::{Assignment, AttemptEnd, Phase, Task, Trial, list_attempts, load_task, undelivered_user_messages};
@@ -329,7 +329,12 @@ pub fn settled(conn: &Connection, blocked: &[String]) -> Result<bool> {
     let any = |sql: &str| -> Result<bool> { Ok(conn.query_row(&format!("SELECT EXISTS ({sql})"), [], |r| r.get(0))?) };
     if any("SELECT 1 FROM turn WHERE state IN ('registered', 'running')")?
         || any("SELECT 1 FROM capture WHERE state = 'intent'")?
-        || any("SELECT 1 FROM task WHERE phase = 'verifying'")?
+        // A paused task waits in verification for the user, unless a verification started before
+        // the pause still runs (#62).
+        || any(
+            "SELECT 1 FROM task t WHERE t.phase = 'verifying'
+               AND (t.paused = 0 OR EXISTS (SELECT 1 FROM verification v WHERE v.task_id = t.id AND v.state = 'running'))",
+        )?
         || any("SELECT 1 FROM workspace WHERE state = 'materializing'")?
         || any("SELECT 1 FROM outbox WHERE state = 'pending'")?
     {
@@ -560,6 +565,49 @@ pub fn events_read(conn: &Connection, after: i64, limit: usize) -> Result<Events
     let mut events = super::events_after(conn, after)?;
     events.truncate(limit);
     Ok(EventsRead { as_of: last_event(conn)?, events })
+}
+
+/// What a diff the manager reads compares, as the task panel does (data-model.md §10.6): a
+/// candidate against the integration version it was captured on, or a verification's rebased
+/// candidate against the integration version it ran on, which accepting would publish.
+#[derive(Debug, Serialize)]
+pub struct DiffRange {
+    /// The last event of the project the read includes.
+    pub as_of: i64,
+    pub task_id: String,
+    pub from: String,
+    pub to: String,
+    /// A newer candidate, or a newer verification, replaced it.
+    pub superseded: bool,
+    /// Of a verification: the integration version or the checks changed since it ran, so its
+    /// result no longer counts (data-model.md §4.5).
+    pub stale: Option<bool>,
+}
+
+/// The diff range of a candidate (`cap_…`) or of a finished verification (`ver_…`).
+pub fn diff_range(conn: &Connection, id: &str) -> Result<DiffRange> {
+    let as_of = last_event(conn)?;
+    if id.starts_with("ver_") {
+        let v = crate::verify::load_verification(conn, id)?;
+        let Some(to) = v.commit_id.clone() else {
+            return Err(Error::rejected("verification_running", format!("verification {id} has not finished")));
+        };
+        let latest = crate::verify::latest_verification(conn, &v.task_id)?;
+        return Ok(DiffRange {
+            as_of,
+            superseded: latest.is_some_and(|l| l.id != v.id),
+            stale: Some(evidence_is_stale(conn, &v)?),
+            task_id: v.task_id,
+            from: v.base,
+            to,
+        });
+    }
+    let capture = load_capture(conn, id)?;
+    let (Some(task_id), Some(to), CaptureKind::Candidate) = (capture.task_id, capture.commit_id, capture.kind) else {
+        return Err(Error::rejected("not_a_candidate", format!("capture {id} is no task's candidate")));
+    };
+    let latest = list_attempts(conn, &task_id)?.into_iter().rev().find_map(|a| a.candidate_id);
+    Ok(DiffRange { as_of, superseded: latest.as_deref() != Some(id), stale: None, task_id, from: capture.base, to })
 }
 
 #[cfg(test)]

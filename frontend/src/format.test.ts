@@ -172,6 +172,9 @@ describe('continueNote', () => {
     const input = '【来自 Lobotomy】\n上一个 turn 失败。请先检查。\n\n【来自 用户 · 任务 task_1】\n换个做法';
     expect(continueNote(input)).toBe('上一个 turn 失败。请先检查。');
     expect(continueNote('【来自 Lobotomy】\n上一个 turn 被中断。')).toBe('上一个 turn 被中断。');
+    expect(continueNote('【来自 Lobotomy】\n上一个 turn 被中断。\n\n【用户的本地时间】2026-10-13 21:05（周二）')).toBe(
+      '上一个 turn 被中断。',
+    );
     expect(continueNote('【来自 Lobotomy · 任务 task_1】\n任务：x（第 1 轮执行）')).toBeNull();
   });
 });

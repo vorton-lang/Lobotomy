@@ -1,4 +1,4 @@
-// The project list and 「全部」 against a mocked backend with two projects (frontend.md §2 "M3 的布局").
+// The project list and 「全部」 against a mocked backend with two projects (frontend.md §2).
 // The backend's own rules (registration, failure, the one-unarchived-project rule) have Rust tests;
 // these check what the window makes of the host snapshot. 「全部」 is the conversation with Angela
 // (roadmap.md M4 step 1).

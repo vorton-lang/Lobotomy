@@ -1,4 +1,4 @@
-// The window (frontend.md §2 "M3 的布局"): the project list on the left. 「全部」 is the conversation
+// The window (frontend.md §2): the project list on the left. 「全部」 is the conversation
 // with Angela, with what waits for the user in every project on the right; without Angela, that
 // list fills it. A project shows as in M1: the executor's thread in the main area, what waits for
 // the user and the Workboard on the right, a task's detail in a panel over the thread. The side

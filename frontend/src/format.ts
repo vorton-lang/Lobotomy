@@ -440,7 +440,7 @@ export function voidReport(report: ReportRecord): string | null {
 /** A stable key for a card that waits for the user: a card keeps its draft while others come and go (#16). */
 /**
  * One line for an item of "等你决定" in 「全部」, where the user sees every project's items and
- * goes to the project to act on one (frontend.md §2 "M3 的布局").
+ * goes to the project to act on one (frontend.md §2).
  */
 export function attentionSummary(a: Attention): string {
   switch (a.kind) {
@@ -502,14 +502,15 @@ export function attentionKey(a: Attention): string {
 }
 
 /**
- * The note a continue put in front of the turn's input, without the queued messages after it;
- * those show as messages of their own. The format is the backend's (`register` in turn.rs).
+ * The note a continue put in front of the turn's input, without what follows it: the queued
+ * messages, which show as messages of their own, and the runtime's other blocks, such as the
+ * user's local time in Angela's input. The format is the backend's (`register` in turn.rs).
  */
 export function continueNote(input: string): string | null {
   const head = '【来自 Lobotomy】\n';
   if (!input.startsWith(head)) return null;
   const rest = input.slice(head.length);
-  const end = rest.indexOf('\n\n【来自 ');
+  const end = rest.indexOf('\n\n【');
   return end < 0 ? rest : rest.slice(0, end);
 }
 

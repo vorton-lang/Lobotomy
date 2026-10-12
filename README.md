@@ -42,9 +42,10 @@
 - [Data model](notes/data-model.md)：命令、占用、turn 与消息、任务流、副作用、对话记录、额度、项目与 host
 - [Harness adapter](notes/harness-adapter.md)：CLI 调用方式、执行现场、成果采集与集成（含实测）
 - [Roles and tasks](notes/roles-and-tasks.md)：角色类型与具名角色、任务生命周期、Workboard
-- [Manager JD](notes/manager-jd.md)：意图判断、信息过滤、任务翻译与必要时的直接对齐
 - [Manager actions](notes/manager-actions.md)：向下转发、向上附件、记录、会议与对外操作
+- Manager 的现行指令：[prompts/manager.md](backend/crates/lobotomyd/src/prompts/manager.md)（意图判断、信息过滤、任务翻译）
 - [Frontend](notes/frontend.md)：Electron 形态、布局、前后端协议、渲染选型与现在的实现
+- [UI/UX plan](notes/ui-ux-plan.md)：界面改进专项的原则、视觉方向与分阶段计划
 - [Performance baseline](notes/perf-baseline.md)：GUI 性能基线的测法与参考数据
 - [Ideas](notes/ideas.md)：暂不实现的小功能
 - 技术路线：[#5](https://github.com/vorton-lang/Lobotomy/issues/5) 存储与权威来源的权衡，[#6](https://github.com/vorton-lang/Lobotomy/issues/6) 推荐实现（SQLite + jj + Rust 后端 + Electron 前端）
@@ -52,6 +53,7 @@
 调研与背景（`notes/research/`）：
 
 - [harness 接入与条款](notes/research/harness-interfaces.md)、[agent GUI 前端](notes/research/frontend-survey.md)；实测脚本见 `spikes/`
+- [UI/UX survey](notes/research/ui-ux-survey.md)：多 agent 工具的界面与交互、同类产品用户的痛点（2026-10-11/12 快照）
 - [Organization Runtime](notes/research/organization-runtime.md)：早期架构笔记（角色、session、持久状态和 GUI）
 - [HCI rationale](notes/research/hci-rationale.md)：人机协作研究节选
 - [Market landscape](notes/research/market-landscape.md)：2026-10-01 调研草稿，产品事实与市场判断待核实

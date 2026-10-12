@@ -2,13 +2,14 @@
 //! §5, §9.2).
 
 use lobotomy_core::capture::{
-    ApproveNewFiles, CaptureResult, CaptureState, DiscardUncaptured, FinishCapture, NewFile, UncoveredPath,
-    latest_capture, pending_captures,
+    ApproveNewFiles, CaptureKind, CaptureResult, CaptureState, DiscardUncaptured, FinishCapture, NewFile,
+    UncoveredPath, latest_capture, pending_captures,
 };
 use lobotomy_core::project::{Check, EditProjectConfig, ProjectConfig, load_project};
 use lobotomy_core::report::ReportStatus;
 use lobotomy_core::task::{
-    Abandon, CodeStart, Phase, Reopen, SendMessage, StartAttempt, load_task, occupant, open_attempt, queued_messages,
+    Abandon, CodeStart, Phase, Reopen, SendMessage, SetPaused, StartAttempt, list_attempts, load_task, occupant,
+    open_attempt, queued_messages,
 };
 use lobotomy_core::turn::{Continue, RegisterTurn, current_session};
 use lobotomy_core::verify::{
@@ -231,6 +232,92 @@ fn a_late_verification_advances_nothing() {
     assert_eq!(db.execute(&Caller::Runtime, &finish).unwrap(), VerificationState::Passed);
     assert_eq!(phase(&db, &task), Phase::Abandoned);
     assert_eq!(db.read(|c| latest_verification(c, &task)).unwrap().unwrap().id, v);
+}
+
+fn set_paused(db: &Db, request_id: &str, task: &str, paused: bool) {
+    db.execute(&Caller::User, &SetPaused { request_id: request_id.into(), task_id: task.into(), paused }).unwrap();
+}
+
+fn count(db: &Db, sql: &str, arg: &str) -> i64 {
+    db.read(|c| Ok(c.query_row(sql, [arg], |r| r.get(0))?)).unwrap()
+}
+
+/// #62: the turn runs on after the user paused its task. Its done still makes the candidate, but
+/// the task is verified only once the user resumes it.
+#[test]
+fn a_task_paused_while_its_executor_runs_is_verified_only_after_resuming() {
+    let db = db();
+    let task = create(&db, "c1");
+    start(&db, &task);
+    let t = register(&db);
+    set_paused(&db, "p1", &task, true);
+    report_done(&db, &t.turn_id);
+    end_turn(&db, &t.turn_id);
+    let commit = pin_captures(&db).pop().unwrap();
+
+    // The output is kept: the pinned capture is the attempt's candidate.
+    let capture = db.read(|c| latest_capture(c, ROLE)).unwrap().unwrap();
+    assert_eq!(
+        (capture.kind, capture.state, capture.commit_id.as_deref()),
+        (CaptureKind::Candidate, CaptureState::Pinned, Some(commit.as_str()))
+    );
+    let attempts = db.read(|c| list_attempts(c, &task)).unwrap();
+    assert_eq!(attempts.last().unwrap().candidate_id.as_deref(), Some(capture.id.as_str()));
+    // It waits in verification; no check runs while the task is paused.
+    assert_eq!(phase(&db, &task), Phase::Verifying);
+    let start_verification = StartVerification { task_id: task.clone() };
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &start_verification)), "paused");
+    assert_eq!(db.read(|c| latest_verification(c, &task)).unwrap(), None);
+
+    set_paused(&db, "p2", &task, false);
+    let v = db.execute(&Caller::Runtime, &start_verification).unwrap();
+    let finish =
+        FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![check(0)], blobs: vec![] };
+    db.execute(&Caller::Runtime, &finish).unwrap();
+    assert_eq!(phase(&db, &task), Phase::Accepting);
+}
+
+/// #62: checks that were running when the user paused the task run to the end, and the
+/// verification keeps them. The task stays in verification whatever they found; once the user
+/// resumes it, it is verified again.
+fn paused_during_verification(exit_code: i64, state: VerificationState) {
+    let db = db();
+    let (task, commit) = candidate(&db);
+    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
+    set_paused(&db, "p1", &task, true);
+    let finish = FinishVerification {
+        verification_id: v.clone(),
+        commit,
+        conflicts: vec![],
+        checks: vec![check(exit_code)],
+        blobs: vec![],
+    };
+    assert_eq!(db.execute(&Caller::Runtime, &finish).unwrap(), state);
+
+    // The evidence is kept.
+    let latest = db.read(|c| latest_verification(c, &task)).unwrap().unwrap();
+    assert_eq!((latest.id.as_str(), latest.state), (v.as_str(), state));
+    assert_eq!(count(&db, "SELECT COUNT(*) FROM check_run WHERE verification_id = ?1", &v), 1);
+    // Nothing moves: no acceptance, no new attempt, nothing for the executor.
+    assert_eq!(phase(&db, &task), Phase::Verifying);
+    assert_eq!(count(&db, "SELECT COUNT(*) FROM event WHERE kind = 'task.accepting' AND entity = ?1", &task), 0);
+    assert_eq!(db.read(|c| list_attempts(c, &task)).unwrap().len(), 1);
+    assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap(), None);
+    assert!(db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty());
+
+    set_paused(&db, "p2", &task, false);
+    let again = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
+    assert_ne!(again, v, "a fresh verification, not the one from before the pause");
+}
+
+#[test]
+fn a_verification_passing_after_the_pause_does_not_move_the_task_to_acceptance() {
+    paused_during_verification(0, VerificationState::Passed);
+}
+
+#[test]
+fn a_verification_failing_after_the_pause_does_not_send_the_task_back() {
+    paused_during_verification(101, VerificationState::Failed);
 }
 
 /// A done turn whose capture went over the guardrail.

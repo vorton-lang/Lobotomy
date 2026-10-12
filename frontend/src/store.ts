@@ -78,8 +78,8 @@ interface State {
   host: HostSnapshot | null;
   /**
    * The project the window shows; requests about a project name it. `null` is 「全部」: the
-   * conversation with Angela beside what waits for the user in every project (frontend.md §2
-   * "M3 的布局"). There, requests name Angela (`scope`).
+   * conversation with Angela beside what waits for the user in every project (frontend.md §2).
+   * There, requests name Angela (`scope`).
    */
   project: string | null;
   snapshot: Snapshot | null;
@@ -110,7 +110,7 @@ export interface ReplyTarget {
   text: string;
 }
 
-/** The role whose thread fills the main area. M1 has one, its executor (frontend.md §2 "M1 的布局"). */
+/** The role whose thread fills the main area: a project's executor, or Angela in 「全部」 (frontend.md §2). */
 export function mainRole(snapshot: Snapshot | null): RoleView | undefined {
   return snapshot?.roles.find((r) => r.kind === 'worker') ?? snapshot?.roles[0];
 }

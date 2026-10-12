@@ -429,7 +429,13 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
 
     let messages = queued_messages(cx.tx, role)?;
     let questions = crate::question::open_questions(cx.tx, Some(role))?;
+    let manager: bool = cx
+        .tx
+        .query_row("SELECT kind = 'manager' FROM role WHERE name = ?1", [role], |r| r.get(0))
+        .optional()?
+        .unwrap_or(false);
     let (note, resend) = continuation.map_or((None, None), |c| (c.note, c.resend));
+    let noted = note.is_some();
     let mut parts = Vec::new();
     if let Some(note) = note {
         parts.push(format!("{}\n{note}", prompts::header("Lobotomy", None)));
@@ -442,13 +448,21 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
         parts.push(prompts::open_questions(&questions, &messages));
     }
     if !messages.is_empty() {
-        let kind: String = cx.tx.query_row("SELECT kind FROM role WHERE name = ?1", [role], |r| r.get(0))?;
-        parts.push(compose_input(&messages, kind == "manager", &questions, |id| {
-            crate::task::replied(cx.tx, id).ok().flatten()
-        }));
+        parts.push(compose_input(&messages, manager, &questions, |id| crate::task::replied(cx.tx, id).ok().flatten()));
     }
     if parts.is_empty() {
         return Err(Error::rejected("nothing_to_deliver", format!("{role} has no queued messages")));
+    }
+    // The backend runs on the user's machine, so its time zone is the user's. The time goes after a
+    // continue note, which the GUI finds at the start of the input (frontend `continueNote`).
+    if manager {
+        let (at, weekday): (String, i64) = cx.tx.query_row(
+            "SELECT strftime('%Y-%m-%d %H:%M', ?1 / 1000, 'unixepoch', 'localtime'),
+                    CAST(strftime('%w', ?1 / 1000, 'unixepoch', 'localtime') AS INTEGER)",
+            [cx.now],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        parts.insert(usize::from(noted), prompts::local_time(&at, weekday));
     }
     let input = parts.join("\n\n");
     let turn_id = new_id("turn");

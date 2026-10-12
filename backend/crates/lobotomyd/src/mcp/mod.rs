@@ -7,6 +7,7 @@
 //! before 2026-07-28: rmcp answers each of their requests on its own.
 
 pub mod angela;
+mod diff;
 
 use std::sync::Arc;
 
