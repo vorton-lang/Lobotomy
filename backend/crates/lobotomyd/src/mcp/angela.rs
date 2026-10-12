@@ -219,7 +219,7 @@ pub enum LedgerKindArg {
     Decision,
     /// 约束，写明范围；必须引用用户原话
     Constraint,
-    /// 待定的事，以及在等谁
+    /// 待定的事，以及在等谁；要用户回答时另用 ask_user，待定条目不会出现在用户的"等你决定"中
     OpenQuestion,
     /// 对用户状态的推测，写上把握；不给下层看
     Hypothesis,

@@ -1,4 +1,4 @@
-// The main role's thread (frontend.md §2 "M1 的布局", §4.2): a virtualized list that loads older
+// The main role's thread (frontend.md §2, §4.2): a virtualized list that loads older
 // pages when scrolled to the top and follows the end while the user is at the end. Whether it
 // follows is kept in the store (`following`). Away from the end, a button goes back to it and
 // says when something new came (#18).

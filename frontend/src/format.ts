@@ -440,7 +440,7 @@ export function voidReport(report: ReportRecord): string | null {
 /** A stable key for a card that waits for the user: a card keeps its draft while others come and go (#16). */
 /**
  * One line for an item of "等你决定" in 「全部」, where the user sees every project's items and
- * goes to the project to act on one (frontend.md §2 "M3 的布局").
+ * goes to the project to act on one (frontend.md §2).
  */
 export function attentionSummary(a: Attention): string {
   switch (a.kind) {

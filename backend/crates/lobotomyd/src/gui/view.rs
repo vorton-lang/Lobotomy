@@ -338,7 +338,7 @@ fn harnesses(host: &Host) -> anyhow::Result<Vec<HarnessView>> {
         .collect()
 }
 
-/// What the host shows across projects (frontend.md §2 "M3 的布局", §3 rule 8).
+/// What the host shows across projects (frontend.md §2, §3 rule 8).
 #[derive(Serialize)]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct HostSnapshot {

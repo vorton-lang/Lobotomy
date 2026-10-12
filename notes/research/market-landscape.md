@@ -1,5 +1,7 @@
 # Market Landscape: Persistent Agent Organizations
 
+> 2026-09-30 自 Ember 复制。文中的 ACP 路线（§8、§10）已否决：Lobotomy 的 adapter 只调用官方 CLI，见 [harness-interfaces.md](harness-interfaces.md) §1。
+>
 > Status: market scan notes  
 > Date: 2026-10-01  
 > Purpose: record products and frameworks that overlap with Ember's emerging target shape: a persistent organization runtime above model-specific harnesses, with long-lived roles, session management, shared project state, and a user-facing Manager layer.
