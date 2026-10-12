@@ -10,12 +10,16 @@
     "build": "vite build",
     "api:generate": "node scripts/api-types.mjs",
     "api:check": "node scripts/api-types.mjs --check",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run typecheck:app && npm run typecheck:node && npm run typecheck:tests",
     "test": "vitest run",
     "e2e": "playwright test",
     "app": "vite build && electron .",
     "app:dev": "electron . --dev",
-    "bench": "cargo build --release -p lobotomyd --manifest-path ../backend/Cargo.toml && vite build && playwright test -c bench/bench.config.ts"
+    "bench": "cargo build --release -p lobotomyd --manifest-path ../backend/Cargo.toml && vite build && playwright test -c bench/bench.config.ts",
+    "lint": "oxlint --deny-warnings --report-unused-disable-directives",
+    "typecheck:app": "tsc -p tsconfig.json",
+    "typecheck:node": "tsc -p tsconfig.node.json",
+    "typecheck:tests": "tsc -p tsconfig.tests.json"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -38,6 +42,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "electron": "^44.5.1",
+    "oxlint": "1.87.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
     "vitest": "^5.0.3"

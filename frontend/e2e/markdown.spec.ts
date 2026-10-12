@@ -97,6 +97,8 @@ test('streaming Markdown ignores stale worker replies and changes mode on the sa
     window.Worker = class extends NativeWorker {
       constructor(url: string | URL, options?: WorkerOptions) {
         super(url, options);
+        // The release callback outside this class must dispatch on the intercepted worker.
+        // oxlint-disable-next-line typescript/no-this-alias
         worker = this;
         this.addEventListener('message', (event) => {
           if (!releasing) { pending.push(event); event.stopImmediatePropagation(); }

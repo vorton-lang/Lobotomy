@@ -64,9 +64,10 @@ jobs:
       - name: GUI contract drift and serde fixtures
         working-directory: frontend
         run: npm run api:check
-      - name: Frontend typecheck, unit tests, build
+      - name: Frontend lint, typecheck, unit tests, build
         working-directory: frontend
         run: |
+          npm run lint
           npm run typecheck
           npm test
           npx vite build

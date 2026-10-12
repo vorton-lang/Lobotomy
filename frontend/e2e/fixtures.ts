@@ -28,7 +28,7 @@ export interface Backend {
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { stdio: 'pipe' });
 
-async function startBackend(): Promise<Backend & { stop: () => Promise<void> }> {
+async function startBackend(): Promise<Backend & { stop: (keepLog?: string) => Promise<void> }> {
   if (!fs.existsSync(exe)) throw new Error(`build the backend first: cargo build -p lobotomyd (${exe})`);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobotomy-e2e-'));
   const repo = path.join(root, 'repo');
@@ -65,7 +65,8 @@ async function startBackend(): Promise<Backend & { stop: () => Promise<void> }> 
 }
 
 export const test = base.extend<{ backend: Backend }>({
-  // eslint-disable-next-line no-empty-pattern
+  // Playwright inspects the destructured fixture dependencies, even when there are none.
+  // oxlint-disable-next-line no-empty-pattern
   backend: async ({}, use, testInfo) => {
     const backend = await startBackend();
     try {

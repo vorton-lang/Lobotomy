@@ -1,4 +1,5 @@
-import { defineConfig, type Plugin } from 'vite';
+import type { Plugin } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 // Agent output is rendered as HTML; the built app only runs its own scripts and talks only to
