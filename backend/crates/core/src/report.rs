@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
+use crate::question;
 use crate::task::{Phase, Task, Trial, load_task, open_attempt};
 use crate::turn::{Turn, TurnState, load_turn};
 
@@ -89,17 +90,13 @@ impl Command for OrgReport {
 
         let effect = match self.status {
             ReportStatus::Progress => {
-                set_blocked(cx, &task, None)?;
+                question::withdraw_task(cx, &task.id)?;
                 ReportEffect::Recorded
             }
             ReportStatus::Blocked => {
                 let reason = self.blocked_on.clone().unwrap_or_else(|| self.title.clone());
-                if task.blocked_reason.as_deref() == Some(reason.as_str()) {
-                    ReportEffect::Unchanged
-                } else {
-                    set_blocked(cx, &task, Some(&reason))?;
-                    ReportEffect::Recorded
-                }
+                let (_, asked) = question::ask(cx, role, Some(&task.id), &turn.id, &reason)?;
+                if asked { ReportEffect::Recorded } else { ReportEffect::Unchanged }
             }
             ReportStatus::Done => {
                 if turn.done_at.is_some() {
@@ -118,7 +115,7 @@ impl Command for OrgReport {
                             self.trial.as_ref().map(serde_json::to_string).transpose()?
                         ],
                     )?;
-                    set_blocked(cx, &task, None)?;
+                    question::withdraw_task(cx, &task.id)?;
                     ReportEffect::Recorded
                 }
             }
@@ -174,16 +171,4 @@ impl Command for FlagMismatch {
         cx.emit("mismatch.flagged", &turn.id, json!({ "role": role, "task_id": turn.task_id, "body": self.body }))?;
         Ok(())
     }
-}
-
-pub(crate) fn set_blocked(cx: &mut Cx<'_>, task: &Task, reason: Option<&str>) -> Result<()> {
-    if task.blocked_reason.as_deref() == reason {
-        return Ok(());
-    }
-    cx.tx.execute(
-        "UPDATE task SET blocked_reason = ?2, revision = revision + 1 WHERE id = ?1",
-        params![task.id, reason],
-    )?;
-    cx.emit("task.blocked_changed", &task.id, json!({ "blocked_reason": reason }))?;
-    Ok(())
 }

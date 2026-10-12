@@ -22,7 +22,7 @@ use crate::project::{Project, ProjectConfig, current_config, load_project};
 use crate::quota::Domain;
 use crate::role::{Role, list_roles};
 use crate::task::{
-    Phase, Task, latest_attempt, list_tasks, load_task, occupant, open_attempt, queued_messages, reply_queued,
+    Phase, Task, latest_attempt, list_tasks, load_task, occupant, open_attempt, queued_messages,
     undelivered_user_messages,
 };
 use crate::turn::{Hold, Outcome, Turn, TurnState, hold, last_turn, unfinished_turn};
@@ -103,12 +103,14 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
         Some(_) => Some(current_config(conn).map(|(version, config)| ConfigView { version, config })?),
         None => None,
     };
+    let mut queued = Vec::new();
     let mut roles = Vec::new();
     for role in list_roles(conn)? {
         let workspace = match &role.slot {
             Some(slot) => current_workspace(conn, slot)?,
             None => None,
         };
+        let messages = queued_messages(conn, &role.name)?;
         let mut view = RoleView {
             task_id: occupant(conn, &role.name)?,
             unfinished: unfinished_turn(conn, &role.name)?,
@@ -117,12 +119,15 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
             stalled: None,
             outside: outside_changes(conn, &role.name)?,
             workspace,
-            queued_messages: queued_messages(conn, &role.name)?.len(),
+            queued_messages: messages.len(),
             role,
         };
         view.stalled = stalled(conn, &view, mcp_server)?;
+        queued.extend(messages);
         roles.push(view);
     }
+    let open = crate::question::open_questions(conn, None)?;
+    let has_reply = |q: &crate::question::Question| queued.iter().any(|m| q.accepts(m));
     let mut tasks = Vec::new();
     for task in list_tasks(conn)? {
         let attempt = latest_attempt(conn, &task.id)?;
@@ -131,12 +136,12 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
             attempt_open: attempt.is_some_and(|a| a.ended_at.is_none()),
             verification: latest_verification(conn, &task.id)?,
             undelivered_messages: undelivered_user_messages(conn, &task.id)?.len(),
-            reply_queued: reply_queued(conn, &task)?,
+            reply_queued: open.iter().any(|q| q.task_id.as_deref() == Some(&task.id) && has_reply(q)),
             task,
         });
     }
     let preview_stopped = if project.is_some() { preview_stopped(conn)? } else { None };
-    let questions = crate::manager::open_questions(conn)?;
+    let questions = open.into_iter().filter(|q| q.task_id.is_none() && !has_reply(q)).collect();
     Ok(Overview { seq, project, config, roles, tasks, preview_stopped, questions })
 }
 
