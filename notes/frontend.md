@@ -194,6 +194,10 @@ M1 的框架、场景与第一份参考数据见 [perf-baseline.md](perf-baselin
   - 客户端落后时的 `resync`。
 - 错误带代码：命令被拒时是拒绝的代码；参数无法解析时是 `bad_request`；其他是 `internal`（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
 
+`search` 响应和 `events`、`thread` 推送的 TypeScript 类型由 Rust 类型通过 ts-rs 生成，保存在 `frontend/src/api/generated.ts`。`api/types.ts` 复用这些类型；其余接口仍由手工维护。修改这组 Rust 类型后，在 `frontend/` 运行 `npm run api:generate` 并提交生成结果。`npm run api:check` 只检查，不改生成文件；CI 在 Windows 和 Linux 上运行它，再检查前端类型并构建。检查还把真实 Rust 类型经 serde 序列化得到的样本交给 TypeScript 编译器，覆盖枚举标签、null 和任意 JSON payload。
+
+生成使用显式 `ts-rs` Cargo feature；默认构建不编译 ts-rs。生成器固定把大整数映射为 `number`，因为当前协议的 JSON 数字经 `JSON.parse` 得到的是 JS number；超过安全整数范围仍可能丢精度，本次不改变 wire 格式。事件的 `kind` 是字符串，`payload` 是 `unknown`，来源字段是必有但可为 null。生成类型不提供运行时校验，也没有把方法名和 `call<T>` 的返回类型自动绑定。
+
 ### 7.2 前端的结构
 
 `frontend/src/`，React + Vite，状态用 zustand。

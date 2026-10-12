@@ -18,6 +18,7 @@ import type {
   Refs,
   RoleView,
   SearchMatch,
+  SearchResult,
   Snapshot,
   TaskDetail,
   ThreadPage,
@@ -535,7 +536,7 @@ export async function runSearch(query: string) {
   const request = ++searchRequest;
   const role = useStore.getState().thread.role;
   const found = query.trim()
-    ? await call<{ matches: SearchMatch[]; more: boolean }>('search', { role, query }).catch((e) => {
+    ? await call<SearchResult>('search', { role, query }).catch((e) => {
         toast(String(e));
         return { matches: [], more: false };
       })
@@ -678,7 +679,9 @@ function onPush(push: Push) {
     case 'events': {
       refreshSnapshot();
       const selected = useStore.getState().selectedTask;
-      if (selected && push.events.some((e) => e.entity === selected || e.payload?.task_id === selected)) refreshDetail();
+      if (selected && push.events.some((e) => e.entity === selected || (
+        e.payload !== null && typeof e.payload === 'object' && 'task_id' in e.payload && e.payload.task_id === selected
+      ))) refreshDetail();
       else if (selected && push.events.some((e) => e.kind.startsWith('verification.') || e.kind.startsWith('capture.'))) refreshDetail();
       if (push.events.some((e) => e.kind.startsWith('message.'))) refreshThread();
       if (push.events.some((e) => e.kind.startsWith('turn.'))) refreshTurnStates();

@@ -101,7 +101,7 @@ test('a reply about the project the window left is dropped', async () => {
   vi.useFakeTimers();
   connect('ws://unused');
   useStore.setState({ host: host('p1', 'p2'), project: 'p1' });
-  probe.events!.push({ type: 'events', project: 'p1', events: [{ seq: 2, kind: 'task.updated', entity: 't', payload: {} }] });
+  probe.events!.push({ type: 'events', project: 'p1', events: [{ seq: 2, kind: 'task.updated', command_id: null, caller: null, caller_turn_id: null, entity: 't', payload: {} }] });
   await vi.advanceTimersByTimeAsync(120);
   expect(pending('snapshot')[0].params).toEqual({ project: 'p1' });
 
@@ -123,7 +123,7 @@ test('another project’s events refresh the counts, not the window', async () =
   vi.useFakeTimers();
   connect('ws://unused');
   useStore.setState({ host: host('p1', 'p2'), project: 'p1' });
-  probe.events!.push({ type: 'events', project: 'p2', events: [{ seq: 2, kind: 'task.updated', entity: 't', payload: {} }] });
+  probe.events!.push({ type: 'events', project: 'p2', events: [{ seq: 2, kind: 'task.updated', command_id: null, caller: null, caller_turn_id: null, entity: 't', payload: {} }] });
   await vi.advanceTimersByTimeAsync(300);
   expect(pending('host')).toHaveLength(1);
   expect(pending('snapshot')).toHaveLength(0);

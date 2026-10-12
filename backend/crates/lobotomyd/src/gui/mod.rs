@@ -23,8 +23,10 @@
 //! in `lobotomy_core::view`, and `command` runs the commands (#16).
 
 mod command;
+pub mod protocol;
 mod view;
 
+use protocol::ChangePush;
 pub use view::project_attention;
 
 use std::collections::HashMap;
@@ -243,7 +245,7 @@ pub async fn watch(instance: Arc<Instance>, shutdown: CancellationToken) {
         match db(&instance, move |db| db.read(|c| events_after(c, after))).await {
             Ok(events) if !events.is_empty() => {
                 last_seq = events.last().map_or(last_seq, |e| e.seq);
-                instance.push(json!({ "type": "events", "events": events }));
+                instance.push(ChangePush::Events { project: &instance.id, events: &events });
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = format!("{e:#}"), "could not read the event log"),
@@ -253,7 +255,7 @@ pub async fn watch(instance: Arc<Instance>, shutdown: CancellationToken) {
         if let Ok(heads) = db(&instance, |db| db.read(thread_heads)).await {
             for (role, seq) in &heads {
                 if last_items.get(role) != Some(seq) {
-                    instance.push(json!({ "type": "thread", "role": role, "seq": seq }));
+                    instance.push(ChangePush::Thread { project: &instance.id, role, seq: *seq });
                 }
             }
             last_items = heads;
@@ -262,7 +264,7 @@ pub async fn watch(instance: Arc<Instance>, shutdown: CancellationToken) {
         if version != last_live {
             last_live = version;
             let live = instance.live.lock().unwrap().clone();
-            instance.push(json!({ "type": "live", "live": live }));
+            instance.push(json!({ "type": "live", "project": instance.id, "live": live }));
         }
     }
 }

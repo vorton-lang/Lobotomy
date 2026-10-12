@@ -71,7 +71,7 @@ async function openMocked(page: Page, state: State) {
       }
       route.send(JSON.stringify({ id, result }));
       if (changed) {
-        const events: LogEvent[] = [{ seq: ++seq, kind: 'task.updated', entity: changed, payload: { task_id: changed } }];
+        const events: LogEvent[] = [{ seq: ++seq, kind: 'task.updated', command_id: null, caller: null, caller_turn_id: null, entity: changed, payload: { task_id: changed } }];
         route.send(JSON.stringify({ type: 'events', project: PROJECT, events } satisfies Push));
       }
     });

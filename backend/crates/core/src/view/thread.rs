@@ -137,14 +137,17 @@ pub struct SearchQuery {
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum MatchKind {
     Item,
     Message,
 }
 
 /// Where a match is: an item, or a message shown at the start of its turn (`seq` is the turn's
-/// first item) or among the queued ones at the end (`seq` is absent).
+/// first item) or among the queued ones at the end (`seq` is null).
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "SearchMatch"))]
 pub struct Match {
     pub kind: MatchKind,
     pub id: String,
@@ -152,6 +155,8 @@ pub struct Match {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "SearchResult"))]
 pub struct Found {
     pub matches: Vec<Match>,
     /// Older matches were left out.

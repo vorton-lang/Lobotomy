@@ -1,3 +1,6 @@
+import type { ChangePush } from './generated';
+export type { LogEvent, SearchMatch, SearchResult } from './generated';
+
 // What the backend's GUI service sends: the read models of `lobotomy_core::view`
 // (backend/crates/core/src/view/) and what `backend/crates/lobotomyd/src/gui/` adds. Field names
 // follow the Rust structs.
@@ -418,13 +421,6 @@ export interface ThreadPage {
   queued: Message[];
 }
 
-/** A search match: an item, or a message shown at its turn's first item (`seq` null: queued). */
-export interface SearchMatch {
-  kind: 'item' | 'message';
-  id: string;
-  seq: number | null;
-}
-
 export type Content =
   | { kind: 'text'; text: string }
   | { kind: 'binary'; size: number }
@@ -511,24 +507,6 @@ export interface RemoteError {
   message: string;
 }
 
-/**
- * An entry of the global event log: `<object>.<what happened>`, such as `task.created`. The source
- * fields name the command that wrote it; they are null for events from before events named their
- * command (data-model.md §7.6).
- */
-export interface LogEvent {
-  seq: number;
-  kind: `${'attempt' | 'capture' | 'integration' | 'message' | 'native_session' | 'preview' | 'project' | 'report' | 'role' | 'task' | 'turn' | 'verification' | 'workspace'}.${string}`;
-  entity: string;
-  payload: { task_id?: string | null } & Record<string, unknown>;
-  /** The command record of the command that wrote it. */
-  command_id?: string | null;
-  /** Who issued that command: `user`, `runtime` or `role:<name>`. */
-  caller?: string | null;
-  /** For a role's command, the turn it came from. */
-  caller_turn_id?: string | null;
-}
-
 /** A registered project and how it is (data-model.md §10.3; frontend.md §3 rule 8). */
 export interface ProjectStatus {
   id: string;
@@ -565,9 +543,8 @@ export interface HostSnapshot {
 
 /** Pushes about a project name it in `project`; pushes about Angela name `angela` there. */
 export type Push =
-  | { type: 'events'; project: string; events: LogEvent[] }
+  | ChangePush
   | { type: 'live'; project: string; live: Record<string, LiveTurn> }
-  | { type: 'thread'; project: string; role: string; seq: number }
   | { type: 'host' }
   | { type: 'tick' }
   | { type: 'resync' };

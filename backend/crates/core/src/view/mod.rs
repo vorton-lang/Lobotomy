@@ -313,10 +313,13 @@ pub fn attention(
 /// An entry of the global event log, with the command that wrote it (data-model.md §7.6). The
 /// three source fields are `None` for an event from before events named their command.
 #[derive(Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(rename = "LogEvent"))]
 pub struct Event {
     pub seq: i64,
     pub kind: String,
     pub entity: String,
+    #[cfg_attr(feature = "ts-rs", ts(type = "unknown"))]
     pub payload: Value,
     /// The command record of the command that wrote it.
     pub command_id: Option<String>,

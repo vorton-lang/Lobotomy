@@ -8,6 +8,8 @@
     "start": "cargo build -p lobotomyd --manifest-path ../backend/Cargo.toml && vite build && electron .",
     "dev": "vite",
     "build": "vite build",
+    "api:generate": "node scripts/api-types.mjs",
+    "api:check": "node scripts/api-types.mjs --check",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e": "playwright test",

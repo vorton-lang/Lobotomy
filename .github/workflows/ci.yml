@@ -53,11 +53,14 @@ jobs:
         run: cargo test --workspace --locked
       - name: Clippy
         working-directory: backend
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --features lobotomyd/ts-rs --locked -- -D warnings
 
       - name: Frontend install
         working-directory: frontend
         run: npm ci
+      - name: GUI contract drift and serde fixtures
+        working-directory: frontend
+        run: npm run api:check
       - name: Frontend typecheck, unit tests, build
         working-directory: frontend
         run: |
