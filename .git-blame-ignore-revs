@@ -1,0 +1,3 @@
+# Mechanical formatting; GitHub's blame skips these. Locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# style(frontend): 叠加独立格式化检查与机械格式化 (#65)
+b5ea77347897dd485f39c54260a8293a019142c6
