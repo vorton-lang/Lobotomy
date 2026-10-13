@@ -33,6 +33,9 @@ jobs:
       # Line endings follow the repository, not the machine.
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
+        with:
+          # Temporary experiment: record and compile the exact PR head, not the synthetic merge ref.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -48,9 +51,29 @@ jobs:
       - name: Format
         working-directory: backend
         run: cargo fmt --check
+      - name: Build backend tests once (Windows experiment)
+        if: runner.os == 'Windows'
+        env:
+          LOBOTOMY_EXPERIMENT_BASE: ${{ github.event.pull_request.base.sha }}
+          LOBOTOMY_EXPERIMENT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          LOBOTOMY_EXPERIMENT_OUT: ${{ runner.temp }}/git-entry-experiment
+        run: python scripts/windows_git_experiment.py build
       - name: Backend tests
         working-directory: backend
         run: cargo test --workspace --locked
+      - name: Windows Git entry ABBA (reuse store binary)
+        if: runner.os == 'Windows'
+        timeout-minutes: 8
+        env:
+          LOBOTOMY_EXPERIMENT_OUT: ${{ runner.temp }}/git-entry-experiment
+        run: python scripts/windows_git_experiment.py measure
+      - name: Keep bounded Git experiment results
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-git-entry-experiment
+          path: ${{ runner.temp }}/git-entry-experiment/
+          if-no-files-found: warn
       # The default build is what ships; the ts-rs build only generates the GUI types.
       - name: Clippy
         working-directory: backend

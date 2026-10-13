@@ -494,3 +494,7 @@ fn the_preview_stops_when_the_user_changed_the_repository() {
     let diverged = repo::fast_forward(&f.user_repo, &f.store, "main", &f.head, &target).unwrap();
     assert!(matches!(diverged, Some(Diverged::Branch { .. })));
 }
+
+// Temporary diagnostic tests remain ignored during the normal CI gate.
+#[path = "experiment/git_entry.rs"]
+mod git_entry_experiment;
