@@ -14,6 +14,8 @@ function tokens(block: string): Record<string, string> {
 }
 
 function luminance(hex: string): number {
+  // These token pairs use opaque six-digit hex. Unsupported CSS must fail, not become NaN.
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) throw new Error(`Expected an opaque six-digit hex color, got ${hex}`);
   const [r, g, b] = [1, 3, 5].map((i) => {
     const c = parseInt(hex.slice(i, i + 2), 16) / 255;
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -76,7 +78,7 @@ describe('the design tokens', () => {
         for (const [fg, backs] of pairs) {
           for (const back of backs) {
             const ratio = contrast(t[fg], t[back]);
-            if (ratio < min) failing.push(`${fg} on ${back}: ${ratio.toFixed(2)}`);
+            if (!Number.isFinite(ratio) || ratio < min) failing.push(`${fg} on ${back}: ${ratio.toFixed(2)}`);
           }
         }
       }

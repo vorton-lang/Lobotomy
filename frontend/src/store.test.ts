@@ -123,11 +123,13 @@ test('requests about the project name it; the host snapshot does not', async () 
   vi.useFakeTimers();
   connect('ws://unused');
   probe.events!.opened();
+  const requests = pending('host');
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).not.toHaveProperty('project');
   await answer('host', host('p1'));
   expect(useStore.getState().project).toBe('p1');
   expect(pending('snapshot')[0].params).toEqual({ project: 'p1' });
   await answer('snapshot', snapshot('full'));
-  expect(probe.pending.find((p) => p.method === 'host')?.params ?? {}).not.toHaveProperty('project');
 });
 
 test('a reply about the project the window left is dropped', async () => {
