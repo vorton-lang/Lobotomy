@@ -64,9 +64,12 @@ jobs:
       - name: GUI contract drift and serde fixtures
         working-directory: frontend
         run: npm run api:check
-      - name: Frontend typecheck, unit tests, build
+      # Fail fast on both platforms; a later command must not hide an earlier failure.
+      - name: Frontend lint, typecheck, unit tests, build
+        shell: bash
         working-directory: frontend
         run: |
+          npm run lint
           npm run typecheck
           npm test
           npx vite build
