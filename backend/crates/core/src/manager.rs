@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::task::queue_message;
-use crate::turn::{RegisterTurn, TurnRegistered, TurnState, load_turn};
+use crate::turn::{RegisterTurn, TurnRegistered, TurnState, hold, load_turn};
 use crate::view::last_event;
 
 /// How far the manager has read a project (data-model.md §10.6 跨库操作第 4 条).
@@ -25,37 +25,6 @@ pub fn cursors(conn: &Connection) -> Result<Vec<Cursor>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Puts what the runtime tells the manager about the projects into her inbox and moves her
-/// cursors past it, in one transaction of her database (data-model.md §10.6 跨库操作第 5 条).
-/// Without a body it only moves the cursors: for a project she sees for the first time.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TellManager {
-    pub role: String,
-    pub body: Option<String>,
-    pub cursors: Vec<Cursor>,
-}
-
-impl Command for TellManager {
-    const NAME: &'static str = "tell_manager";
-    type Output = Option<String>;
-
-    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<Option<String>> {
-        caller.require_runtime()?;
-        let message = match &self.body {
-            Some(body) => Some(queue_message(cx, &self.role, caller, None, body)?),
-            None => None,
-        };
-        for c in &self.cursors {
-            cx.tx.execute(
-                "INSERT INTO project_cursor (project_id, seq) VALUES (?1, ?2)
-                 ON CONFLICT (project_id) DO UPDATE SET seq = excluded.seq",
-                params![c.project_id, c.seq],
-            )?;
-        }
-        Ok(message)
-    }
-}
-
 /// Commits a scheduler read of the manager's inbox and session. Cross-project reads happen
 /// before this command; her own state must still match that read. Notices, cursors and turn
 /// registration commit together, or a refusal rolls all of them back.
@@ -65,7 +34,7 @@ pub struct ScheduleManagerTurn {
     pub as_of: i64,
     pub messages: Vec<String>,
     pub cursors: Vec<Cursor>,
-    /// Idle reads only initialize cursors; held turns receive notices without consuming messages.
+    /// This read found input that may start a turn. A held role still receives its notices.
     pub register: bool,
 }
 
@@ -81,8 +50,20 @@ impl Command for ScheduleManagerTurn {
         for body in &self.messages {
             queue_message(cx, &self.role, caller, None, body)?;
         }
-        TellManager { role: self.role.clone(), body: None, cursors: self.cursors.clone() }.apply(caller, cx)?;
-        if self.register { RegisterTurn { role: self.role.clone() }.apply(caller, cx).map(Some) } else { Ok(None) }
+        for c in &self.cursors {
+            cx.tx.execute(
+                "INSERT INTO project_cursor (project_id, seq) VALUES (?1, ?2)
+                 ON CONFLICT (project_id) DO UPDATE SET seq = excluded.seq",
+                params![c.project_id, c.seq],
+            )?;
+        }
+        // System notices remain visible while the role waits for the user. Only a user action
+        // can release that hold; the ordinary turn command still checks every other condition.
+        if self.register && hold(cx.tx, &self.role)?.is_none() {
+            RegisterTurn { role: self.role.clone() }.apply(caller, cx).map(Some)
+        } else {
+            Ok(None)
+        }
     }
 }
 

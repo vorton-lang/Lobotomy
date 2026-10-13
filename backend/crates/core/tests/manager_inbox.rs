@@ -6,7 +6,7 @@ mod common;
 
 use common::*;
 use lobotomy_core::Caller;
-use lobotomy_core::manager::{AskUser, Cursor, ScheduleManagerTurn, TellManager, cursors, open_questions};
+use lobotomy_core::manager::{AskUser, Cursor, ScheduleManagerTurn, cursors, open_questions};
 use lobotomy_core::report::{FlagMismatch, ReportStatus};
 use lobotomy_core::task::{SendMessage, SetPaused, queued_messages};
 use lobotomy_core::verify::{FinishVerification, StartVerification};
@@ -163,22 +163,6 @@ fn a_reply_says_what_it_replies_to() {
     );
 }
 
-/// Her inbox and her cursors are written together, in her database only (data-model.md §10.6
-/// 跨库操作第 5 条).
-#[test]
-fn telling_the_manager_moves_her_cursors_with_the_message() {
-    let db = db();
-    let cursor = |seq| Cursor { project_id: "prj_a".into(), seq };
-    let first = TellManager { role: ROLE.into(), body: None, cursors: vec![cursor(4)] };
-    assert_eq!(db.execute(&Caller::Runtime, &first).unwrap(), None);
-    let told = TellManager { role: ROLE.into(), body: Some("alpha 全员在等你".into()), cursors: vec![cursor(9)] };
-    let message = db.execute(&Caller::Runtime, &told).unwrap().expect("a message");
-    assert_eq!(db.read(cursors).unwrap(), [cursor(9)]);
-    let inbox = db.read(|c| queued_messages(c, ROLE)).unwrap();
-    assert_eq!((inbox[0].id.as_str(), inbox[0].source.as_str()), (message.as_str(), "runtime"));
-    assert_eq!(common::rejection(db.execute(&Caller::User, &told)), "forbidden");
-}
-
 fn prepared(db: &lobotomy_core::Db) -> ScheduleManagerTurn {
     ScheduleManagerTurn {
         role: ROLE.into(),
@@ -195,12 +179,15 @@ fn scheduling_commits_notices_cursors_and_turn_once() {
     idle_slot(&db);
     let said = send(&db, "m1", None, "user message");
     let command = prepared(&db);
+    assert_eq!(rejection(db.execute(&Caller::User, &command)), "forbidden");
     let turn = db.execute(&Caller::Runtime, &command).unwrap().unwrap();
     let input = db.read(|c| lobotomy_core::turn::load_turn(c, &turn.turn_id)).unwrap().input;
     for text in ["user message", "ledger for this session", "project notice"] {
         assert!(input.contains(text), "{input}");
     }
     assert_eq!(db.read(cursors).unwrap(), command.cursors);
+    let messages = db.read(|c| lobotomy_core::task::turn_messages(c, &turn.turn_id)).unwrap();
+    assert_eq!(messages.iter().map(|m| m.source.as_str()).collect::<Vec<_>>(), ["user", "runtime", "runtime"]);
     assert!(db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty());
     let after = db.read(last_event).unwrap();
     assert_eq!(rejection(db.execute(&Caller::Runtime, &command)), "manager_state_changed");
@@ -252,10 +239,13 @@ fn a_registration_refusal_rolls_back_notices_and_cursors() {
 #[test]
 fn an_idle_scheduler_read_only_initializes_cursors() {
     let db = db();
-    let command = ScheduleManagerTurn { messages: vec![], register: false, ..prepared(&db) };
+    let mut command = ScheduleManagerTurn { messages: vec![], register: false, ..prepared(&db) };
     assert!(db.execute(&Caller::Runtime, &command).unwrap().is_none());
     assert!(db.execute(&Caller::Runtime, &command).unwrap().is_none());
     assert_eq!(db.read(cursors).unwrap(), command.cursors);
+    command.cursors[0].seq += 1;
+    assert!(db.execute(&Caller::Runtime, &command).unwrap().is_none());
+    assert_eq!(db.read(cursors).unwrap(), command.cursors, "an existing cursor advances too");
     assert!(db.read(|c| lobotomy_core::turn::current_session(c, ROLE, None)).unwrap().is_none());
     send(&db, "m1", None, "arrived after the idle read");
     assert_eq!(rejection(db.execute(&Caller::Runtime, &command)), "manager_state_changed");

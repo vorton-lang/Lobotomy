@@ -141,10 +141,12 @@ fn manager_questions_match_individually_by_enqueue_order_and_recipient() {
     let q2 = db.execute(&caller, &AskUser { question: "Q2".into() }).unwrap();
     db.execute(
         &Caller::Runtime,
-        &lobotomy_core::manager::TellManager {
+        &lobotomy_core::manager::ScheduleManagerTurn {
             role: ROLE.into(),
-            body: Some("runtime update".into()),
+            as_of: db.read(lobotomy_core::view::last_event).unwrap(),
+            messages: vec!["runtime update".into()],
             cursors: vec![],
+            register: false,
         },
     )
     .unwrap();

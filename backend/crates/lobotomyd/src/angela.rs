@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use lobotomy_core::ledger::ledger_lines;
 use lobotomy_core::manager::{Cursor, ScheduleManagerTurn, cursors};
 use lobotomy_core::task::queued_messages;
-use lobotomy_core::turn::{MarkUnfinishedUnknown, TurnRegistered, current_session, hold, unfinished_turn};
+use lobotomy_core::turn::{MarkUnfinishedUnknown, TurnRegistered, current_session, unfinished_turn};
 use lobotomy_core::view::manager::{ChangesRead, changes_since, project_read, settled};
 use lobotomy_core::view::{last_event, overview};
 use lobotomy_harness::{Harness, MCP_SERVER};
@@ -176,12 +176,11 @@ struct Seen {
 /// for the first time starts her cursor at its present. Nothing is told while her turn runs: it
 /// comes with her next one.
 async fn prepare(instance: &Instance, projects: &Projects) -> anyhow::Result<Option<ScheduleManagerTurn>> {
-    let (inbox, running, held, fresh, cursors, as_of) = db(instance, |db| {
+    let (inbox, running, fresh, cursors, as_of) = db(instance, |db| {
         db.read(|c| {
             Ok((
                 !queued_messages(c, ROLE)?.is_empty(),
                 unfinished_turn(c, ROLE)?.is_some(),
-                hold(c, ROLE)?.is_some(),
                 // Her next turn starts a session: none yet, or a new one without turns.
                 match current_session(c, ROLE, None)? {
                     None => true,
@@ -302,9 +301,7 @@ async fn prepare(instance: &Instance, projects: &Projects) -> anyhow::Result<Opt
     if !sections.is_empty() {
         messages.push(format!("{summary}\n\n{}", sections.join("\n\n")));
     }
-    // A held turn still receives system notices in the user's conversation, but only the user
-    // can continue it. The same snapshot guard covers that choice and the queued notices.
-    Ok(Some(ScheduleManagerTurn { role: ROLE.into(), as_of, messages, cursors: moved, register: runs && !held }))
+    Ok(Some(ScheduleManagerTurn { role: ROLE.into(), as_of, messages, cursors: moved, register: runs }))
 }
 
 /// Her ledger in the first input of a new session: the entries that hold, by scope, hypotheses
@@ -447,6 +444,9 @@ mod tests {
                 turn.input
             );
             assert!(turn.input.contains("next"));
+            if order != 0 {
+                continue;
+            }
             db.execute(&Caller::Runtime, &SessionIdentified { turn_id: turn.id.clone(), native_id: "new".into() })
                 .unwrap();
             db.execute(&Caller::Runtime, &EndTurn { turn_id: turn.id, outcome: Outcome::Completed, failure: None })
