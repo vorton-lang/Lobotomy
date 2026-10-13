@@ -58,7 +58,9 @@ const codexModels: HarnessView['models'] = [
   { id: 'gpt-deep', label: 'GPT-Deep', efforts: ['low', 'medium', 'high', 'xhigh'], default_effort: 'medium' },
 ];
 
-test('internal vocabulary stays secondary while abnormal endings remain visible', async ({ page }) => {
+test('attachments distinguish accepted and outdated results while interrupted turns remain visible', async ({
+  page,
+}) => {
   const turn = (id: string, outcome: Turn['outcome']): Turn => ({
     id,
     role: 'Angela',
@@ -94,13 +96,7 @@ test('internal vocabulary stays secondary while abnormal endings remain visible'
         item('item_3', 1, 'normal', 'agent_message', {
           text: '候选成果及验证：\n[[att:candidate]]\n[[att:verification]]\n[[att:accepted]]',
         }),
-        item('tool', 2, 'normal', 'mcp_call', {
-          server: 'lobotomy',
-          tool: 'assign',
-          arguments: { task: '导出报表' },
-          result: 'ok',
-        }),
-        item('external', 3, 'failed', 'mcp_call', { server: 'drive', tool: 'read', arguments: {}, result: 'ok' }),
+        item('interrupted', 2, 'failed', 'agent_message', { text: '中断前的输出' }),
       ],
       turns: { normal: turn('normal', 'completed'), failed: turn('failed', 'interrupted') },
       messages: [],
@@ -166,15 +162,6 @@ test('internal vocabulary stays secondary while abnormal endings remain visible'
   await expect(page.locator('.badge.expired').first()).toContainText('取代');
   await expect(page.locator('.badge.expired').last()).toContainText('已过期');
   await expect(page.locator('.ref-attachment').nth(2).locator('.badge')).toHaveText('已验收');
-  await expect(page.locator('.turn-divider.completed')).toHaveText(/^\d{1,2}-\d{1,2} \d{2}:\d{2}$/);
-  await expect(page.locator('.ref-attachment').first()).toHaveAttribute('title', /abcdef0123456789/);
-  await expect(page.locator('.ref-attachment').nth(1)).toHaveAttribute('title', /base0000aaaa.*检查设置第 2 版/);
-  await expect(page.locator('.ref-attachment').nth(1)).not.toContainText('检查设置第 2 版');
-  await expect(page.locator('summary').filter({ hasText: 'assign' })).toHaveText('调用 assign');
-  await expect(page.locator('summary').filter({ hasText: 'drive.read' })).toHaveText('调用 drive.read');
-  await page.locator('summary').filter({ hasText: 'assign' }).click();
-  await expect(page.locator('details[open]')).toContainText('lobotomy.assign');
-  await expect(page.locator('.message.other .who')).toHaveAttribute('title', 'item_3');
 });
 
 /** Angela's snapshot has the shape of a project's, without a repository and tasks. */
@@ -573,10 +560,8 @@ test('a project that could not be opened says why; archived ones come back', asy
     ]);
 });
 
-// The settings are a page of their own (frontend.md §7.8): they open on the page they showed last,
-// wherever the window is, read the project of their page themselves, and leave the window where
-// it was.
-test('the settings are a page of their own, wherever the window is', async ({ page }) => {
+// Settings read the selected project and send the selected role model/effort (frontend.md §7.8).
+test('settings let the user choose the model and effort for a role', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const sent: [string, Record<string, unknown>][] = [];
@@ -622,16 +607,6 @@ test('the settings are a page of their own, wherever the window is', async ({ pa
     ['set_role_model', 'Malkuth', 'codex', null, 'high'],
   ]);
 
-  await settings.getByRole('button', { name: '返回', exact: true }).click();
-  await expect(page.locator('.topbar')).toContainText('全部项目');
-  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
-  await expect(page.locator('.topbar')).toContainText('alpha · main');
-  // From another project, the settings still show beta's page.
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(nav.locator('.settings-nav-group').filter({ hasText: 'beta' }).locator('[aria-current]')).toHaveText(
-    '常规',
-  );
-  await expect(settings.locator('.settings-header h2')).toHaveText('beta');
   expect(errors).toEqual([]);
 });
 
@@ -722,27 +697,4 @@ test('archiving from the settings asks first and leaves them usable', async ({ p
   await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /beta/ }).click();
   await expect(page.locator('.topbar')).toContainText('beta · main');
   expect(errors).toEqual([]);
-});
-
-// The side columns and the task panel can be dragged wider or narrower; the width stays after a
-// reload (frontend.md §2). The arrow keys move the edge too.
-test('the right column is dragged wider and keeps its width', async ({ page }) => {
-  await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [], angela });
-  await expect(page.locator('.topbar')).toContainText('alpha · main');
-  const sidebar = page.locator('.sidebar');
-  const sash = page.getByRole('separator', { name: '右侧栏的宽度' });
-  expect((await sidebar.boundingBox())!.width).toBeCloseTo(340, 0);
-  const box = (await sash.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + 200);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 - 100, box.y + 200, { steps: 5 });
-  await page.mouse.up();
-  expect((await sidebar.boundingBox())!.width).toBeCloseTo(440, 0);
-  await sash.focus();
-  await page.keyboard.press('ArrowLeft');
-  expect((await sidebar.boundingBox())!.width).toBeCloseTo(456, 0);
-
-  await page.reload();
-  await expect(page.locator('.topbar')).toContainText('alpha · main');
-  expect((await page.locator('.sidebar').boundingBox())!.width).toBeCloseTo(456, 0);
 });

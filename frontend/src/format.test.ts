@@ -27,7 +27,6 @@ import {
   attentionTask,
   buildRows,
   checkSummary,
-  commandSummary,
   composerHint,
   continueNote,
   deliveryReport,
@@ -38,7 +37,6 @@ import {
   previewLine,
   quietFor,
   roleActivity,
-  roleHue,
   roleLook,
   toolRunning,
   turnLook,
@@ -47,7 +45,6 @@ import {
   textOf,
   timeline,
   trialCandidate,
-  toolSubject,
   turnOutcome,
   unallowedChanges,
   voidReport,
@@ -424,20 +421,6 @@ describe('textOf', () => {
   });
 });
 
-describe('commandSummary', () => {
-  it('shows a short command whole and a long one by its first line and size', () => {
-    expect(commandSummary('ls -la')).toEqual({ line: 'ls -la', size: null });
-    const heredoc = ["cat > a.txt <<'EOF'", 'x', 'EOF'].join('\n');
-    expect(commandSummary(heredoc)).toEqual({ line: "cat > a.txt <<'EOF'", size: `共 3 行，${heredoc.length} 个字符` });
-    const wide = commandSummary('x'.repeat(200));
-    expect(wide.line).toBe(`${'x'.repeat(120)}…`);
-    expect(commandSummary({ blob: 'h', size: 300_000, head: 'echo start\nmore', tail: 'end' })).toEqual({
-      line: 'echo start',
-      size: '300000 个字符',
-    });
-  });
-});
-
 const role = (patch: Partial<RoleView>): RoleView => ({
   name: 'Malkuth',
   kind: 'worker',
@@ -509,16 +492,7 @@ describe('roleActivity', () => {
   });
 });
 
-describe('who a role is and how long its turn is quiet', () => {
-  it('gives each named role its color and any other role one by its name', () => {
-    expect([roleHue('Angela'), roleHue('Malkuth'), roleHue('Binah'), roleHue('Yesod')]).toEqual([0, 1, 2, 3]);
-    const names = ['Hod', 'Netzach', 'Chesed'];
-    const hues = names.map(roleHue);
-    expect(names.map(roleHue)).toEqual(hues);
-    expect(new Set(hues).size).toBeGreaterThan(1); // Six colors allow collisions, but not a constant.
-    expect(hues.every((hue) => Number.isInteger(hue) && hue >= 0 && hue < 6)).toBe(true);
-  });
-
+describe('how long a turn is quiet and whether live items changed', () => {
   it('says a turn is quiet only after two minutes without anything new', () => {
     expect(quietFor(undefined, 1e9)).toBeNull();
     expect(quietFor(0, 119_000)).toBeNull();
@@ -545,20 +519,6 @@ describe('who a role is and how long its turn is quiet', () => {
     const dynamic = { kind: 'future_kind', started_at: 1, content: null };
     expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: dynamic } })).toBe(false);
     expect(liveSize(dynamic)).toBe('future_kind:0:');
-  });
-});
-
-describe('toolSubject', () => {
-  it('says what a tool of the harness works on, in one line', () => {
-    expect(toolSubject({ file_path: 'C:/work/src/lib.rs' })).toBe('C:/work/src/lib.rs');
-    expect(toolSubject({ pattern: 'fn main', path: 'src' })).toBe('fn main');
-    expect(toolSubject({ path: 'src' })).toBe('src');
-    expect(toolSubject({ subject: 'First item', description: 'longer' })).toBe('First item');
-    expect(toolSubject({ query: 'select:TaskCreate', max_results: 1 })).toBe('select:TaskCreate');
-    expect(toolSubject({ prompt: `first line\nsecond line` })).toBe('first line');
-    expect(toolSubject({ prompt: 'x'.repeat(200) })).toBe(`${'x'.repeat(120)}…`);
-    expect(toolSubject({ taskId: '1', status: 'completed' })).toBe('');
-    expect(toolSubject(null)).toBe('');
   });
 });
 

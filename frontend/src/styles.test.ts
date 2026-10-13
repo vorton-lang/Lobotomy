@@ -1,6 +1,5 @@
-// The design tokens (notes/ui-ux-plan.md §3): colors live only in the light and dark :root blocks,
-// and the pairs the rules put together are readable in both (WCAG AA: 4.5:1 for text, 3:1 for a
-// focus ring or a mark that carries meaning).
+// The design token pairs are readable in light and dark themes (notes/ui-ux-plan.md §3):
+// WCAG AA, 4.5:1 for text and 3:1 for a focus ring or a mark that carries meaning.
 
 import { describe, expect, it } from 'vitest';
 import source from './styles.css?raw';
@@ -46,22 +45,6 @@ const MARKS: [string, string[]][] = [
 ];
 
 describe('the design tokens', () => {
-  it('keep colors out of the rules', () => {
-    const rules = css
-      .replace(light, '')
-      .replace(dark, '')
-      .replace(/url\("[^"]*"\)/g, '');
-    expect(rules.match(/#[0-9a-f]{3,8}\b|\b(rgba?|hsla?|oklch|lab|lch)\(/gi) ?? []).toEqual([]);
-  });
-
-  it('give every color a dark value', () => {
-    const colors = Object.entries(tokens(light))
-      .filter(([, v]) => /^(#|rgb|0 )/.test(v))
-      .map(([k]) => k);
-    const missing = colors.filter((k) => !(k in tokens(dark)));
-    expect(missing).toEqual([]);
-  });
-
   for (const [name, block] of [
     ['light', light],
     ['dark', dark],

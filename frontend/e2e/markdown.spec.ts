@@ -90,37 +90,29 @@ async function openStream(page: Page) {
   };
 }
 
-for (const [label, chunks, selector, visible] of [
-  ['bold', ['**wo', 'rld'], 'strong', 'world'],
-  ['italic', ['*wo', 'rld'], 'em', 'world'],
-  ['inline code', ['Use `con', 'st x'], 'code', 'const x'],
-  ['link', ['[docs](https://exa', 'mple.com'], 'p', 'docs'],
-] as const) {
-  test(`streaming Markdown repairs incomplete ${label} only until item completion`, async ({ page }, testInfo) => {
-    const api = await openStream(page);
-    let text = '';
-    for (const delta of chunks) {
-      text += delta;
-      api.update(text);
-      const rendered = page.locator('.live .markdown:not(.plain)');
-      await expect(rendered).toBeVisible();
-      await expect(rendered).not.toContainText(label === 'link' ? 'https://' : text);
-    }
-    const live = page.locator('.live .markdown');
-    await expect(live.locator(selector)).toHaveText(visible);
-    if (label === 'link') await expect(live.locator('a')).toHaveCount(0);
-    if (label === 'bold') await page.screenshot({ path: testInfo.outputPath('markdown-streaming.png') });
+// The worker tests cover individual syntax forms; this case covers the live/completed DOM bridge.
+test('streaming Markdown repairs incomplete bold only until item completion', async ({ page }, testInfo) => {
+  const api = await openStream(page);
+  let text = '';
+  for (const delta of ['**wo', 'rld']) {
+    text += delta;
+    api.update(text);
+    const rendered = page.locator('.live .markdown:not(.plain)');
+    await expect(rendered).toBeVisible();
+    await expect(rendered).not.toContainText(text);
+  }
+  const live = page.locator('.live .markdown');
+  await expect(live.locator('strong')).toHaveText('world');
+  await page.screenshot({ path: testInfo.outputPath('markdown-streaming.png') });
 
-    // The persisted item has exactly the same source, without any synthetic closing marker.
-    api.complete(text);
-    await expect(page.locator('.live')).toHaveCount(0);
-    const completed = page.locator('.message.other .markdown:not(.plain)');
-    await expect(completed).toHaveText(text);
-    if (label !== 'link') await expect(completed.locator(selector)).toHaveCount(0);
-    else await expect(completed.locator('a')).toHaveAttribute('href', 'https://example.com/');
-    if (label === 'bold') await page.screenshot({ path: testInfo.outputPath('markdown-completed.png') });
-  });
-}
+  // The persisted item has exactly the same source, without any synthetic closing marker.
+  api.complete(text);
+  await expect(page.locator('.live')).toHaveCount(0);
+  const completed = page.locator('.message.other .markdown:not(.plain)');
+  await expect(completed).toHaveText(text);
+  await expect(completed.locator('strong')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('markdown-completed.png') });
+});
 
 test('streaming Markdown keeps simultaneous items separate and drops an interrupted live turn', async ({ page }) => {
   const api = await openStream(page);
