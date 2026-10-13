@@ -17,7 +17,8 @@ npm run bench
 - **被测对象**：前端用生产构建，由 `vite preview` 提供；后端是 release 构建，接假 Codex（`backend/crates/lobotomyd/tests/fixtures/fake-codex.mjs`，合成数据的场景在它导入的 `fake-bench.mjs` 中）和假 Claude（`fake-claude.mjs`）。数据都是合成的，内容固定，所以不同次运行的结果可以比较。
 - **浏览器**：Windows 上用本机 Edge，其他平台用 Playwright 自带的 Chromium（需要先运行 `npx playwright install chromium`）。两者都基于 Chromium，内存数据取自 DevTools 协议。默认无头运行。
 - **结果**：写入 `frontend/bench-results/`，不提交。参考数据记在本文 §3。
-- **CI**：每次推送到 main，在 Windows 和 Ubuntu 的 GitHub 托管机器上各运行一次（`.github/workflows/ci.yml`）。结果写在 job 的摘要里，并作为 artifact 保留；只记录，不设门槛。共享机器的数据波动大，所以 §3 的本机数据仍是参考。
+- **CI**：在 Actions 的 CI 页面选择 Run workflow，手动运行所选分支；也可用 `gh workflow run ci.yml --ref <分支>`。这次运行会执行常规测试，并在 Windows 和 Ubuntu 上各运行一次基线。结果写在 job 摘要里并保留 artifact，只记录、不设门槛。共享机器的数据波动大，所以 §3 的本机数据仍是参考。
+- **语义更新（2026-10-13，用户批准测试成本审计建议）**：push 和 pull request 不再自动运行基线。渲染、流式更新、后端数据路径变更及发布前手动运行；接受其他变更引入的性能退化可能到下次采样才被发现。
 
 ## 2. 场景与指标
 

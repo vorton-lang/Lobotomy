@@ -138,7 +138,7 @@ CI 中固定运行合成场景（参照 OpenHands 的 `BENCH_MESSAGES` 与 Goose
 
 测量输入延迟、主线程停顿、内存、状态滞后与重新同步情况。先建立基线，再据结果确定预算（#6 §5）。
 
-框架、场景与参考数据见 [perf-baseline.md](perf-baseline.md)。CI 在每次推送到 main 时，在 Windows 和 Ubuntu 上各运行一次 `npm run bench`，只记录，不设门槛。本地不运行，看 CI 的 bench 摘要（[AGENTS.md](../AGENTS.md)）。
+框架、场景与参考数据见 [perf-baseline.md](perf-baseline.md)。手动运行 CI workflow 时，在 Windows 和 Ubuntu 上各运行一次 `npm run bench`，只记录、不设门槛。渲染、流式更新、后端数据路径变更及发布前运行并查看 bench 摘要；本地不运行（[AGENTS.md](../AGENTS.md)）。
 
 ## 6. 未决
 

@@ -68,4 +68,4 @@ agent 负责验收并合并这些修复 PR：看改动是否只修了失败的�
 - 改了 Rust 代码后，提交前运行 `cargo fmt`，以及受影响 crate 的 `cargo clippy -p <crate> --all-targets -- -D warnings`。
 - 改了 `frontend/` 中的代码后，提交前在 `frontend/` 运行 `npm run format`。它不改 `src/api/generated.ts`；这个文件只由 `npm run api:generate` 生成。
 - 默认忽略的真实 CLI 测试会消耗订阅额度。只在改了 adapter 的参数、事件解析或 MCP 接口时运行，例如 `cargo test -p lobotomyd --test backend a_real_claude -- --ignored`。MCP 契约测试在 `--test mcp_contract` 中，也默认忽略。
-- 性能基线（`npm run bench`）每次推送到 main 时由 CI 运行，只记录，不设门槛。本地不运行；改了渲染或流式更新时，看 CI 的 bench 摘要。
+- 性能基线（`npm run bench`）只在手动运行 CI workflow 时执行，Windows 和 Ubuntu 各一次，只记录、不设门槛。改了渲染、流式更新或后端数据路径，以及发布前，手动运行 CI 并查看 bench 摘要。本地不运行。

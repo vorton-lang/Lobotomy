@@ -1,5 +1,5 @@
-# Tests on Windows and Linux for every push and pull request; on main, also the performance
-# baseline, recorded without budgets (notes/perf-baseline.md).
+# Tests on Windows and Linux for every push and pull request. Run this workflow manually
+# to also record the performance baseline without budgets (notes/perf-baseline.md).
 
 name: CI
 
@@ -100,7 +100,7 @@ jobs:
 
   bench:
     name: bench (${{ matrix.os }})
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
