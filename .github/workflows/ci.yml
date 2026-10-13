@@ -1,5 +1,6 @@
 # Tests on Windows and Linux for every push and pull request; on main, also the performance
-# baseline, recorded without budgets (notes/perf-baseline.md).
+# baseline, recorded without budgets (notes/perf-baseline.md). Only blame-metadata-only changes
+# skip heavy steps. The jobs still run and report the same required check names.
 
 name: CI
 
@@ -33,42 +34,65 @@ jobs:
       # Line endings follow the repository, not the machine.
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: CI scope regression tests
+        shell: bash
+        run: python .github/scripts/test_ci_scope.py -v
+      - name: Determine CI scope
+        id: scope
+        shell: bash
+        run: python .github/scripts/ci_scope.py
+      - name: Report metadata-only change
+        if: steps.scope.outputs.metadata_only == 'true'
+        shell: bash
+        run: echo "Only .git-blame-ignore-revs changed; heavy steps skipped." >> "$GITHUB_STEP_SUMMARY"
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.scope.outputs.metadata_only != 'true'
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.metadata_only != 'true'
         with:
           workspaces: backend
       - uses: actions/setup-node@v5
+        if: steps.scope.outputs.metadata_only != 'true'
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Format
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: backend
         run: cargo fmt --check
       - name: Backend tests
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: backend
         run: cargo test --workspace --locked
       # The default build is what ships; the ts-rs build only generates the GUI types.
       - name: Clippy
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: backend
         run: |
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo clippy --workspace --all-targets --features lobotomyd/ts-rs --locked -- -D warnings
 
       - name: Frontend install
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: frontend
         run: npm ci
       - name: GUI contract drift and serde fixtures
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: frontend
         run: npm run api:check
       - name: Frontend format
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: frontend
         run: npm run format:check
       # Fail fast on both platforms; a later command must not hide an earlier failure.
       - name: Frontend lint, typecheck, unit tests, build
+        if: steps.scope.outputs.metadata_only != 'true'
         shell: bash
         working-directory: frontend
         run: |
@@ -78,11 +102,11 @@ jobs:
           npx vite build
       # The end-to-end tests use the debug backend the backend tests built.
       - name: End-to-end (Windows, installed Edge)
-        if: runner.os == 'Windows'
+        if: steps.scope.outputs.metadata_only != 'true' && runner.os == 'Windows'
         working-directory: frontend
         run: npx playwright test
       - name: End-to-end (Linux, Playwright's Chromium, Electron under Xvfb)
-        if: runner.os == 'Linux'
+        if: steps.scope.outputs.metadata_only != 'true' && runner.os == 'Linux'
         working-directory: frontend
         env:
           # Ubuntu restricts the user namespaces Electron's sandbox needs.
@@ -111,32 +135,49 @@ jobs:
     steps:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Determine CI scope
+        id: scope
+        shell: bash
+        run: python .github/scripts/ci_scope.py
+      - name: Report metadata-only change
+        if: steps.scope.outputs.metadata_only == 'true'
+        shell: bash
+        run: echo "Only .git-blame-ignore-revs changed; heavy steps skipped." >> "$GITHUB_STEP_SUMMARY"
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.scope.outputs.metadata_only != 'true'
       - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.metadata_only != 'true'
         with:
           workspaces: backend
           key: bench
       - uses: actions/setup-node@v5
+        if: steps.scope.outputs.metadata_only != 'true'
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Frontend install
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: frontend
         run: npm ci
       - name: Browser (Linux)
-        if: runner.os == 'Linux'
+        if: steps.scope.outputs.metadata_only != 'true' && runner.os == 'Linux'
         working-directory: frontend
         run: npx playwright install --with-deps chromium
       # Builds the release backend and the production frontend, then runs the scenarios.
       - name: Baseline
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: frontend
         run: npm run bench
       - name: Summary
+        if: steps.scope.outputs.metadata_only != 'true'
         working-directory: frontend
         shell: bash
         run: node bench/summary.mjs >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
+        if: steps.scope.outputs.metadata_only != 'true'
         with:
           name: bench-${{ matrix.os }}
           path: frontend/bench-results/latest.json
