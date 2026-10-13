@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::task::queue_message;
-use crate::turn::{TurnState, load_turn};
+use crate::turn::{RegisterTurn, TurnRegistered, TurnState, load_turn};
+use crate::view::last_event;
 
 /// How far the manager has read a project (data-model.md §10.6 跨库操作第 4 条).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,6 +53,36 @@ impl Command for TellManager {
             )?;
         }
         Ok(message)
+    }
+}
+
+/// Commits a scheduler read of the manager's inbox and session. Cross-project reads happen
+/// before this command; her own state must still match that read. Notices, cursors and turn
+/// registration commit together, or a refusal rolls all of them back.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ScheduleManagerTurn {
+    pub role: String,
+    pub as_of: i64,
+    pub messages: Vec<String>,
+    pub cursors: Vec<Cursor>,
+    /// Idle reads only initialize cursors; held turns receive notices without consuming messages.
+    pub register: bool,
+}
+
+impl Command for ScheduleManagerTurn {
+    const NAME: &'static str = "schedule_manager_turn";
+    type Output = Option<TurnRegistered>;
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<Self::Output> {
+        caller.require_runtime()?;
+        if last_event(cx.tx)? != self.as_of {
+            return Err(Error::rejected("manager_state_changed", "the manager changed while preparing her input"));
+        }
+        for body in &self.messages {
+            queue_message(cx, &self.role, caller, None, body)?;
+        }
+        TellManager { role: self.role.clone(), body: None, cursors: self.cursors.clone() }.apply(caller, cx)?;
+        if self.register { RegisterTurn { role: self.role.clone() }.apply(caller, cx).map(Some) } else { Ok(None) }
     }
 }
 
