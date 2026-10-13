@@ -16,7 +16,6 @@ use lobotomy_harness::event::Event;
 use lobotomy_harness::{Harness, Model, Output, Permission, claude, codex};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::{Notify, broadcast};
-use tokio_util::task::TaskTracker;
 
 use crate::launch;
 
@@ -33,8 +32,6 @@ pub struct Host {
     pub gui_push: broadcast::Sender<Arc<str>>,
     /// The GUI asked the backend to stop (frontend.md §1).
     pub shutdown_requested: Notify,
-    /// Accepted shutdown replies, held until flushed or their connection is lost.
-    pub(crate) shutdown_replies: TaskTracker,
     /// Domains with a check in progress: at most one check per domain (data-model.md §8.4).
     checking: Mutex<HashSet<String>>,
     /// Codex's model catalog, once read; [`Host::models`] starts reading it.
@@ -136,7 +133,6 @@ impl Host {
             mcp_base: Mutex::new(String::new()),
             gui_push: broadcast::channel(crate::gui::PUSH_BUFFER).0,
             shutdown_requested: Notify::new(),
-            shutdown_replies: TaskTracker::new(),
             checking: Mutex::new(HashSet::new()),
             codex_models: Mutex::new(Vec::new()),
             catalog_requested: AtomicBool::new(false),

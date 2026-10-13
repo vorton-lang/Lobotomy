@@ -104,10 +104,6 @@ impl Backend {
             }
         };
         futures::future::join(self.projects.stop_all(deadline), angela).await;
-        // A shutdown command must be able to flush its reply before cancellation drops the
-        // socket writer. A slow client gets only the remaining, existing shutdown grace.
-        self.host.shutdown_replies.close();
-        let _ = tokio::time::timeout_at(deadline.into(), self.host.shutdown_replies.wait()).await;
         self.serving.cancel();
         let _ = self.server.await;
         // No new upgrades after the server stopped.
