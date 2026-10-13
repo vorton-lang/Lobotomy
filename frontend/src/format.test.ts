@@ -512,14 +512,17 @@ describe('roleActivity', () => {
 describe('who a role is and how long its turn is quiet', () => {
   it('gives each named role its color and any other role one by its name', () => {
     expect([roleHue('Angela'), roleHue('Malkuth'), roleHue('Binah'), roleHue('Yesod')]).toEqual([0, 1, 2, 3]);
-    expect(roleHue('Hod')).toBe(roleHue('Hod'));
-    expect(roleHue('Hod')).toBeGreaterThanOrEqual(0);
-    expect(roleHue('Hod')).toBeLessThan(6);
+    const names = ['Hod', 'Netzach', 'Chesed'];
+    const hues = names.map(roleHue);
+    expect(names.map(roleHue)).toEqual(hues);
+    expect(new Set(hues).size).toBeGreaterThan(1); // Six colors allow collisions, but not a constant.
+    expect(hues.every((hue) => Number.isInteger(hue) && hue >= 0 && hue < 6)).toBe(true);
   });
 
   it('says a turn is quiet only after two minutes without anything new', () => {
     expect(quietFor(undefined, 1e9)).toBeNull();
     expect(quietFor(0, 119_000)).toBeNull();
+    expect(quietFor(0, 120_000)).toBe('2 分钟没有新输出');
     expect(quietFor(0, 12 * 60_000 + 5_000)).toBe('12 分钟没有新输出');
   });
 
