@@ -394,11 +394,14 @@ async fn the_gui_can_stop_the_backend() {
     let backend = start(dir.path()).await;
     let mut gui = Client::connect(&backend).await;
     let host = backend.project.host.clone();
-    let stopped = tokio::spawn(async move { host.shutdown_requested.notified().await });
-    tokio::task::yield_now().await;
+    // Like main: start shutting down as soon as the command is accepted, without waiting
+    // for the client's reply. Waiting for command() first would conceal a dropped reply.
+    let stopped = tokio::spawn(async move {
+        host.shutdown_requested.notified().await;
+        backend.shutdown(Duration::from_secs(5)).await;
+    });
     gui.command("shutdown", json!({})).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), stopped).await.unwrap().unwrap();
-    backend.shutdown(Duration::from_secs(5)).await;
 }
 
 /// Upgraded sockets are not owned by axum's HTTP server. Shutdown must join them too,

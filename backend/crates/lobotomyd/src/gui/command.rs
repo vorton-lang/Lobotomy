@@ -78,9 +78,13 @@ struct PermissionParams {
 }
 
 /// Runs a host command; `None` when `name` is a project command.
-pub async fn host(host: &Arc<Host>, projects: &Projects, params: &CommandParams) -> anyhow::Result<Option<Value>> {
+pub async fn host(
+    host: &Arc<Host>,
+    projects: &Projects,
+    params: &CommandParams,
+) -> anyhow::Result<Option<super::Reply<Value>>> {
     let args = params.args.clone();
-    Ok(Some(match params.name.as_str() {
+    let result = match params.name.as_str() {
         // A new project, connected while the backend runs (data-model.md §10.4).
         name if name == CREATE_PROJECT.name => {
             let CreateProjectParams { repo_path } = CREATE_PROJECT.decode(args)?;
@@ -119,11 +123,14 @@ pub async fn host(host: &Arc<Host>, projects: &Projects, params: &CommandParams)
             SET_PERMISSION.encode(PermissionChanged { harness, permission: set.as_str() })?
         }
         name if name == SHUTDOWN.name => {
+            // Register ownership before waking main; it may begin shutdown immediately.
+            let shutdown = host.shutdown_replies.token();
             host.shutdown_requested.notify_one();
-            SHUTDOWN.encode(())?
+            return Ok(Some(super::Reply { body: SHUTDOWN.encode(())?, shutdown: Some(shutdown) }));
         }
         _ => return Ok(None),
-    }))
+    };
+    Ok(Some(result.into()))
 }
 
 macro_rules! project_commands {
