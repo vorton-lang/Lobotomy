@@ -1139,13 +1139,11 @@ async fn shutdown_leaves_a_running_store_job_and_its_lock_alive() {
 
 /// A trial runs the executor's command in a copy of the candidate, in a terminal of its own. Stop
 /// ends it and deletes the copy; shutdown stops a trial still open; startup deletes leftovers
-/// (frontend.md §8). Linux needs a desktop, which CI does not have.
+/// (frontend.md §8). On Unix, run explicitly with a display and xfce4-terminal or xterm.
 #[tokio::test]
+#[cfg_attr(unix, ignore = "requires a graphical display and xfce4-terminal or xterm")]
 async fn a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown() {
     use lobotomyd::trial::{self, StartTrial};
-    if cfg!(unix) && std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let project = backend.project.clone();
