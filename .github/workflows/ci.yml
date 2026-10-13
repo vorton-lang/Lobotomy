@@ -77,10 +77,32 @@ jobs:
           npm test
           npx vite build
       # The end-to-end tests use the debug backend the backend tests built.
+      - name: Windows resource diagnostics before E2E
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        working-directory: frontend
+        run: pwsh -NoProfile -File scripts/ci-windows-snapshot.ps1 -OutputFile diagnostics/before.json
       - name: End-to-end (Windows, installed Edge)
         if: runner.os == 'Windows'
         working-directory: frontend
+        env:
+          LOBOTOMY_STARTUP_DIAGNOSTICS: '1'
         run: npx playwright test
+      - name: Windows resource diagnostics after E2E
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        working-directory: frontend
+        run: pwsh -NoProfile -File scripts/ci-windows-snapshot.ps1 -OutputFile diagnostics/after.json
+      - name: Keep Windows startup diagnostics
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-startup-diagnostics
+          path: |
+            frontend/diagnostics/
+            frontend/test-results/**/startup-*
+          if-no-files-found: ignore
       - name: End-to-end (Linux, Playwright's Chromium, Electron under Xvfb)
         if: runner.os == 'Linux'
         working-directory: frontend

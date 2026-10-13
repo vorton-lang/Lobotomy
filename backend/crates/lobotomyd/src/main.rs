@@ -21,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 fn main() -> anyhow::Result<()> {
+    lobotomyd::startup_phase("main-entered");
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let [mode, title, command, control] = args.as_slice()
         && mode == "trial-terminal"
@@ -70,12 +71,16 @@ fn parse(args: &[String]) -> anyhow::Result<Options> {
 }
 
 async fn serve(Options { host_dir, repo, port }: Options) -> anyhow::Result<()> {
+    lobotomyd::startup_phase("runtime-started");
     std::fs::create_dir_all(&host_dir).with_context(|| format!("creating {}", host_dir.display()))?;
     // One backend per host directory (data-model.md §10.3). The OS releases the lock when the
     // process ends, however it ends.
     let _lock = lobotomyd::instance::lock_file(&host_dir.join("lock"), &host_dir.display().to_string())?;
+    lobotomyd::startup_phase("host-lock-acquired");
     let host = Arc::new(Host::open(&host_dir, HarnessConfig::detect()?)?);
+    lobotomyd::startup_phase("host-opened");
     let backend = Backend::start(host.clone(), port).await?;
+    lobotomyd::startup_phase("services-started");
     if let Some(repo) = repo {
         let path = lobotomyd::onboard::repo_path(&repo)?.to_string_lossy().into_owned();
         let existing =
@@ -83,7 +88,9 @@ async fn serve(Options { host_dir, repo, port }: Options) -> anyhow::Result<()> 
         match existing {
             Some(project) => tracing::info!(project = project.id, repo = path, "the repository already has a project"),
             None => {
+                lobotomyd::startup_phase("project-create-start");
                 let project = backend.projects.create(&repo).await?;
+                lobotomyd::startup_phase("project-created");
                 tracing::info!(project = project.id, repo = path, "added the repository as a project");
             }
         }
@@ -93,6 +100,7 @@ async fn serve(Options { host_dir, repo, port }: Options) -> anyhow::Result<()> 
     let info = host_dir.join("backend.json");
     let contents = serde_json::json!({ "pid": std::process::id(), "port": backend.addr.port() });
     std::fs::write(&info, contents.to_string()).with_context(|| format!("writing {}", info.display()))?;
+    lobotomyd::startup_phase("ready-file-written");
     tokio::select! {
         signal = tokio::signal::ctrl_c() => signal?,
         _ = host.shutdown_requested.notified() => {}

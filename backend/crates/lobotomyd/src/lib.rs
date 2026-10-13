@@ -17,6 +17,22 @@ pub mod runner;
 pub mod scheduler;
 pub mod trial;
 
+/// Opt-in CI diagnostics: phase names only, never arguments, tokens, or environment values.
+pub fn startup_phase(phase: &str) {
+    if std::env::var_os("LOBOTOMY_STARTUP_DIAGNOSTICS").is_some() {
+        use std::io::Write;
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let start = START.get_or_init(std::time::Instant::now);
+        // A diagnostic output failure must not change the backend's result.
+        let _ = writeln!(
+            std::io::stderr(),
+            "startup pid={} elapsed_ms={} phase={phase}",
+            std::process::id(),
+            start.elapsed().as_millis()
+        );
+    }
+}
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -49,16 +65,20 @@ impl Backend {
     /// Angela, and serves. A project that cannot be opened does not stop the others, nor Angela
     /// the projects (data-model.md §10.3).
     pub async fn start(host: Arc<Host>, port: u16) -> anyhow::Result<Self> {
+        startup_phase("listener-bind-start");
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+        startup_phase("listener-bound");
         let addr = listener.local_addr()?;
         *host.mcp_base.lock().unwrap() = format!("http://{addr}");
         let projects = Arc::new(Projects::new(host.clone()));
         projects.open_registered().await?;
+        startup_phase("registered-projects-opened");
         let angela = Angela::start(host.clone(), projects.clone()).await.map_err(|e| {
             tracing::error!(error = format!("{e:#}"), "Angela could not be opened");
             format!("{e:#}")
         });
         let angela_instance = angela.as_ref().map(|a| a.instance.clone()).map_err(Clone::clone);
+        startup_phase("angela-started");
 
         let serving = CancellationToken::new();
         let gui_sessions = TaskTracker::new();
