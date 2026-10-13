@@ -1,12 +1,26 @@
-# Tests on Windows and Linux for every push and pull request; on main, also the performance
-# baseline, recorded without budgets (notes/perf-baseline.md).
+# Tests on Windows and Linux; skip only the documentation/metadata paths listed below.
+# On main, also record the performance baseline without budgets (notes/perf-baseline.md).
 
 name: CI
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'notes/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'LICENSE'
+      - '.git-blame-ignore-revs'
   pull_request:
+    paths-ignore:
+      - 'notes/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'LICENSE'
+      - '.git-blame-ignore-revs'
   workflow_dispatch:
 
 concurrency:
