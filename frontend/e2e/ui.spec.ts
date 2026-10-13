@@ -8,15 +8,40 @@ import { PROJECT, detail, hostSnapshot, role, task } from './mocked';
 const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
 
 const turn = (id: string, taskId: string | null): Turn => ({
-  id, role: 'Malkuth', harness: 'codex', native_session_id: 'session', native_id: null, process_start: null, workspace_id: 'workspace', task_id: taskId, attempt_id: null, input: '', state: 'ended', outcome: 'completed',
-  failure: null, pid: null, done_at: null, registered_at: 1, started_at: 1, ended_at: 2,
+  id,
+  role: 'Malkuth',
+  harness: 'codex',
+  native_session_id: 'session',
+  native_id: null,
+  process_start: null,
+  workspace_id: 'workspace',
+  task_id: taskId,
+  attempt_id: null,
+  input: '',
+  state: 'ended',
+  outcome: 'completed',
+  failure: null,
+  pid: null,
+  done_at: null,
+  registered_at: 1,
+  started_at: 1,
+  ended_at: 2,
 });
 
 const message = (seq: number, turnId: string, text: string): Item => ({
-  id: `i${seq}`, seq, turn_id: turnId, command_id: null, created_at: seq, kind: 'agent_message', content: { text },
+  id: `i${seq}`,
+  seq,
+  turn_id: turnId,
+  command_id: null,
+  created_at: seq,
+  kind: 'agent_message',
+  content: { text },
 });
 
-interface Sent { name: string; args: Record<string, unknown> }
+interface Sent {
+  name: string;
+  args: Record<string, unknown>;
+}
 
 interface State {
   snapshot: Pick<Snapshot, 'roles' | 'tasks' | 'attention'>;
@@ -37,27 +62,62 @@ async function openMocked(page: Page, state: State) {
   let seq = 1;
   const sent: Sent[] = [];
   const snapshot = (): Snapshot => ({
-    seq: 1, config: null, quota: [], harnesses: [], live: {},
-    project: { id: 'project', repo_path: '/project', branch: 'main', author_name: 'Test', author_email: 'test@example.com', integration: 'base0000', integration_rev: 1, previewed: 'base0000' },
+    seq: 1,
+    config: null,
+    quota: [],
+    harnesses: [],
+    live: {},
+    project: {
+      id: 'project',
+      repo_path: '/project',
+      branch: 'main',
+      author_name: 'Test',
+      author_email: 'test@example.com',
+      integration: 'base0000',
+      integration_rev: 1,
+      previewed: 'base0000',
+    },
     ...state.snapshot,
   });
   const threadPage = (after?: number, before?: number) => ({
-    items: (state.items ?? []).filter((i) => (after === undefined || i.seq > after) && (before === undefined || i.seq < before)),
-    has_more: false, turns: state.turns ?? {}, messages: [], commands: state.commands ?? {}, queued: [],
+    items: (state.items ?? []).filter(
+      (i) => (after === undefined || i.seq > after) && (before === undefined || i.seq < before),
+    ),
+    has_more: false,
+    turns: state.turns ?? {},
+    messages: [],
+    commands: state.commands ?? {},
+    queued: [],
   });
   await page.routeWebSocket(/\/gui\?token=ui-test$/, (route) => {
     socket = route;
     route.onMessage((raw) => {
-      const { id, method, params } = JSON.parse(String(raw)) as { id: number; method: string; params: Record<string, any> };
+      const { id, method, params } = JSON.parse(String(raw)) as {
+        id: number;
+        method: string;
+        params: Record<string, any>;
+      };
       let result: unknown;
       let changed: string | undefined;
       switch (method) {
-        case 'host': result = hostSnapshot(); break;
-        case 'snapshot': result = snapshot(); break;
-        case 'thread': result = threadPage(params.after, params.before); break;
-        case 'task': result = state.details?.[params.task_id]; break;
-        case 'trials': result = []; break;
-        case 'diff': result = []; break;
+        case 'host':
+          result = hostSnapshot();
+          break;
+        case 'snapshot':
+          result = snapshot();
+          break;
+        case 'thread':
+          result = threadPage(params.after, params.before);
+          break;
+        case 'task':
+          result = state.details?.[params.task_id];
+          break;
+        case 'trials':
+          result = [];
+          break;
+        case 'diff':
+          result = [];
+          break;
         case 'command': {
           const call: Sent = { name: params.name, args: params.args };
           sent.push(call);
@@ -71,7 +131,17 @@ async function openMocked(page: Page, state: State) {
       }
       route.send(JSON.stringify({ id, result }));
       if (changed) {
-        const events: LogEvent[] = [{ seq: ++seq, kind: 'task.updated', command_id: null, caller: null, caller_turn_id: null, entity: changed, payload: { task_id: changed } }];
+        const events: LogEvent[] = [
+          {
+            seq: ++seq,
+            kind: 'task.updated',
+            command_id: null,
+            caller: null,
+            caller_turn_id: null,
+            entity: changed,
+            payload: { task_id: changed },
+          },
+        ];
         route.send(JSON.stringify({ type: 'events', project: PROJECT, events } satisfies Push));
       }
     });
@@ -91,7 +161,8 @@ async function openMocked(page: Page, state: State) {
 test('incoming pages keep following while the viewport is first measured', async ({ page }) => {
   const items: Item[] = [];
   const backend = await openMocked(page, {
-    snapshot: { roles: [role(null)], tasks: [], attention: [] }, items,
+    snapshot: { roles: [role(null)], tasks: [], attention: [] },
+    items,
     turns: { t1: turn('t1', null) },
   });
   await expect(page.locator('.thread.empty')).toContainText('还没有对话');
@@ -124,7 +195,13 @@ test('back to the latest after reading back', async ({ page }) => {
     snapshot: { roles: [role(null)], tasks: [], attention: [] },
     items,
     turns: { t1: turn('t1', null), t2: turn('t2', 'task1') },
-    commands: { cmd1: { name: 'org_report', args: { title: '完成', body: '写了 work.txt', status: 'done', blocked_on: null }, result: 'recorded' } },
+    commands: {
+      cmd1: {
+        name: 'org_report',
+        args: { title: '完成', body: '写了 work.txt', status: 'done', blocked_on: null },
+        result: 'recorded',
+      },
+    },
   });
   const latest = page.getByRole('button', { name: /回到最新/ });
   await expect(page.locator('.thread .message.other').last()).toContainText('第 60 条');
@@ -142,14 +219,22 @@ test('back to the latest after reading back', async ({ page }) => {
   await page.mouse.move(area!.x + area!.width / 2, area!.y + area!.height / 2);
   await page.mouse.wheel(0, -1500);
   // Cross the row-measurement/render boundary before checking that the jump stayed cancelled.
-  await page.evaluate(() => new Promise<void>((resolve) =>
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-  ));
+  await page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+  );
   await expect(latest).toHaveText('回到最新');
 
   // A turn of a new task reports done, then says the same again.
   items.push(
-    { id: 'i61', seq: 61, turn_id: 't2', command_id: 'cmd1', created_at: 61, kind: 'mcp_call', content: { server: 'lobotomy', tool: 'org_report', arguments: {}, result_text: null, error_text: null } },
+    {
+      id: 'i61',
+      seq: 61,
+      turn_id: 't2',
+      command_id: 'cmd1',
+      created_at: 61,
+      kind: 'mcp_call',
+      content: { server: 'lobotomy', tool: 'org_report', arguments: {}, result_text: null, error_text: null },
+    },
     message(62, 't2', 'finished'),
   );
   backend.push({ type: 'thread', project: PROJECT, role: 'Malkuth', seq: 62 });
@@ -181,7 +266,10 @@ test('a finished task’s panel leads to the task now in work', async ({ page })
       // What the backend does on acceptance: the task closes and the executor takes the next one.
       state.snapshot = {
         roles: [role('task2')],
-        tasks: [{ ...first, phase: 'done' }, { ...second, phase: 'executing' }],
+        tasks: [
+          { ...first, phase: 'done' },
+          { ...second, phase: 'executing' },
+        ],
         attention: [],
       };
       details.task1 = detail({ ...first, phase: 'done' });
@@ -189,7 +277,11 @@ test('a finished task’s panel leads to the task now in work', async ({ page })
     },
   };
   await openMocked(page, state);
-  await page.locator('.attention .card').filter({ hasText: '「第一个任务」通过了验证' }).getByRole('button', { name: '查看并验收' }).click();
+  await page
+    .locator('.attention .card')
+    .filter({ hasText: '「第一个任务」通过了验证' })
+    .getByRole('button', { name: '查看并验收' })
+    .click();
   const panel = page.getByRole('region', { name: '第一个任务', exact: true });
   await expect(panel.locator('.now-running')).toHaveCount(0);
   await panel.getByRole('button', { name: '验收', exact: true }).click();
@@ -204,7 +296,15 @@ test('a finished task’s panel leads to the task now in work', async ({ page })
 test('a message the executor never got waits for the user at acceptance', async ({ page }) => {
   const view = task('task1', '补充要求的任务', 'accepting', 1);
   const undelivered: Message = {
-    id: 'm1', seq: 1, role: 'Malkuth', source: 'user', task_id: 'task1', body: '补充：异常行要能看到原始行号', turn_id: null, created_at: 5, reply_to: null,
+    id: 'm1',
+    seq: 1,
+    role: 'Malkuth',
+    source: 'user',
+    task_id: 'task1',
+    body: '补充：异常行要能看到原始行号',
+    turn_id: null,
+    created_at: 5,
+    reply_to: null,
   };
   const details: Record<string, TaskDetail> = { task1: detail(view, [undelivered]) };
   const state: State = {
@@ -215,7 +315,11 @@ test('a message the executor never got waits for the user at acceptance', async 
     },
     details,
     command: () => {
-      state.snapshot = { roles: [role(null)], tasks: [{ ...view, phase: 'done', undelivered_messages: 0 }], attention: [] };
+      state.snapshot = {
+        roles: [role(null)],
+        tasks: [{ ...view, phase: 'done', undelivered_messages: 0 }],
+        attention: [],
+      };
       details.task1 = detail({ ...view, phase: 'done' });
       return '2222222222';
     },
@@ -231,8 +335,14 @@ test('a message the executor never got waits for the user at acceptance', async 
   await expect(panel.locator('.undelivered')).toContainText('异常行要能看到原始行号');
   await expect(panel.getByRole('button', { name: '验收', exact: true })).toHaveCount(0);
   await panel.getByRole('button', { name: '验收，不再投递这些消息' }).click();
-  await expect.poll(() => backend.sent.find((s) => s.name === 'accept')?.args).toMatchObject({
-    task_id: 'task1', verification_id: 'v-task1', criteria_version: 1, expected_integration: 'base0000', dropping: ['m1'],
-  });
+  await expect
+    .poll(() => backend.sent.find((s) => s.name === 'accept')?.args)
+    .toMatchObject({
+      task_id: 'task1',
+      verification_id: 'v-task1',
+      criteria_version: 1,
+      expected_integration: 'base0000',
+      dropping: ['m1'],
+    });
   await expect(panel.locator('.phase')).toHaveText('已完成');
 });

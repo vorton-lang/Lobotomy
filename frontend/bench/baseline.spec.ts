@@ -8,7 +8,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FIRST_TASK, START_MARKER, infoFile, startBackend, waitForFile, type BenchInfo } from './setup';
-import { longTasks, memory, now, probe, round, startFrames, stats, stopFrames, takeKeys, takeRequests, whenText, type Probe } from './probe';
+import {
+  longTasks,
+  memory,
+  now,
+  probe,
+  round,
+  startFrames,
+  stats,
+  stopFrames,
+  takeKeys,
+  takeRequests,
+  whenText,
+  type Probe,
+} from './probe';
 
 const info = () => JSON.parse(fs.readFileSync(infoFile, 'utf8')) as BenchInfo;
 const results: Record<string, unknown> = {};
@@ -20,7 +33,9 @@ async function open(page: Page): Promise<Probe> {
   const p = await probe(page);
   const { port, token } = info();
   await page.setViewportSize({ width: 1400, height: 900 });
-  await page.goto(`/?backend=${encodeURIComponent(`ws://127.0.0.1:${port}/gui`)}&token=${encodeURIComponent(token)}`, { waitUntil: 'commit' });
+  await page.goto(`/?backend=${encodeURIComponent(`ws://127.0.0.1:${port}/gui`)}&token=${encodeURIComponent(token)}`, {
+    waitUntil: 'commit',
+  });
   return p;
 }
 
@@ -59,7 +74,8 @@ test('scrolling back to the start of the thread', async ({ page }) => {
         const start = performance.now();
         const thread = document.querySelector('.thread') as HTMLElement;
         const step = () => {
-          if ([...document.querySelectorAll('.thread .row')].some((r) => r.textContent?.includes(marker))) resolve(performance.now() - start);
+          if ([...document.querySelectorAll('.thread .row')].some((r) => r.textContent?.includes(marker)))
+            resolve(performance.now() - start);
           else if (performance.now() - start > 120_000) reject(new Error('the start of the thread did not show'));
           else {
             thread.scrollTop -= 1500;
@@ -146,7 +162,9 @@ test('a running command updating every 20 ms', async ({ page }) => {
         const samples: number[] = [];
         let last = -1;
         const sample = () => {
-          const live = [...document.querySelectorAll('.item.command')].find((e) => e.textContent?.includes('bench stream'));
+          const live = [...document.querySelectorAll('.item.command')].find((e) =>
+            e.textContent?.includes('bench stream'),
+          );
           const ticks = [...(live?.textContent ?? '').matchAll(/tick (\d+) at (\d+)/g)];
           const newest = ticks.at(-1);
           if (newest && Number(newest[1]) !== last) {
@@ -261,7 +279,12 @@ test.afterAll(() => {
   const run = {
     at: new Date().toISOString(),
     commit,
-    machine: { os: `${os.type()} ${os.release()}`, cpu: os.cpus()[0]?.model, cores: os.cpus().length, memory_gb: Math.round(os.totalmem() / 2 ** 30) },
+    machine: {
+      os: `${os.type()} ${os.release()}`,
+      cpu: os.cpus()[0]?.model,
+      cores: os.cpus().length,
+      memory_gb: Math.round(os.totalmem() / 2 ** 30),
+    },
     browser: browserVersion,
     items: info().items,
     results,

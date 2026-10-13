@@ -3,6 +3,7 @@
 Run from `frontend/` after `npm ci`:
 
 ```sh
+npm run format:check
 npm run lint
 npm run typecheck
 npm run api:check
@@ -46,3 +47,17 @@ through the app and tests. Do not hand-edit it.
 For local behavioral tests, follow the scope table in `../AGENTS.md`. In
 particular, Electron changes require `npx playwright test e2e/electron.spec.ts`,
 with a freshly built debug backend. Benchmarks are not run locally.
+
+## Formatting
+
+`npm run format` writes Prettier formatting; `npm run format:check` checks it in CI.
+Both are limited to this frontend directory. Prettier is pinned and handles
+TS/TSX, JS/MJS/CJS, CSS, HTML, JSON and this README, without lint rules or plugins.
+The configuration keeps single quotes, semicolons, two-space indentation and LF,
+with a 120-column print width. HTML whitespace is treated as significant and
+embedded languages in strings are not reformatted.
+
+`src/api/generated.ts` and `package-lock.json` are excluded because Rust and npm
+own their output. Build, dependency, local scratch and test-result directories
+are also excluded. After API changes use `npm run api:generate`, then
+`npm run api:check`; do not run a formatter over the generated contract.

@@ -3,7 +3,18 @@
 
 import { useState } from 'react';
 import type { Attention, Capture, Hold } from '../api/types';
-import { jsonObject, jsonArray, jsonNumber, captureChanges, abnormalEnd, bytes, harnessName, PERMISSION_LABEL, quotaNote, stoppedPaths } from '../format';
+import {
+  jsonObject,
+  jsonArray,
+  jsonNumber,
+  captureChanges,
+  abnormalEnd,
+  bytes,
+  harnessName,
+  PERMISSION_LABEL,
+  quotaNote,
+  stoppedPaths,
+} from '../format';
 import { act, run, selectTask, setPermission, useCommand, useStore } from '../store';
 import { Modal } from './common';
 import { DiffPool, DiffView } from './DiffView';
@@ -122,7 +133,9 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
         {failure?.kind === 'permission' && harness && (
           <p>
             这个环境的管理设置不允许 {name} 以「{PERMISSION_LABEL[harness.permission]}」运行。
-            {switchable ? '可以改用自动审批：在沙箱里工作，超出沙箱的操作由自动审核决定。' : '可以在 ⚙ 设置里换一种权限模式，或请管理员调整。'}
+            {switchable
+              ? '可以改用自动审批：在沙箱里工作，超出沙箱的操作由自动审核决定。'
+              : '可以在 ⚙ 设置里换一种权限模式，或请管理员调整。'}
           </p>
         )}
         {failure?.unstarted && <p className="muted">{name} 没有收到那次的内容；继续时会原样重新发送。</p>}
@@ -170,7 +183,8 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
     <div className="card warn">
       {c.state === 'oversized' ? (
         <p>
-          {role} 的这次采集新增了 {jsonArray(jsonObject(c.detail).files).length} 个文件，共 {bytes(jsonNumber(jsonObject(c.detail).total_bytes))}，超过了项目设定的上限。
+          {role} 的这次采集新增了 {jsonArray(jsonObject(c.detail).files).length} 个文件，共{' '}
+          {bytes(jsonNumber(jsonObject(c.detail).total_bytes))}，超过了项目设定的上限。
           {pending}
         </p>
       ) : (
@@ -181,7 +195,9 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
       <PathList lines={stoppedPaths(c)} unit="项" />
       <div className="actions">
         {c.state === 'oversized' && <button onClick={() => decide('approve_new_files')}>放行</button>}
-        <button onClick={() => decide('discard_uncaptured')}>{c.state === 'oversized' ? '不要这些文件' : '跳过这些内容'}</button>
+        <button onClick={() => decide('discard_uncaptured')}>
+          {c.state === 'oversized' ? '不要这些文件' : '跳过这些内容'}
+        </button>
         <button className="primary" onClick={proceed} title="把清单交给执行者处理">
           继续
         </button>
@@ -204,12 +220,16 @@ function OutsideChangesCard({ role, capture }: { role: string; capture: Capture 
   return (
     <div className="card warn">
       <p>
-        {role} 在任务之外改了 {changed.length} 个文件。这些改动不属于任何任务，不会被验收或发布；你决定之前，不会开始下一个任务。
+        {role} 在任务之外改了 {changed.length}{' '}
+        个文件。这些改动不属于任何任务，不会被验收或发布；你决定之前，不会开始下一个任务。
       </p>
       <PathList lines={changed} unit="个文件" />
       <div className="actions">
         <button onClick={() => setViewing(true)}>查看改动</button>
-        <button onClick={() => run('discard_outside_changes', { capture_id: capture.id })} title="工作目录回到集成版本；采集记录仍保留这些改动">
+        <button
+          onClick={() => run('discard_outside_changes', { capture_id: capture.id })}
+          title="工作目录回到集成版本；采集记录仍保留这些改动"
+        >
           丢弃这些改动
         </button>
         <button className="primary" onClick={() => setAdopting(true)}>
@@ -270,7 +290,13 @@ function Reply({
   const { submit, busy } = useCommand('send_message');
   return (
     <>
-      <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder={placeholder} aria-label={placeholder} />
+      <textarea
+        value={reply}
+        onChange={(e) => setReply(e.target.value)}
+        rows={2}
+        placeholder={placeholder}
+        aria-label={placeholder}
+      />
       <div className="actions">
         {children}
         <button

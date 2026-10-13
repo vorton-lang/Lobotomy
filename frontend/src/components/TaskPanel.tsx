@@ -99,13 +99,17 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           <button onClick={() => run('reopen', { task_id: task.id })}>重开</button>
         ) : (
           <>
-            <button onClick={() => run('set_paused', { task_id: task.id, paused: !task.paused })}>{task.paused ? '恢复' : '暂停'}</button>
+            <button onClick={() => run('set_paused', { task_id: task.id, paused: !task.paused })}>
+              {task.paused ? '恢复' : '暂停'}
+            </button>
             <button onClick={() => run('abandon', { task_id: task.id, reason: '用户放弃' })}>放弃</button>
           </>
         )}
       </div>
       {task.paused && (
-        <p className="muted">{task.paused_by === 'manager' ? 'Angela 暂停了这个任务。' : '你暂停了这个任务，只有你能恢复。'}</p>
+        <p className="muted">
+          {task.paused_by === 'manager' ? 'Angela 暂停了这个任务。' : '你暂停了这个任务，只有你能恢复。'}
+        </p>
       )}
       {current && (
         <p className="now-running">
@@ -119,7 +123,9 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         <p className="muted">正在加载…</p>
       ) : (
         <div className="panel-body">
-          <p className="now">{taskNow(task.phase, latest?.seq, verification && !earlier ? verification.state : null)}</p>
+          <p className="now">
+            {taskNow(task.phase, latest?.seq, verification && !earlier ? verification.state : null)}
+          </p>
           {acceptable && undelivered.length > 0 && (
             <section className="card warn undelivered">
               <h3>还有 {undelivered.length} 条消息没有交给执行者</h3>
@@ -153,21 +159,29 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             </section>
           )}
           <section className={`delivery${delivery?.earlier ? ' earlier' : ''}`} aria-label="交付说明">
-            <h3>{delivery?.earlier ? `上一轮交付说明（第 ${delivery.round} 轮）` : `本轮交付${latest ? `（第 ${latest.seq} 轮）` : ''}`}</h3>
+            <h3>
+              {delivery?.earlier
+                ? `上一轮交付说明（第 ${delivery.round} 轮）`
+                : `本轮交付${latest ? `（第 ${latest.seq} 轮）` : ''}`}
+            </h3>
             {delivery?.earlier && <p className="muted">本轮还没有交付说明，以下是旧轮说明。</p>}
             {delivery ? (
               <>
                 {delivery.pending && <p className="muted">执行者已提交说明，成果尚未固定。</p>}
                 <Markdown key={`${delivery.round}:${delivery.text}`} text={delivery.text} />
               </>
-            ) : <p className="muted">本轮还没有交付说明。</p>}
+            ) : (
+              <p className="muted">本轮还没有交付说明。</p>
+            )}
           </section>
           <TrialControls key={task.id} detail={loaded} />
           {loaded.task.assignment ? (
             // Angela's task: the user's words she quoted, then her own (roles-and-tasks.md §4).
             <>
               <section>
-                <h3>你的原话 <span className="muted">Angela 引用</span></h3>
+                <h3>
+                  你的原话 <span className="muted">Angela 引用</span>
+                </h3>
                 <Markdown text={loaded.task.body || '（Angela 没有引用你的原话）'} />
               </section>
               <section>
@@ -209,8 +223,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 <span className={`badge ${verification.state}`}>{VERIFICATION_LABEL[verification.state]}</span>
               </summary>
               <p className="muted">
-                {earlier && `第 ${latest?.seq} 轮还没有验证。`}基于集成版本 {shortSha(verification.base)} · 检查设置第 {verification.config_version} 版 ·{' '}
-                {clock(verification.created_at)}
+                {earlier && `第 ${latest?.seq} 轮还没有验证。`}基于集成版本 {shortSha(verification.base)} · 检查设置第{' '}
+                {verification.config_version} 版 · {clock(verification.created_at)}
               </p>
               {verification.conflicts.length > 0 && <p className="error">冲突：{verification.conflicts.join('、')}</p>}
               {loaded.checks
@@ -230,7 +244,14 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         </div>
       )}
       {sendingBack !== null && <SendBack taskId={task.id} initial={sendingBack} onClose={() => setSendingBack(null)} />}
-      {editing && criteria && <EditCriteria taskId={task.id} version={criteria.version} text={criteria.text} onClose={() => setEditing(false)} />}
+      {editing && criteria && (
+        <EditCriteria
+          taskId={task.id}
+          version={criteria.version}
+          text={criteria.text}
+          onClose={() => setEditing(false)}
+        />
+      )}
     </section>
   );
 }
@@ -254,7 +275,10 @@ function Changes({ detail }: { detail: TaskDetail }) {
   const range = workRange(detail);
   if (!range) return null;
   return (
-    <details className={`changes-details${range.earlier ? ' earlier' : ''}`} onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details
+      className={`changes-details${range.earlier ? ' earlier' : ''}`}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
       <summary>改动 · {range.label}</summary>
       {open && (
         <DiffPool>
@@ -293,7 +317,9 @@ function SendBack({ taskId, initial, onClose }: { taskId: string; initial: strin
         <button
           className="primary"
           disabled={!reason.trim()}
-          onClick={async () => (await run('send_back', { task_id: taskId, reason: reason.trim() })) !== undefined && onClose()}
+          onClick={async () =>
+            (await run('send_back', { task_id: taskId, reason: reason.trim() })) !== undefined && onClose()
+          }
         >
           退回
         </button>
@@ -317,7 +343,10 @@ function EditCriteria(props: { taskId: string; version: number; text: string; on
         <button
           className="primary"
           disabled={value.trim() === text.trim()}
-          onClick={async () => (await run('edit_criteria', { task_id: taskId, expected_version: version, text: value })) !== undefined && onClose()}
+          onClick={async () =>
+            (await run('edit_criteria', { task_id: taskId, expected_version: version, text: value })) !== undefined &&
+            onClose()
+          }
         >
           保存为第 {version + 1} 版
         </button>

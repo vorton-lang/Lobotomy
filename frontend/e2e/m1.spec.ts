@@ -83,9 +83,11 @@ test('an open task panel follows the candidate through a send-back', async ({ pa
   const settings = page.getByRole('region', { name: '设置' });
   await settings.getByRole('button', { name: '验证与采集' }).click();
   await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
-  await settings.getByLabel('检查命令').fill(
-    'node -e "const fs=require(\'fs\');setTimeout(()=>process.exit(1),30000);setInterval(()=>{if(fs.existsSync(process.env.LOBOTOMY_TEST_CHECK_GATE))process.exit(0)},20)"',
-  );
+  await settings
+    .getByLabel('检查命令')
+    .fill(
+      'node -e "const fs=require(\'fs\');setTimeout(()=>process.exit(1),30000);setInterval(()=>{if(fs.existsSync(process.env.LOBOTOMY_TEST_CHECK_GATE))process.exit(0)},20)"',
+    );
   await settings.getByRole('button', { name: '保存', exact: true }).click();
   await expect(settings.locator('.settings-save')).toContainText('第 2 版');
   await settings.getByRole('button', { name: '返回', exact: true }).click();
@@ -200,24 +202,40 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
   await page.setViewportSize({ width: 1400, height: 860 });
   await open(page, backend);
   await createTask(page, '查看交付内容', 'FAKE:done');
-  await page.locator('.attention .card').filter({ hasText: '等你验收' }).getByRole('button', { name: '查看并验收' }).click();
+  await page
+    .locator('.attention .card')
+    .filter({ hasText: '等你验收' })
+    .getByRole('button', { name: '查看并验收' })
+    .click();
   const panel = taskPanel(page, '查看交付内容');
   await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
   const delivery = panel.getByRole('region', { name: '交付说明' });
-  const update = async (state: 'pending' | 'old' | 'new' | 'invalidated' | 'failed') => page.evaluate(async (state) => {
-    const module = '/src/store.ts';
-    const { useStore } = await import(module);
-    const detail = structuredClone(useStore.getState().taskDetail);
-    const first = detail.attempts[0];
-    first.done_summary = '预览入口：[示例页面](https://example.com)\n\n本地文件：`dist/report.html`\n\n体验前运行 `npm run dev`，重点检查页面内容。';
-    if (state === 'pending') first.candidate_id = null;
-    else first.candidate_id = 'candidate1';
-    detail.attempts = state === 'old' || state === 'new' || state === 'invalidated'
-      ? [first, { ...first, id: 'second', seq: 2, candidate_id: null, done_summary: state === 'new' ? '第二轮成果：`output.txt`' : null }]
-      : [first];
-    if (state === 'failed') detail.verifications.at(-1).state = 'failed';
-    useStore.setState({ taskDetail: detail });
-  }, state);
+  const update = async (state: 'pending' | 'old' | 'new' | 'invalidated' | 'failed') =>
+    page.evaluate(async (state) => {
+      const module = '/src/store.ts';
+      const { useStore } = await import(module);
+      const detail = structuredClone(useStore.getState().taskDetail);
+      const first = detail.attempts[0];
+      first.done_summary =
+        '预览入口：[示例页面](https://example.com)\n\n本地文件：`dist/report.html`\n\n体验前运行 `npm run dev`，重点检查页面内容。';
+      if (state === 'pending') first.candidate_id = null;
+      else first.candidate_id = 'candidate1';
+      detail.attempts =
+        state === 'old' || state === 'new' || state === 'invalidated'
+          ? [
+              first,
+              {
+                ...first,
+                id: 'second',
+                seq: 2,
+                candidate_id: null,
+                done_summary: state === 'new' ? '第二轮成果：`output.txt`' : null,
+              },
+            ]
+          : [first];
+      if (state === 'failed') detail.verifications.at(-1).state = 'failed';
+      useStore.setState({ taskDetail: detail });
+    }, state);
 
   await update('pending');
   await expect(delivery).toContainText('成果尚未固定');

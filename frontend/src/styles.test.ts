@@ -47,21 +47,32 @@ const MARKS: [string, string[]][] = [
 
 describe('the design tokens', () => {
   it('keep colors out of the rules', () => {
-    const rules = css.replace(light, '').replace(dark, '').replace(/url\("[^"]*"\)/g, '');
+    const rules = css
+      .replace(light, '')
+      .replace(dark, '')
+      .replace(/url\("[^"]*"\)/g, '');
     expect(rules.match(/#[0-9a-f]{3,8}\b|\b(rgba?|hsla?|oklch|lab|lch)\(/gi) ?? []).toEqual([]);
   });
 
   it('give every color a dark value', () => {
-    const colors = Object.entries(tokens(light)).filter(([, v]) => /^(#|rgb|0 )/.test(v)).map(([k]) => k);
+    const colors = Object.entries(tokens(light))
+      .filter(([, v]) => /^(#|rgb|0 )/.test(v))
+      .map(([k]) => k);
     const missing = colors.filter((k) => !(k in tokens(dark)));
     expect(missing).toEqual([]);
   });
 
-  for (const [name, block] of [['light', light], ['dark', dark]] as const) {
+  for (const [name, block] of [
+    ['light', light],
+    ['dark', dark],
+  ] as const) {
     const t = tokens(block);
     it(`read in ${name}`, () => {
       const failing: string[] = [];
-      for (const [pairs, min] of [[TEXT, 4.5], [MARKS, 3]] as const) {
+      for (const [pairs, min] of [
+        [TEXT, 4.5],
+        [MARKS, 3],
+      ] as const) {
         for (const [fg, backs] of pairs) {
           for (const back of backs) {
             const ratio = contrast(t[fg], t[back]);

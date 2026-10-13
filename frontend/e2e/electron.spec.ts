@@ -17,7 +17,14 @@ import { fileURLToPath } from 'node:url';
 test.describe.configure({ mode: 'default' });
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const backendExe = path.join(app, '..', 'backend', 'target', 'debug', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
+const backendExe = path.join(
+  app,
+  '..',
+  'backend',
+  'target',
+  'debug',
+  process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd',
+);
 
 /** A host directory of the test's own, removed after the test. */
 const hosts: string[] = [];
@@ -28,7 +35,8 @@ function tempHost() {
 }
 test.afterEach(() => {
   // The retries wait for Windows to let go of a stopped backend's files.
-  for (const host of hosts.splice(0)) fs.rmSync(host, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  for (const host of hosts.splice(0))
+    fs.rmSync(host, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 });
 
 async function launch(host: string) {

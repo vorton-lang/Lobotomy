@@ -44,7 +44,15 @@ export function useWidth(key: string, initial: number, min: number, max: number)
  * The handle on a column's edge. `edge` is the side of the column it sits on: dragging away from
  * the column widens it.
  */
-export function Sash({ label, edge, column }: { label: string; edge: 'left' | 'right'; column: ReturnType<typeof useWidth> }) {
+export function Sash({
+  label,
+  edge,
+  column,
+}: {
+  label: string;
+  edge: 'left' | 'right';
+  column: ReturnType<typeof useWidth>;
+}) {
   const drag = useRef<{ x: number; width: number } | null>(null);
   const sign = edge === 'right' ? 1 : -1;
   return (

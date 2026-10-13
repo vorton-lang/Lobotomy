@@ -71,5 +71,5 @@ export function useMarkdown(text: string, streaming = false): string | null {
       current = false;
     };
   }, [text, streaming]);
-  return rendered.streaming === streaming ? rendered.html : cached(text, streaming) ?? null;
+  return rendered.streaming === streaming ? rendered.html : (cached(text, streaming) ?? null);
 }

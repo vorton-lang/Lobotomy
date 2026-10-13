@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+test-results/
+playwright-report/
+bench-results/
+
+# Rust's exporter owns the exact text; npm run api:check verifies it.
+src/api/generated.ts
+# npm owns the dependency lockfile.
+package-lock.json

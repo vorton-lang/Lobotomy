@@ -36,7 +36,15 @@ function StatusMark({ look }: { look: Look }) {
 }
 
 /** A short state, such as a task's phase, as a pill. */
-export function StatusPill({ look, className = '', children }: { look: Look; className?: string; children: ReactNode }) {
+export function StatusPill({
+  look,
+  className = '',
+  children,
+}: {
+  look: Look;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
     <span className={`pill ${look} ${className}`}>
       <StatusMark look={look} />

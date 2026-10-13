@@ -43,12 +43,19 @@ async function startBackend(): Promise<Backend & { stop: (keepLog?: string) => P
   const host = path.join(root, 'host');
   const log = fs.openSync(path.join(root, 'backend.log'), 'a');
   const child = spawn(exe, ['--host-dir', host, '--repo', repo], {
-    env: { ...process.env, LOBOTOMY_TEST_CHECK_GATE: path.join(root, 'check-gate'), LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]), LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]) },
+    env: {
+      ...process.env,
+      LOBOTOMY_TEST_CHECK_GATE: path.join(root, 'check-gate'),
+      LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]),
+      LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]),
+    },
     stdio: ['ignore', log, log],
   });
   const info = path.join(host, 'backend.json');
-  for (let i = 0; i < 200 && !fs.existsSync(info) && child.exitCode === null; i++) await new Promise((r) => setTimeout(r, 50));
-  if (!fs.existsSync(info)) throw new Error(`the backend did not start: ${fs.readFileSync(path.join(root, 'backend.log'), 'utf8')}`);
+  for (let i = 0; i < 200 && !fs.existsSync(info) && child.exitCode === null; i++)
+    await new Promise((r) => setTimeout(r, 50));
+  if (!fs.existsSync(info))
+    throw new Error(`the backend did not start: ${fs.readFileSync(path.join(root, 'backend.log'), 'utf8')}`);
   const { port } = JSON.parse(fs.readFileSync(info, 'utf8')) as { port: number };
   const token = fs.readFileSync(path.join(host, 'gui-token'), 'utf8').trim();
 
@@ -84,12 +91,19 @@ export { expect };
 /** Opens the GUI on the test's backend and waits until it is connected. */
 export async function open(page: Page, backend: Backend) {
   const url = `ws://127.0.0.1:${backend.port}/gui`;
-  await page.goto(`http://127.0.0.1:5173/?backend=${encodeURIComponent(url)}&token=${encodeURIComponent(backend.token)}`);
+  await page.goto(
+    `http://127.0.0.1:5173/?backend=${encodeURIComponent(url)}&token=${encodeURIComponent(backend.token)}`,
+  );
   await expect(page.getByText('已连接')).toBeVisible();
 }
 
 /** Creates a task for Malkuth, the executor of the test project, through the "+ 新任务" dialog. */
-export async function createTask(page: Page, title: string, body: string, { twice = false, criteria = 'work.txt 存在' } = {}) {
+export async function createTask(
+  page: Page,
+  title: string,
+  body: string,
+  { twice = false, criteria = 'work.txt 存在' } = {},
+) {
   await page.getByRole('button', { name: '+ 新任务' }).click();
   const dialog = page.getByRole('dialog', { name: '新任务' });
   await dialog.getByLabel('标题').fill(title);

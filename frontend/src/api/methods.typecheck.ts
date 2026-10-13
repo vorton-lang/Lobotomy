@@ -9,7 +9,12 @@ export function checkCalls(connection: Connection) {
   void [search, snapshot];
   connection.call('thread', { role: 'Malkuth', before: null });
   connection.command({ name: 'stop_trial', args: { trial_id: 'trial' } });
-  const created: Promise<Created | undefined> = run('create_task', { title: 'task', body: '', criteria: '', executor: 'Malkuth' });
+  const created: Promise<Created | undefined> = run('create_task', {
+    title: 'task',
+    body: '',
+    criteria: '',
+    executor: 'Malkuth',
+  });
   void created;
   // @ts-expect-error unknown method
   call('snapshop');

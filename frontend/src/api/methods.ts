@@ -4,7 +4,8 @@ import type { Commands, ReadMethods } from './generated';
 export type ReadMethod = keyof ReadMethods;
 export type ReadParams<M extends ReadMethod> = ReadMethods[M]['params'] & { project?: string };
 export type ReadResult<M extends ReadMethod> = ReadMethods[M]['result'];
-export type ReadArgs<M extends ReadMethod> = {} extends ReadParams<M> ? [params?: ReadParams<M>] : [params: ReadParams<M>];
+export type ReadArgs<M extends ReadMethod> =
+  {} extends ReadParams<M> ? [params?: ReadParams<M>] : [params: ReadParams<M>];
 export type CommandName = keyof Commands;
 export type CommandParams<C extends CommandName> = Commands[C]['params'];
 export type CommandResult<C extends CommandName> = Commands[C]['result'];

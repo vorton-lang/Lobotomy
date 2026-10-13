@@ -7,28 +7,74 @@ import { hostSnapshot } from './mocked';
 const candidate1 = '11111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const candidate2 = '22222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const attempt = (round: number, fixed = true): Attempt => ({
-  id: `attempt${round}`, task_id: 'task1', seq: round, started_at: round, ended_at: fixed ? round + 1 : null,
-  end_reason: fixed ? 'candidate' : null, code_start: null, done_turn_id: `turn${round}`,
-  done_summary: `第 ${round} 轮交付`, candidate_id: fixed ? `capture${round}` : null, conflicts: [],
+  id: `attempt${round}`,
+  task_id: 'task1',
+  seq: round,
+  started_at: round,
+  ended_at: fixed ? round + 1 : null,
+  end_reason: fixed ? 'candidate' : null,
+  code_start: null,
+  done_turn_id: `turn${round}`,
+  done_summary: `第 ${round} 轮交付`,
+  candidate_id: fixed ? `capture${round}` : null,
+  conflicts: [],
   trial: { command: `npm run demo:${round}`, purpose: `检查第 ${round} 轮交互` },
 });
 const capture = (round: number): Capture => ({
-  id: `capture${round}`, turn_id: `turn${round}`, role: 'Malkuth', task_id: 'task1', attempt_id: `attempt${round}`,
-  kind: 'candidate', base: 'base0000', state: 'pinned', commit_id: round === 1 ? candidate1 : candidate2,
-  detail: null, created_at: round + 1, outside: null, workspace_id: 'workspace', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
+  id: `capture${round}`,
+  turn_id: `turn${round}`,
+  role: 'Malkuth',
+  task_id: 'task1',
+  attempt_id: `attempt${round}`,
+  kind: 'candidate',
+  base: 'base0000',
+  state: 'pinned',
+  commit_id: round === 1 ? candidate1 : candidate2,
+  detail: null,
+  created_at: round + 1,
+  outside: null,
+  workspace_id: 'workspace',
+  config_version: 1,
+  options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
 });
 const detail = (fixed = true): TaskDetail => ({
   task: {
-    id: 'task1', title: '体验候选成果', body: '检查交互', executor: 'Malkuth', phase: 'accepting', paused: false, paused_by: null, assignment: null,
-    blocked_reason: null, criteria_version: 1, queue_pos: null, revision: 1, created_at: 1, closed_at: null, origin_capture: null,
+    id: 'task1',
+    title: '体验候选成果',
+    body: '检查交互',
+    executor: 'Malkuth',
+    phase: 'accepting',
+    paused: false,
+    paused_by: null,
+    assignment: null,
+    blocked_reason: null,
+    criteria_version: 1,
+    queue_pos: null,
+    revision: 1,
+    created_at: 1,
+    closed_at: null,
+    origin_capture: null,
   },
   criteria: [{ version: 1, text: '交互可用', created_by: 'user', created_at: 1 }],
-  attempts: [attempt(1, fixed)], captures: fixed ? [capture(1)] : [], verifications: [], checks: [],
-  decisions: [], publications: [], undelivered_messages: [],
+  attempts: [attempt(1, fixed)],
+  captures: fixed ? [capture(1)] : [],
+  verifications: [],
+  checks: [],
+  decisions: [],
+  publications: [],
+  undelivered_messages: [],
 });
 
-interface StartArgs { task_id: string; attempt_id: string; expected_candidate: string }
-interface Request { id: number; method: string; params: { name?: string; args?: Record<string, unknown> } }
+interface StartArgs {
+  task_id: string;
+  attempt_id: string;
+  expected_candidate: string;
+}
+interface Request {
+  id: number;
+  method: string;
+  params: { name?: string; args?: Record<string, unknown> };
+}
 
 async function openTrial(page: Page, initial = detail()) {
   const api = {
@@ -39,9 +85,15 @@ async function openTrial(page: Page, initial = detail()) {
     start: async (args: StartArgs): Promise<TrialView> => {
       const current = api.detail.attempts.find((item) => item.id === args.attempt_id)!;
       const trial: TrialView = {
-        id: `trial${api.trials.length + 1}`, task_id: args.task_id, attempt_id: args.attempt_id,
-        round: current.seq, candidate: args.expected_candidate, directory: `/trials/round-${current.seq}`,
-        ...current.trial!, state: 'open', error: null,
+        id: `trial${api.trials.length + 1}`,
+        task_id: args.task_id,
+        attempt_id: args.attempt_id,
+        round: current.seq,
+        candidate: args.expected_candidate,
+        directory: `/trials/round-${current.seq}`,
+        ...current.trial!,
+        state: 'open',
+        error: null,
       };
       // As the backend: a new trial replaces the task's closed ones.
       api.trials = api.trials.filter((item) => item.task_id !== args.task_id || item.state === 'open');
@@ -49,7 +101,7 @@ async function openTrial(page: Page, initial = detail()) {
       return structuredClone(trial);
     },
     stop: async (trialId: string): Promise<null> => {
-      api.trials = api.trials.map((trial) => trial.id === trialId ? { ...trial, state: 'closed' } : trial);
+      api.trials = api.trials.map((trial) => (trial.id === trialId ? { ...trial, state: 'closed' } : trial));
       return null;
     },
     update: async (next: TaskDetail) => {
@@ -68,22 +120,58 @@ async function openTrial(page: Page, initial = detail()) {
       try {
         let result: unknown;
         switch (request.method) {
-          case 'host': result = hostSnapshot(); break;
-          case 'snapshot': result = {
-            seq: 1,
-            project: { id: 'project1', repo_path: '/project', branch: 'main', author_name: 'Test', author_email: 'test@example.com', integration: 'base0000', integration_rev: 1, previewed: 'base0000' },
-            config: null, roles: [], tasks: [{ ...api.detail.task, attempt_seq: 1, attempt_open: false, verification: null, undelivered_messages: 0, reply_queued: false }],
-            attention: [], quota: [], harnesses: [], live: {},
-          } satisfies Snapshot; break;
-          case 'task': result = api.detail; break;
-          case 'diff': result = []; break;
-          case 'trials': result = await api.list(); break;
+          case 'host':
+            result = hostSnapshot();
+            break;
+          case 'snapshot':
+            result = {
+              seq: 1,
+              project: {
+                id: 'project1',
+                repo_path: '/project',
+                branch: 'main',
+                author_name: 'Test',
+                author_email: 'test@example.com',
+                integration: 'base0000',
+                integration_rev: 1,
+                previewed: 'base0000',
+              },
+              config: null,
+              roles: [],
+              tasks: [
+                {
+                  ...api.detail.task,
+                  attempt_seq: 1,
+                  attempt_open: false,
+                  verification: null,
+                  undelivered_messages: 0,
+                  reply_queued: false,
+                },
+              ],
+              attention: [],
+              quota: [],
+              harnesses: [],
+              live: {},
+            } satisfies Snapshot;
+            break;
+          case 'task':
+            result = api.detail;
+            break;
+          case 'diff':
+            result = [];
+            break;
+          case 'trials':
+            result = await api.list();
+            break;
           case 'command':
-            if (request.params.name === 'start_trial') result = await api.start(request.params.args as unknown as StartArgs);
-            else if (request.params.name === 'stop_trial') result = await api.stop(request.params.args!.trial_id as string);
+            if (request.params.name === 'start_trial')
+              result = await api.start(request.params.args as unknown as StartArgs);
+            else if (request.params.name === 'stop_trial')
+              result = await api.stop(request.params.args!.trial_id as string);
             else throw new Error(`unexpected command: ${request.params.name}`);
             break;
-          default: throw new Error(`unexpected method: ${request.method}`);
+          default:
+            throw new Error(`unexpected method: ${request.method}`);
         }
         socket.send(JSON.stringify({ id: request.id, result }));
       } catch (error) {
@@ -98,7 +186,13 @@ async function openTrial(page: Page, initial = detail()) {
   const controls = panel.getByRole('region', { name: '一键体验', exact: true });
   await expect(controls).toBeVisible();
   await expect(controls.getByText('正在读取体验状态…')).toBeHidden();
-  return { api, panel, controls, commands: (name: string) => api.requests.filter((request) => request.method === 'command' && request.params.name === name) };
+  return {
+    api,
+    panel,
+    controls,
+    commands: (name: string) =>
+      api.requests.filter((request) => request.method === 'command' && request.params.name === name),
+  };
 }
 
 test('trial launches only a fixed candidate after an explicit click, and stops once', async ({ page }, testInfo) => {
@@ -118,13 +212,25 @@ test('trial launches only a fixed candidate after an explicit click, and stops o
 
   const start = api.start;
   let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  api.start = async (args) => { await gate; return start(args); };
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  api.start = async (args) => {
+    await gate;
+    return start(args);
+  };
   // Two DOM clicks in the same turn also exercise the synchronous pending guard.
-  await launch.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+  await launch.evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
   await expect(controls.getByRole('button', { name: '正在打开终端…' })).toBeDisabled();
   await expect.poll(() => commands('start_trial').length).toBe(1);
-  expect(commands('start_trial')[0].params.args).toMatchObject({ task_id: 'task1', attempt_id: 'attempt1', expected_candidate: candidate1 });
+  expect(commands('start_trial')[0].params.args).toMatchObject({
+    task_id: 'task1',
+    attempt_id: 'attempt1',
+    expected_candidate: candidate1,
+  });
   release();
   const terminal = controls.getByRole('article', { name: '第 1 轮体验' });
   await expect(terminal).toContainText('终端已打开');
@@ -133,9 +239,17 @@ test('trial launches only a fixed candidate after an explicit click, and stops o
 
   const stop = api.stop;
   let releaseStop!: () => void;
-  const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
-  api.stop = async (id) => { await stopGate; return stop(id); };
-  await terminal.getByRole('button', { name: '停止体验' }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+  const stopGate = new Promise<void>((resolve) => {
+    releaseStop = resolve;
+  });
+  api.stop = async (id) => {
+    await stopGate;
+    return stop(id);
+  };
+  await terminal.getByRole('button', { name: '停止体验' }).evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
   await expect(terminal.getByRole('button', { name: '正在停止…' })).toBeDisabled();
   await expect.poll(() => commands('stop_trial').length).toBe(1);
   releaseStop();
@@ -152,7 +266,9 @@ test('trial launches only a fixed candidate after an explicit click, and stops o
   expect(commands('start_trial')).toHaveLength(2);
 });
 
-test('trial keeps an old terminal when the round changes without reusing its launch recipe', async ({ page }, testInfo) => {
+test('trial keeps an old terminal when the round changes without reusing its launch recipe', async ({
+  page,
+}, testInfo) => {
   const { api, panel, controls, commands } = await openTrial(page);
   await controls.getByRole('button', { name: '一键体验', exact: true }).click();
   const old = controls.getByRole('article', { name: '第 1 轮体验' });
@@ -180,7 +296,10 @@ test('trial keeps an old terminal when the round changes without reusing its lau
   await controls.getByRole('button', { name: '一键体验', exact: true }).click();
   const current = controls.getByRole('article', { name: '第 2 轮体验' });
   await expect(current).toContainText('终端已打开');
-  expect(commands('start_trial')[1].params.args).toMatchObject({ attempt_id: 'attempt2', expected_candidate: candidate2 });
+  expect(commands('start_trial')[1].params.args).toMatchObject({
+    attempt_id: 'attempt2',
+    expected_candidate: candidate2,
+  });
   await expect(old).toContainText('/trials/round-1');
   await expect(current).toContainText('/trials/round-2');
   await page.setViewportSize({ width: 1000, height: 780 });
@@ -198,11 +317,15 @@ test('trial keeps an old terminal when the round changes without reusing its lau
   expect(commands('stop_trial')[0].params.args).toMatchObject({ trial_id: 'trial1' });
 });
 
-test('trial reports launch and stop failures and refreshes closed terminals only while the panel is open', async ({ page }) => {
+test('trial reports launch and stop failures and refreshes closed terminals only while the panel is open', async ({
+  page,
+}) => {
   await page.clock.install();
   const { api, panel, controls, commands } = await openTrial(page);
   const start = api.start;
-  api.start = async () => { throw new Error('桌面终端不可用'); };
+  api.start = async () => {
+    throw new Error('桌面终端不可用');
+  };
   await controls.getByRole('button', { name: '一键体验', exact: true }).click();
   await expect(page.locator('.toast')).toContainText('桌面终端不可用');
   await expect(controls.getByRole('article')).toHaveCount(0);
@@ -211,14 +334,18 @@ test('trial reports launch and stop failures and refreshes closed terminals only
   await controls.getByRole('button', { name: '一键体验', exact: true }).click();
   const terminal = controls.getByRole('article', { name: '第 1 轮体验' });
   await expect(terminal).toContainText('终端已打开');
-  api.stop = async () => { throw new Error('未能停止终端'); };
+  api.stop = async () => {
+    throw new Error('未能停止终端');
+  };
   await terminal.getByRole('button', { name: '停止体验' }).click();
   await expect(page.locator('.toast').filter({ hasText: '未能停止终端' })).toBeVisible();
   await expect(terminal).toContainText('终端已打开');
   await expect(terminal.getByRole('button', { name: '停止体验' })).toBeEnabled();
 
   const list = api.list;
-  api.list = async () => { throw new Error('状态读取失败'); };
+  api.list = async () => {
+    throw new Error('状态读取失败');
+  };
   await page.clock.runFor(2_100);
   await expect(controls.getByRole('status')).toContainText('状态读取失败');
   api.trials[0].state = 'closed';
@@ -239,7 +366,10 @@ test('trial ignores a stale polling response after a launch', async ({ page }) =
   await page.clock.install();
   const { api, controls, commands } = await openTrial(page);
   let release!: (trials: TrialView[]) => void;
-  api.list = () => new Promise((resolve) => { release = resolve; });
+  api.list = () =>
+    new Promise((resolve) => {
+      release = resolve;
+    });
   await page.clock.runFor(2_100);
   await expect.poll(() => typeof release).toBe('function');
   await controls.getByRole('button', { name: '一键体验', exact: true }).click();

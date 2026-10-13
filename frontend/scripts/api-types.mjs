@@ -8,11 +8,24 @@ import { fileURLToPath } from 'node:url';
 
 const frontend = fileURLToPath(new URL('..', import.meta.url));
 const check = process.argv.includes('--check');
-const wire = execFileSync('cargo', [
-  'run', '--quiet', '--locked', '--manifest-path', '../backend/Cargo.toml',
-  '-p', 'lobotomyd', '--features', 'ts-rs', '--example', 'export-gui-types',
-  ...(check ? ['--', '--check'] : []),
-], { cwd: frontend, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+const wire = execFileSync(
+  'cargo',
+  [
+    'run',
+    '--quiet',
+    '--locked',
+    '--manifest-path',
+    '../backend/Cargo.toml',
+    '-p',
+    'lobotomyd',
+    '--features',
+    'ts-rs',
+    '--example',
+    'export-gui-types',
+    ...(check ? ['--', '--check'] : []),
+  ],
+  { cwd: frontend, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] },
+);
 
 // Keep the serialized integer literal intact for tsc; independently verify JSON.parse's
 // actual representation, including the existing precision loss beyond the safe integer range.
@@ -27,12 +40,28 @@ const directory = mkdtempSync(join(tmpdir(), 'lobotomy-api-'));
 try {
   const source = join(directory, 'wire.ts');
   const types = resolve(frontend, 'src/api/generated').replaceAll('\\', '/');
-  writeFileSync(source, `import type { SearchResult, Push, Snapshot, Refs, SendMessage } from ${JSON.stringify(types)};\n` +
-    `(${wire.trim()} satisfies { search: SearchResult; pushes: Push[]; models: { snapshot: Snapshot; refs: Refs }; message: SendMessage });\n`);
-  execFileSync(process.execPath, [
-    resolve(frontend, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--skipLibCheck',
-    '--target', 'ES2023', '--module', 'ESNext', '--moduleResolution', 'bundler', source,
-  ], { cwd: directory, stdio: 'inherit' });
+  writeFileSync(
+    source,
+    `import type { SearchResult, Push, Snapshot, Refs, SendMessage } from ${JSON.stringify(types)};\n` +
+      `(${wire.trim()} satisfies { search: SearchResult; pushes: Push[]; models: { snapshot: Snapshot; refs: Refs }; message: SendMessage });\n`,
+  );
+  execFileSync(
+    process.execPath,
+    [
+      resolve(frontend, 'node_modules/typescript/bin/tsc'),
+      '--noEmit',
+      '--strict',
+      '--skipLibCheck',
+      '--target',
+      'ES2023',
+      '--module',
+      'ESNext',
+      '--moduleResolution',
+      'bundler',
+      source,
+    ],
+    { cwd: directory, stdio: 'inherit' },
+  );
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }

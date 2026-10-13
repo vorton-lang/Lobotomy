@@ -21,7 +21,15 @@ const hostDir =
 // Until there is an installer, the backend comes from the source tree.
 const backendExe =
   process.env.LOBOTOMYD ??
-  path.join(here, '..', '..', 'backend', 'target', 'debug', process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd');
+  path.join(
+    here,
+    '..',
+    '..',
+    'backend',
+    'target',
+    'debug',
+    process.platform === 'win32' ? 'lobotomyd.exe' : 'lobotomyd',
+  );
 // Where the running backend says it listens (frontend.md §1).
 const infoPath = path.join(hostDir, 'backend.json');
 
@@ -113,7 +121,22 @@ ipcMain.on('lobotomy:attention', (_event, count) => {
 });
 
 /** Files a link opens in the app the system views them with. Nothing here runs a program. */
-const VIEWABLE = new Set(['.html', '.htm', '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.md', '.txt', '.log', '.json', '.csv']);
+const VIEWABLE = new Set([
+  '.html',
+  '.htm',
+  '.pdf',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.md',
+  '.txt',
+  '.log',
+  '.json',
+  '.csv',
+]);
 
 /**
  * What a link in agent text opens (frontend.md §7.2): web and mail links in the system browser; a
@@ -147,7 +170,8 @@ async function quit() {
     try {
       await new Promise((resolve, reject) => {
         const socket = new WebSocket(`ws://127.0.0.1:${info.port}/gui?token=${encodeURIComponent(token())}`);
-        socket.onopen = () => socket.send(JSON.stringify({ id: 1, method: 'command', params: { name: 'shutdown', args: {} } }));
+        socket.onopen = () =>
+          socket.send(JSON.stringify({ id: 1, method: 'command', params: { name: 'shutdown', args: {} } }));
         // Pushes and ticks come on the same socket; only the reply to the request counts.
         socket.onmessage = (event) => {
           const message = JSON.parse(String(event.data));

@@ -116,12 +116,24 @@ export function Thread() {
   }
   const title = (taskId: string | null) => (taskId ? tasks?.find((t) => t.id === taskId)?.title : undefined);
   return (
-    <div className="thread-area" onWheelCapture={(event) => {
-      if (event.deltaY && !event.ctrlKey && list.current) {
-        wheel.current = { offset: list.current.scrollOffset, direction: Math.sign(event.deltaY) };
-      }
-    }}>
-      <VList ref={list} className="thread" shift={prepending} onScroll={onScroll} onScrollEnd={() => { wheel.current = null; }} keepMounted={[rows.length - 1]}>
+    <div
+      className="thread-area"
+      onWheelCapture={(event) => {
+        if (event.deltaY && !event.ctrlKey && list.current) {
+          wheel.current = { offset: list.current.scrollOffset, direction: Math.sign(event.deltaY) };
+        }
+      }}
+    >
+      <VList
+        ref={list}
+        className="thread"
+        shift={prepending}
+        onScroll={onScroll}
+        onScrollEnd={() => {
+          wheel.current = null;
+        }}
+        keepMounted={[rows.length - 1]}
+      >
         {rows.map((row) => (
           <div key={row.key} className="row" data-key={row.key}>
             <RowView row={row} role={thread.role} title={title} commands={thread.commands} />
@@ -154,7 +166,10 @@ function RowView({
       const t = row.turn;
       const name = title(t.task_id);
       return (
-        <div className={`turn-divider ${t.outcome ?? t.state}`} title={[t.id, name, turnOutcome(t)].filter(Boolean).join(' · ')}>
+        <div
+          className={`turn-divider ${t.outcome ?? t.state}`}
+          title={[t.id, name, turnOutcome(t)].filter(Boolean).join(' · ')}
+        >
           <span>{clock(t.started_at ?? t.registered_at)}</span>
           {t.outcome !== 'completed' && name && <span>· {name}</span>}
           {t.outcome !== 'completed' && <span>· {turnOutcome(t)}</span>}
@@ -187,7 +202,17 @@ function RowView({
   }
 }
 
-function MessageView({ source, body, message, queued }: { source: string; body: string; message?: Message; queued?: boolean }) {
+function MessageView({
+  source,
+  body,
+  message,
+  queued,
+}: {
+  source: string;
+  body: string;
+  message?: Message;
+  queued?: boolean;
+}) {
   // In the conversation with Angela, the user's message says what it replies to and where she
   // forwarded it (manager-actions.md §1, §1.1).
   const angela = useStore((s) => s.project === null);

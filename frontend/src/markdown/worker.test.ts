@@ -77,7 +77,10 @@ describe('Markdown worker', () => {
   });
 
   it.each([true, false])('does not activate unsafe links with streaming=%s', async (streaming) => {
-    const html = await render('[script](javascript:alert%281%29) [relative](notes/a.md) [data](data:text/html,x)', streaming);
+    const html = await render(
+      '[script](javascript:alert%281%29) [relative](notes/a.md) [data](data:text/html,x)',
+      streaming,
+    );
     expect(html).toBe('<p>script relative data</p>\n');
     expect(html).not.toContain('<a');
   });

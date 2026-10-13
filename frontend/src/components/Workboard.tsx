@@ -93,7 +93,12 @@ function TaskLine({ task, queue }: { task: TaskView; queue?: { index: number; le
       </button>
       {queue && (
         <span className="reorder">
-          <button className="icon" disabled={queue.index === 0} onClick={() => move(queue.index - 1)} aria-label={`上移「${task.title}」`}>
+          <button
+            className="icon"
+            disabled={queue.index === 0}
+            onClick={() => move(queue.index - 1)}
+            aria-label={`上移「${task.title}」`}
+          >
             <ArrowUp {...ICON} size={14} />
           </button>
           <button

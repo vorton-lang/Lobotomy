@@ -55,7 +55,10 @@ export function Composer() {
       />
       <div className="composer-actions">
         {running && (
-          <button onClick={() => act('interrupt', { turn_id: running.id })} title={`像 Ctrl+C 一样请 ${harnessName(role.harness)} 停下`}>
+          <button
+            onClick={() => act('interrupt', { turn_id: running.id })}
+            title={`像 Ctrl+C 一样请 ${harnessName(role.harness)} 停下`}
+          >
             中断
           </button>
         )}

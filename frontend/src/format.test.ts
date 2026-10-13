@@ -59,7 +59,10 @@ const turn = (id: string, input = '【来自 你】\n做点事'): Turn => ({
   id,
   role: 'Malkuth',
   harness: 'codex',
-  native_session_id: 'session', native_id: null, process_start: null, workspace_id: null,
+  native_session_id: 'session',
+  native_id: null,
+  process_start: null,
+  workspace_id: null,
   task_id: null,
   attempt_id: null,
   input,
@@ -122,7 +125,11 @@ describe('buildRows', () => {
 
   it('shows the items of a running turn, or that it runs', () => {
     const live: Record<string, LiveTurn> = {
-      t3: { role: 'Malkuth', started_at: 5, items: { c1: { kind: 'command', content: { command: 'ls', output: null }, started_at: 6 } } },
+      t3: {
+        role: 'Malkuth',
+        started_at: 5,
+        items: { c1: { kind: 'command', content: { command: 'ls', output: null }, started_at: 6 } },
+      },
       t4: { role: 'Yesod', started_at: 5, items: {} },
     };
     expect(buildRows(thread({}), live).map((r) => r.kind)).toEqual(['live']);
@@ -148,7 +155,14 @@ describe('buildRows', () => {
     const rows = buildRows(
       thread({
         // Followed by a message; a progress report; a done report that ends its turn.
-        items: [call('r1', 1, 't1'), item('a1', 2, 't1'), call('r2', 3, 't2'), item('a2', 4, 't2'), item('a3', 5, 't3'), call('r3', 6, 't3')],
+        items: [
+          call('r1', 1, 't1'),
+          item('a1', 2, 't1'),
+          call('r2', 3, 't2'),
+          item('a2', 4, 't2'),
+          item('a3', 5, 't3'),
+          call('r3', 6, 't3'),
+        ],
         commands: { 'cmd-r1': report('done'), 'cmd-r2': report('progress'), 'cmd-r3': report('done') },
       }),
       {},
@@ -258,7 +272,9 @@ describe('timeline', () => {
   });
 
   it('says which decisions Angela made', () => {
-    const d = detail({ decisions: [{ id: 'd1', kind: 'send_back', actor: 'manager', detail: { reason: '补上行号' }, created_at: 40 }] });
+    const d = detail({
+      decisions: [{ id: 'd1', kind: 'send_back', actor: 'manager', detail: { reason: '补上行号' }, created_at: 40 }],
+    });
     d.task.assignment = { actions: ['read_only'], stop_when: '找到原因就停', interpretation: '先定位' };
     expect(timeline(d).map((e) => e.text)).toEqual(['Angela 派出任务', 'Angela 退回了：补上行号']);
   });
@@ -279,7 +295,9 @@ describe("Angela's reply", () => {
   });
 
   it('previews the message a reply replies to as plain text', () => {
-    expect(previewLine('**alpha · 导出报表**：第 1 轮已通过验证。\n\n[[att:ver_1]]')).toBe('alpha · 导出报表：第 1 轮已通过验证。');
+    expect(previewLine('**alpha · 导出报表**：第 1 轮已通过验证。\n\n[[att:ver_1]]')).toBe(
+      'alpha · 导出报表：第 1 轮已通过验证。',
+    );
     expect(previewLine('## 结论\n细节')).toBe('结论');
     expect(previewLine('> - 你说过 `--force` 不要用，见 [说明](https://x.y)')).toBe('你说过 --force 不要用，见 说明');
     // Lines of markup alone say nothing; a reference shows as what it is.
@@ -324,10 +342,25 @@ describe('a task Angela assigned for reading only', () => {
   it('lists what its candidate changed, and nothing for a task that may change files', () => {
     const d = detail({ attempts: [attempt(1, 10, 20)] });
     d.attempts[0].candidate_id = 'cap1';
-    d.captures = [{
-      id: 'cap1', turn_id: 't', role: 'Malkuth', task_id: 't', attempt_id: d.attempts[0].id, kind: 'candidate', base: 'b', workspace_id: 'ws', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
-      state: 'pinned', commit_id: 'c', detail: { changed: ['src/main.rs'] }, created_at: 20, outside: null,
-    }];
+    d.captures = [
+      {
+        id: 'cap1',
+        turn_id: 't',
+        role: 'Malkuth',
+        task_id: 't',
+        attempt_id: d.attempts[0].id,
+        kind: 'candidate',
+        base: 'b',
+        workspace_id: 'ws',
+        config_version: 1,
+        options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
+        state: 'pinned',
+        commit_id: 'c',
+        detail: { changed: ['src/main.rs'] },
+        created_at: 20,
+        outside: null,
+      },
+    ];
     expect(unallowedChanges(d)).toEqual([]);
     d.task.assignment = { actions: ['read_only'], stop_when: '找到原因就停', interpretation: '先定位' };
     expect(unallowedChanges(d)).toEqual(['src/main.rs']);
@@ -338,16 +371,36 @@ describe('a task Angela assigned for reading only', () => {
 
 describe('workRange', () => {
   it('marks the last round’s candidate as earlier while the next round has nothing yet', () => {
-    const d = detail({ attempts: [attempt(1, 10, 20), attempt(2, 40, null)], verifications: [verification(1, 25, 'passed')] });
+    const d = detail({
+      attempts: [attempt(1, 10, 20), attempt(2, 40, null)],
+      verifications: [verification(1, 25, 'passed')],
+    });
     expect(workRange(d)).toMatchObject({ to: 'cand1', earlier: true, label: '上一轮（第 1 轮）的候选成果' });
   });
 
   it('shows the latest round’s own work once there is some', () => {
     const capture: Capture = {
-      id: 'c2', turn_id: 'turn2', role: 'Malkuth', task_id: 't', attempt_id: 'att2', kind: 'turn', workspace_id: 'ws', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
-      base: 'base0000', state: 'pinned', commit_id: 'work2', detail: null, created_at: 50, outside: null,
+      id: 'c2',
+      turn_id: 'turn2',
+      role: 'Malkuth',
+      task_id: 't',
+      attempt_id: 'att2',
+      kind: 'turn',
+      workspace_id: 'ws',
+      config_version: 1,
+      options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
+      base: 'base0000',
+      state: 'pinned',
+      commit_id: 'work2',
+      detail: null,
+      created_at: 50,
+      outside: null,
     };
-    const d = detail({ attempts: [attempt(1, 10, 20), attempt(2, 40, null)], verifications: [verification(1, 25, 'passed')], captures: [capture] });
+    const d = detail({
+      attempts: [attempt(1, 10, 20), attempt(2, 40, null)],
+      verifications: [verification(1, 25, 'passed')],
+      captures: [capture],
+    });
     expect(workRange(d)).toMatchObject({ to: 'work2', earlier: false });
   });
 });
@@ -378,7 +431,10 @@ describe('commandSummary', () => {
     expect(commandSummary(heredoc)).toEqual({ line: "cat > a.txt <<'EOF'", size: `共 3 行，${heredoc.length} 个字符` });
     const wide = commandSummary('x'.repeat(200));
     expect(wide.line).toBe(`${'x'.repeat(120)}…`);
-    expect(commandSummary({ blob: 'h', size: 300_000, head: 'echo start\nmore', tail: 'end' })).toEqual({ line: 'echo start', size: '300000 个字符' });
+    expect(commandSummary({ blob: 'h', size: 300_000, head: 'echo start\nmore', tail: 'end' })).toEqual({
+      line: 'echo start',
+      size: '300000 个字符',
+    });
   });
 });
 
@@ -415,9 +471,13 @@ describe('roleActivity', () => {
   it('says what keeps the role, the most pressing first', () => {
     const running = { ...turn('t'), state: 'running' as const, outcome: null, started_at: 1_000 };
     expect(roleActivity(role({ unfinished: running }), undefined, 66_000)).toBe('正在跑 turn · 1:05');
-    expect(roleActivity(role({ unfinished: { ...running, state: 'unknown' } }), undefined, 0)).toBe('上一个 turn 状态未知');
+    expect(roleActivity(role({ unfinished: { ...running, state: 'unknown' } }), undefined, 0)).toBe(
+      '上一个 turn 状态未知',
+    );
     const hold = { kind: 'session_unidentified' as const, session_id: 's' };
-    expect(roleActivity(role({ hold, stalled: { task_id: 't', turn_id: 't', report_error: null } }), undefined, 0)).toBe('停下，等你决定');
+    expect(
+      roleActivity(role({ hold, stalled: { task_id: 't', turn_id: 't', report_error: null } }), undefined, 0),
+    ).toBe('停下，等你决定');
     expect(roleActivity(role({}), taskView('verifying'), 0)).toBe('验证中');
     expect(roleActivity(role({}), undefined, 0)).toBe('空闲');
   });
@@ -464,10 +524,18 @@ describe('who a role is and how long its turn is quiet', () => {
   });
 
   it('tells a live item that grew from one that did not, and a running tool', () => {
-    const text = (t: string, status?: string) => ({ kind: 'agent_message' as const, started_at: 1, content: { text: t, ...(status && { status }) } });
+    const text = (t: string, status?: string) => ({
+      kind: 'agent_message' as const,
+      started_at: 1,
+      content: { text: t, ...(status && { status }) },
+    });
     expect(liveSize(text('ab'))).not.toBe(liveSize(text('abc')));
     expect(liveSize(text('ab'))).toBe(liveSize(text('xy')));
-    const command = { kind: 'command' as const, started_at: 1, content: { command: 'npm test', output: null, status: 'in_progress' } };
+    const command = {
+      kind: 'command' as const,
+      started_at: 1,
+      content: { command: 'npm test', output: null, status: 'in_progress' },
+    };
     expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: text('hi'), b: command } })).toBe(true);
     expect(toolRunning({ role: 'Malkuth', started_at: 1, items: { a: text('hi') } })).toBe(false);
     expect(toolRunning(undefined)).toBe(false);
@@ -533,12 +601,28 @@ describe('reports', () => {
 describe('stoppedPaths', () => {
   it('lists the new files over the guardrail with their size, or what cannot be captured', () => {
     const capture: Capture = {
-      id: 'c', turn_id: 't', role: 'Malkuth', task_id: null, attempt_id: null, kind: 'turn', base: 'b', workspace_id: 'ws', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
-      state: 'oversized', commit_id: null, detail: { files: [{ path: 'big.bin', size: 2048 }], total_bytes: 2048 },
-      created_at: 1, outside: null,
+      id: 'c',
+      turn_id: 't',
+      role: 'Malkuth',
+      task_id: null,
+      attempt_id: null,
+      kind: 'turn',
+      base: 'b',
+      workspace_id: 'ws',
+      config_version: 1,
+      options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
+      state: 'oversized',
+      commit_id: null,
+      detail: { files: [{ path: 'big.bin', size: 2048 }], total_bytes: 2048 },
+      created_at: 1,
+      outside: null,
     };
     expect(stoppedPaths(capture)).toEqual(['big.bin（2.0 KB）']);
-    const uncovered = { ...capture, state: 'uncovered' as const, detail: { paths: [{ path: 'vendor/x', kind: 'nested_repo' }] } };
+    const uncovered = {
+      ...capture,
+      state: 'uncovered' as const,
+      detail: { paths: [{ path: 'vendor/x', kind: 'nested_repo' }] },
+    };
     expect(stoppedPaths(uncovered)).toEqual(['vendor/x（nested_repo）']);
   });
 });
@@ -567,7 +651,12 @@ describe('abnormalEnd', () => {
 
 describe('attentionKey', () => {
   it('tells cards apart and keeps a card its key from one snapshot to the next', () => {
-    const blocked = (task_id: string, reason = 'r'): Attention => ({ kind: 'task_blocked', task_id, title: 't', reason });
+    const blocked = (task_id: string, reason = 'r'): Attention => ({
+      kind: 'task_blocked',
+      task_id,
+      title: 't',
+      reason,
+    });
     expect(attentionKey(blocked('a'))).toBe(attentionKey(blocked('a', '换了个问法')));
     expect(attentionKey(blocked('a'))).not.toBe(attentionKey(blocked('b')));
     const accept: Attention = { kind: 'accept', task_id: 'a', title: 't', verification_id: 'v' };
@@ -580,7 +669,11 @@ describe('attentionSummary', () => {
     const accept: Attention = { kind: 'accept', task_id: 'a', title: '导出', verification_id: 'v' };
     expect(attentionSummary(accept)).toBe('「导出」通过了验证，等你验收');
     expect(attentionTask(accept)).toBe('a');
-    const failed: Attention = { kind: 'hold', role: 'Malkuth', hold: { kind: 'abnormal', turn: { ...turn('t1'), outcome: 'interrupted' } } };
+    const failed: Attention = {
+      kind: 'hold',
+      role: 'Malkuth',
+      hold: { kind: 'abnormal', turn: { ...turn('t1'), outcome: 'interrupted' } },
+    };
     expect(attentionSummary(failed)).toBe('Malkuth 的上一个 turn 被中断，停下等你决定');
     expect(attentionTask(failed)).toBe(null);
   });
@@ -591,12 +684,22 @@ describe('deliveryReport', () => {
   const second = { ...attempt(2, 30, null), done_summary: 'Second delivery' };
 
   it('shows the newest report without calling an unpinned candidate ready', () => {
-    expect(deliveryReport([first, second])).toEqual({ text: 'Second delivery', round: 2, earlier: false, pending: true });
+    expect(deliveryReport([first, second])).toEqual({
+      text: 'Second delivery',
+      round: 2,
+      earlier: false,
+      pending: true,
+    });
     expect(deliveryReport([first, { ...second, candidate_id: 'candidate2' }])?.pending).toBe(false);
   });
 
   it('labels a previous report as old while the latest round has none', () => {
-    expect(deliveryReport([first, attempt(2, 30, null)])).toEqual({ text: 'First delivery', round: 1, earlier: true, pending: false });
+    expect(deliveryReport([first, attempt(2, 30, null)])).toEqual({
+      text: 'First delivery',
+      round: 1,
+      earlier: true,
+      pending: false,
+    });
   });
 
   it('handles missing and empty reports without inventing a delivery', () => {
@@ -615,21 +718,40 @@ describe('deliveryReport', () => {
 describe('trialCandidate', () => {
   const first = { ...attempt(1, 10, 20), candidate_id: 'capture1' };
   const capture: Capture = {
-    id: 'capture1', turn_id: 'turn1', role: 'Malkuth', task_id: 't', attempt_id: first.id,
-    kind: 'candidate', base: 'base0000', workspace_id: 'ws', config_version: 1, options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false }, state: 'pinned', commit_id: 'candidate-commit',
-    detail: null, created_at: 20, outside: null,
+    id: 'capture1',
+    turn_id: 'turn1',
+    role: 'Malkuth',
+    task_id: 't',
+    attempt_id: first.id,
+    kind: 'candidate',
+    base: 'base0000',
+    workspace_id: 'ws',
+    config_version: 1,
+    options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
+    state: 'pinned',
+    commit_id: 'candidate-commit',
+    detail: null,
+    created_at: 20,
+    outside: null,
   };
 
   it('uses the named candidate commit, never its rebased verification commit', () => {
-    expect(trialCandidate(detail({ attempts: [first], captures: [capture], verifications: [verification(1, 25, 'passed')] })))
-      .toBe('candidate-commit');
+    expect(
+      trialCandidate(
+        detail({ attempts: [first], captures: [capture], verifications: [verification(1, 25, 'passed')] }),
+      ),
+    ).toBe('candidate-commit');
   });
 
   it('does not use an earlier candidate or an unpinned/current work capture', () => {
     expect(trialCandidate(detail({ attempts: [first, attempt(2, 30, null)], captures: [capture] }))).toBeNull();
     for (const patch of [
-      { state: 'intent' as const }, { commit_id: null }, { kind: 'turn' as const },
-      { attempt_id: 'att2' }, { task_id: 'another-task' }, { id: 'another-capture' },
+      { state: 'intent' as const },
+      { commit_id: null },
+      { kind: 'turn' as const },
+      { attempt_id: 'att2' },
+      { task_id: 'another-task' },
+      { id: 'another-capture' },
     ]) {
       expect(trialCandidate(detail({ attempts: [first], captures: [{ ...capture, ...patch }] }))).toBeNull();
     }
