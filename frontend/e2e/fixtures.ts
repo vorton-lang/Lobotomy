@@ -54,8 +54,15 @@ async function startBackend(): Promise<Backend & { stop: (keepLog?: string) => P
   const info = path.join(host, 'backend.json');
   for (let i = 0; i < 200 && !fs.existsSync(info) && child.exitCode === null; i++)
     await new Promise((r) => setTimeout(r, 50));
-  if (!fs.existsSync(info))
-    throw new Error(`the backend did not start: ${fs.readFileSync(path.join(root, 'backend.log'), 'utf8')}`);
+  if (!fs.existsSync(info)) {
+    // Says whether it exited (a Windows status reads best in hex) or was still starting.
+    const { exitCode: code, signalCode: signal } = child;
+    const state =
+      code !== null ? `exited with ${code} (0x${(code >>> 0).toString(16)})` : (signal ?? 'still starting after 10 s');
+    child.kill();
+    fs.closeSync(log);
+    throw new Error(`the backend did not start, ${state}: ${fs.readFileSync(path.join(root, 'backend.log'), 'utf8')}`);
+  }
   const { port } = JSON.parse(fs.readFileSync(info, 'utf8')) as { port: number };
   const token = fs.readFileSync(path.join(host, 'gui-token'), 'utf8').trim();
 
