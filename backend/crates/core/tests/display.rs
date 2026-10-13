@@ -141,6 +141,10 @@ fn adoption_supersedes_previews_and_preserves_accepted_task_history() {
     let old_preview = db.read(next_preview).unwrap().unwrap();
     changed(&db, "external");
     let id = db.execute(&Caller::User, &cmd(&db)).unwrap();
+    assert_eq!(
+        rejection(db.execute(&Caller::Runtime, &lobotomy_core::workspace::AlignIdleSlot { role: ROLE.into() })),
+        "adoption_pending"
+    );
     finish(&db, &id);
     assert!(db.read(next_preview).unwrap().is_none());
     assert_eq!(

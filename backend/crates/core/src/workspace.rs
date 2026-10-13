@@ -149,7 +149,6 @@ impl Command for AlignIdleSlot {
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
         caller.require_runtime()?;
-        crate::display::require_no_adoption(cx.tx)?;
         let slot = role_slot(cx.tx, &self.role)?
             .ok_or_else(|| Error::rejected("no_slot", format!("{} has no slot", self.role)))?;
         if let Some(task) = crate::task::occupant(cx.tx, &self.role)? {
