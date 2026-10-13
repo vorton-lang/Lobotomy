@@ -346,3 +346,73 @@ test('a message the executor never got waits for the user at acceptance', async 
     });
   await expect(panel.locator('.phase')).toHaveText('已完成');
 });
+
+// Delivery rendering uses the existing mock backend; M1 keeps the real create/accept/Git chain.
+test('delivery descriptions distinguish pending, older and invalidated rounds', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1400, height: 860 });
+  const view = task('delivery', '查看交付内容', 'accepting');
+  await openMocked(page, {
+    snapshot: {
+      roles: [role(view.id)],
+      tasks: [view],
+      attention: [{ kind: 'accept', task_id: view.id, title: view.title, verification_id: `v-${view.id}` }],
+    },
+    details: { [view.id]: detail(view) },
+  });
+  await page
+    .locator('.attention .card')
+    .filter({ hasText: '等你验收' })
+    .getByRole('button', { name: '查看并验收' })
+    .click();
+  const panel = page.getByRole('region', { name: '查看交付内容', exact: true });
+  await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
+  const delivery = panel.getByRole('region', { name: '交付说明' });
+  const update = async (state: 'pending' | 'old' | 'new' | 'invalidated' | 'failed') =>
+    page.evaluate(async (state) => {
+      const module = '/src/store.ts';
+      const { useStore } = await import(module);
+      const detail = structuredClone(useStore.getState().taskDetail);
+      const first = detail.attempts[0];
+      first.done_summary =
+        '预览入口：[示例页面](https://example.com)\n\n本地文件：`dist/report.html`\n\n体验前运行 `npm run dev`，重点检查页面内容。';
+      if (state === 'pending') first.candidate_id = null;
+      else first.candidate_id = 'candidate1';
+      detail.attempts =
+        state === 'old' || state === 'new' || state === 'invalidated'
+          ? [
+              first,
+              {
+                ...first,
+                id: 'second',
+                seq: 2,
+                candidate_id: null,
+                done_summary: state === 'new' ? '第二轮成果：`output.txt`' : null,
+              },
+            ]
+          : [first];
+      if (state === 'failed') detail.verifications.at(-1).state = 'failed';
+      useStore.setState({ taskDetail: detail });
+    }, state);
+
+  await update('pending');
+  await expect(delivery).toContainText('成果尚未固定');
+  await expect(delivery.getByRole('link', { name: '示例页面' })).toHaveAttribute('href', 'https://example.com/');
+  await expect(delivery.locator('code', { hasText: 'npm run dev' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('delivery-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(delivery).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('delivery-mobile.png') });
+  await update('old');
+  await expect(delivery).toContainText('上一轮交付说明（第 1 轮）');
+  await expect(delivery).toContainText('本轮还没有交付说明');
+  await update('new');
+  await expect(delivery).toContainText('本轮交付（第 2 轮）');
+  await expect(delivery).toContainText('第二轮成果');
+  await expect(delivery).not.toContainText('示例页面');
+  await update('invalidated');
+  await expect(delivery).not.toContainText('第二轮成果');
+  await expect(delivery).toContainText('上一轮交付说明');
+  await update('failed');
+  await expect(panel.locator('.verification-details')).toHaveAttribute('open', '');
+  await expect(panel.locator('.verification-details > summary .badge')).toHaveText('未通过');
+});
