@@ -81,7 +81,12 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
         </div>
       );
     case 'display_changed':
-      return <DisplayCard display={a.display} />;
+      return (
+        <DisplayCard
+          key={`${a.display.expected_rev}:${a.display.state.kind === 'changed' ? a.display.state.commit : a.display.state.kind}`}
+          display={a.display}
+        />
+      );
     case 'preview_stopped':
       return (
         <div className="card warn">

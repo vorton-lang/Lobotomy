@@ -51,6 +51,8 @@ interface State {
   commands?: Record<string, CommandRecord>;
   /** Answers a command and changes `state` as the backend would. */
   command?: (sent: Sent) => unknown;
+  /** An unsuccessful reply keeps the form's idempotency key for an exact retry. */
+  commandError?: string;
 }
 
 /**
@@ -129,7 +131,9 @@ async function openMocked(page: Page, state: State) {
           route.send(JSON.stringify({ id, error: { code: 'unexpected', message: method } }));
           return;
       }
-      route.send(JSON.stringify({ id, result }));
+      if (method === 'command' && state.commandError)
+        route.send(JSON.stringify({ id, error: { code: 'unavailable', message: state.commandError } }));
+      else route.send(JSON.stringify({ id, result }));
       if (changed) {
         const events: LogEvent[] = [
           {
@@ -415,4 +419,35 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
   await update('failed');
   await expect(panel.locator('.verification-details')).toHaveAttribute('open', '');
   await expect(panel.locator('.verification-details > summary .badge')).toHaveText('未通过');
+});
+
+// #67: a lost/unsuccessful reply retries the same fixed action. A new displayed version is
+// a new action; retaining the old key would permanently reject it as idempotency_key_reused.
+test('display adoption request identity follows the fixed target and internal version', async ({ page }) => {
+  const display = {
+    state: { kind: 'changed' as const, commit: 'external-a' },
+    expected_rev: 1,
+    busy: false,
+    unavailable: null,
+    error: null,
+  };
+  const state: State = {
+    snapshot: { roles: [role(null)], tasks: [], attention: [{ kind: 'display_changed', display }] },
+    commandError: '接入回复未收到',
+  };
+  const backend = await openMocked(page, state);
+  const adopt = page.getByRole('button', { name: '接入', exact: true });
+  await adopt.click();
+  await expect(adopt).toBeEnabled();
+  await adopt.click();
+  await expect(adopt).toBeEnabled();
+  expect(backend.sent[1].args.request_id).toBe(backend.sent[0].args.request_id);
+  display.state.commit = 'external-b';
+  display.expected_rev = 2;
+  backend.push({ type: 'resync' });
+  await expect(page.locator('.attention .card')).toContainText('external-b');
+  await adopt.click();
+  await expect.poll(() => backend.sent.length).toBe(3);
+  expect(backend.sent[2].args).toMatchObject({ target: 'external-b', expected_rev: 2 });
+  expect(backend.sent[2].args.request_id).not.toBe(backend.sent[0].args.request_id);
 });
