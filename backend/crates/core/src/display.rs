@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::project::{current_config, require_project};
-use crate::verify::CheckOutcome;
+use crate::task::{Phase, load_task};
+use crate::verify::{CheckOutcome, tasks_in_phase, work_so_far};
 use crate::{Caller, Command, Cx, Error, Result};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +114,19 @@ pub fn require_savepoint(conn: &Connection) -> Result<()> {
     )?;
     if busy {
         return Err(Error::rejected("not_at_savepoint", "等待执行者退出、采集保存及任务验收完成；暂停不等于保存点"));
+    }
+    // Use the same source as code_start: queued work can still carry a candidate or an origin
+    // capture. Closed tasks keep that history without scheduling it for replay.
+    for task in tasks_in_phase(conn, Phase::Queued)? {
+        if work_so_far(conn, &task)?.is_some() {
+            return Err(Error::rejected(
+                "not_at_savepoint",
+                format!(
+                    "排队任务「{}」仍携带候选成果或任务外改动，启动时会重放；接入前请先完成或放弃该任务，历史成果仍保留",
+                    load_task(conn, &task)?.title
+                ),
+            ));
+        }
     }
     for role in crate::role::list_roles(conn)? {
         match crate::workspace::require_slot_free(conn, &role.name, None) {

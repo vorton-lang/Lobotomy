@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use lobotomy_core::display::*;
 use lobotomy_core::project::{Check, EditProjectConfig, current_config, require_project};
-use lobotomy_core::task::{SetPaused, StartAttempt};
+use lobotomy_core::task::{Abandon, AdoptOutsideChanges, Reopen, SetPaused, StartAttempt};
 use lobotomy_core::turn::RegisterTurn;
 use lobotomy_core::verify::{Accept, FinishPreview, PreviewResult, next_preview};
 use lobotomy_core::{Caller, Db};
@@ -164,7 +164,7 @@ fn adoption_supersedes_previews_and_preserves_accepted_task_history() {
 }
 
 #[test]
-fn saved_but_undecided_taskless_changes_also_block_adoption() {
+fn saved_taskless_changes_block_adoption_before_and_after_queueing() {
     use lobotomy_core::capture::{CaptureResult, FinishCapture, pending_captures};
     let db = db();
     idle_slot(&db);
@@ -175,11 +175,55 @@ fn saved_but_undecided_taskless_changes_also_block_adoption() {
     db.execute(
         &Caller::Runtime,
         &FinishCapture {
-            capture_id: capture.id,
+            capture_id: capture.id.clone(),
             result: CaptureResult::Pinned { commit: "saved".into(), changed: vec!["work.txt".into()] },
         },
     )
     .unwrap();
     changed(&db, "external");
     assert_eq!(rejection(db.execute(&Caller::User, &cmd(&db))), "not_at_savepoint");
+    db.execute(
+        &Caller::User,
+        &AdoptOutsideChanges {
+            request_id: "queue-outside".into(),
+            capture_id: capture.id,
+            title: "继续任务外改动".into(),
+            body: "finish the saved changes".into(),
+            criteria: "done".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(rejection(db.execute(&Caller::User, &cmd(&db))), "not_at_savepoint");
+    assert!(db.read(view).unwrap().unavailable.unwrap().contains("继续任务外改动"));
+}
+
+#[test]
+fn reopening_a_saved_candidate_blocks_admission_and_an_inflight_adoption() {
+    let db = db();
+    let (task, candidate) = candidate(&db);
+    db.execute(
+        &Caller::User,
+        &Abandon { request_id: "close".into(), task_id: task.clone(), reason: "keep as history".into() },
+    )
+    .unwrap();
+    changed(&db, "external");
+    // Closed history does not block admission, but reopening it during checks invalidates CAS.
+    let id = db.execute(&Caller::User, &cmd(&db)).unwrap();
+    db.execute(&Caller::User, &Reopen { request_id: "reopen".into(), task_id: task.clone() }).unwrap();
+    finish(&db, &id);
+    let failed = db.read(|c| load(c, &id)).unwrap();
+    assert_eq!(failed.state, "failed");
+    assert_eq!(failed.error, db.read(view).unwrap().unavailable);
+    assert_eq!(db.read(require_project).unwrap().integration, BASE);
+    let retry = AdoptDisplay { request_id: "retry".into(), ..cmd(&db) };
+    assert_eq!(rejection(db.execute(&Caller::User, &retry)), "not_at_savepoint");
+    assert_eq!(db.read(|c| lobotomy_core::verify::work_so_far(c, &task)).unwrap(), Some(candidate));
+    db.execute(
+        &Caller::User,
+        &Abandon { request_id: "close-again".into(), task_id: task, reason: "leave it closed".into() },
+    )
+    .unwrap();
+    let id = db.execute(&Caller::User, &retry).unwrap();
+    finish(&db, &id);
+    assert_eq!(db.read(require_project).unwrap().integration, "external");
 }

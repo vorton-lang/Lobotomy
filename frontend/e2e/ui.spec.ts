@@ -428,7 +428,7 @@ test('display adoption request identity follows the fixed target and internal ve
     state: { kind: 'changed' as const, commit: 'external-a' },
     expected_rev: 1,
     busy: false,
-    unavailable: null,
+    unavailable: '排队任务「旧候选」仍携带候选成果或任务外改动，启动时会重放' as string | null,
     error: null,
   };
   const state: State = {
@@ -437,6 +437,12 @@ test('display adoption request identity follows the fixed target and internal ve
   };
   const backend = await openMocked(page, state);
   const adopt = page.getByRole('button', { name: '接入', exact: true });
+  await expect(adopt).toBeDisabled();
+  await expect(page.locator('.attention .card')).toContainText('排队任务「旧候选」');
+  expect(backend.sent).toHaveLength(0);
+  display.unavailable = null;
+  backend.push({ type: 'resync' });
+  await expect(adopt).toBeEnabled();
   await adopt.click();
   await expect(adopt).toBeEnabled();
   await adopt.click();

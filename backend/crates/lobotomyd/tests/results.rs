@@ -212,3 +212,47 @@ async fn external_display_adoption_preserves_acceptance_and_supersedes_old_previ
     assert!(project.slot_dir("worker").join("external.txt").exists());
     assert!(!project.slot_dir("worker").join("work.txt").exists());
 }
+
+/// #67: a queued reopen still carries work, while abandoned history and a fresh queue do not.
+#[tokio::test]
+async fn a_reopened_candidate_blocks_display_adoption_until_the_user_closes_it() {
+    use lobotomy_core::display::{self, AdoptDisplay};
+    use lobotomy_core::project::require_project;
+    let dir = tempfile::tempdir().unwrap();
+    let project = open_project(dir.path(), fake_codex()).await;
+    let db = &project.db;
+    let task = create_task(&project, "reopen before adoption");
+    start_attempt(&project, &task).await;
+    let candidate = make_candidate(&project, "unaccepted internal candidate").await;
+    abandon_and_reopen(db, &task, 1);
+    let repo = user_repo(dir.path());
+    std::fs::write(repo.join("external.txt"), "external tree").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "external"]);
+    let external = git(&repo, &["rev-parse", "HEAD"]);
+    let before = db.read(require_project).unwrap();
+    let request =
+        AdoptDisplay { request_id: "adopt".into(), target: external.clone(), expected_rev: before.integration_rev };
+    let error = lobotomyd::display::begin(&project, request.clone()).await.unwrap_err();
+    assert_eq!(error.downcast_ref::<lobotomy_core::Error>().unwrap().code(), Some("not_at_savepoint"));
+    assert!(db.read(display::view).unwrap().unavailable.unwrap().contains("排队任务「测试任务」"));
+    assert!(db.read(display::pending).unwrap().is_none());
+    assert_eq!(db.read(require_project).unwrap(), before);
+    assert_eq!(db.read(|c| latest_candidate_commit(c, &task)).unwrap(), Some(candidate.clone()));
+    db.execute(
+        &Caller::User,
+        &Abandon { request_id: "leave-closed".into(), task_id: task.clone(), reason: "keep history".into() },
+    )
+    .unwrap();
+    let next = create_task(&project, "fresh queue");
+    let id = lobotomyd::display::begin(&project, request).await.unwrap();
+    lobotomyd::display::adopt(project.clone(), id.clone()).await.unwrap();
+    assert_eq!(db.read(|c| display::load(c, &id)).unwrap().state, "applied");
+    assert_eq!(db.read(require_project).unwrap().integration, external);
+    assert_eq!(db.read(|c| latest_candidate_commit(c, &task)).unwrap(), Some(candidate));
+    start_attempt(&project, &next).await;
+    assert!(!project.slot_dir("worker").join("work.txt").exists(), "closed history is not replayed");
+    assert_eq!(std::fs::read_to_string(project.slot_dir("worker").join("external.txt")).unwrap(), "external tree");
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), external);
+    assert!(!repo.join("work.txt").exists());
+}
