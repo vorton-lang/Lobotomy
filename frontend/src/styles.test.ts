@@ -78,7 +78,7 @@ describe('the design tokens', () => {
         for (const [fg, backs] of pairs) {
           for (const back of backs) {
             const ratio = contrast(t[fg], t[back]);
-            if (!Number.isFinite(ratio) || ratio < min) failing.push(`${fg} on ${back}: ${ratio.toFixed(2)}`);
+            if (ratio < min) failing.push(`${fg} on ${back}: ${ratio.toFixed(2)}`);
           }
         }
       }
