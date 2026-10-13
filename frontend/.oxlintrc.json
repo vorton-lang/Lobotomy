@@ -22,6 +22,10 @@
       "rules": { "no-undef": "error" }
     },
     {
+      "files": ["scripts/icons.mjs"],
+      "globals": { "Image": "readonly", "document": "readonly" }
+    },
+    {
       "files": ["electron/preload.cjs"],
       "env": { "node": true, "browser": true },
       "rules": { "no-undef": "error" }

@@ -31,8 +31,10 @@ npx playwright test e2e/electron.spec.ts
 
 `icons:check` 重新渲染 SVG，逐字节检查 PNG 和 ICO；应使用生成时的同一浏览器版本，避免栅格化或 PNG 编码差异。`--preview` 更新本页预览，包含 256 px 大图及 16、24、32、48 px 原尺寸对照。审查图形时需要同时检查浅色、深色、灰度和透明圆角。
 
-## 本次检查
+## 实测结果（2026-10-12，Linux）
 
 在 Linux 云端环境中，使用 Chromium 151.0.7922.173 渲染并目视检查了预览中的全部尺寸、浅深背景和灰度版本。另检查了 PNG 的透明圆角、ICO 的五个尺寸帧，以及 Vite 构建后的资源复制和相对 favicon URL。
 
-本地 `icons:check`、类型检查、77 个单元测试、生产构建和 3 个 Electron e2e 均通过。Electron 运行检查确认 X11 窗口实际收到 256 px 图标，托盘图像包含四档缩放表示；开发页面和 `file://` 页面均能读取 favicon。云端没有 Windows 桌面，Windows 的窗口／托盘外观仍需实机目视确认。
+Electron 运行检查确认 X11 窗口实际收到 256 px 图标，托盘图像包含四档缩放表示。开发页面和 `file://` 页面均能读取 favicon。
+
+**待验证**：Windows 的窗口和托盘外观。云端没有 Windows 桌面，需要在实机上目视确认。

@@ -199,7 +199,10 @@ function trayIcon() {
   if (process.platform === 'win32') return path.join(icons, 'lobotomy.ico');
   const image = nativeImage.createEmpty();
   for (const size of [16, 24, 32, 48]) {
-    image.addRepresentation({ scaleFactor: size / 16, buffer: fs.readFileSync(path.join(icons, `lobotomy-${size}.png`)) });
+    image.addRepresentation({
+      scaleFactor: size / 16,
+      buffer: fs.readFileSync(path.join(icons, `lobotomy-${size}.png`)),
+    });
   }
   return image;
 }

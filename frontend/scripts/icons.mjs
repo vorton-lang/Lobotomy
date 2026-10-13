@@ -21,15 +21,18 @@ try {
   const page = await browser.newPage({ deviceScaleFactor: 1 });
   const frames = [];
   for (const size of sizes) {
-    const data = await page.evaluate(async ({ url, size }) => {
-      const image = new Image();
-      image.src = url;
-      await image.decode();
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = size;
-      canvas.getContext('2d').drawImage(image, 0, 0, size, size);
-      return canvas.toDataURL('image/png').split(',')[1];
-    }, { url, size });
+    const data = await page.evaluate(
+      async ({ url, size }) => {
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = size;
+        canvas.getContext('2d').drawImage(image, 0, 0, size, size);
+        return canvas.toDataURL('image/png').split(',')[1];
+      },
+      { url, size },
+    );
     frames.push(Buffer.from(data, 'base64'));
   }
 
@@ -51,7 +54,8 @@ try {
   outputs.push(['lobotomy.ico', Buffer.concat([header, ...frames])]);
   for (const [name, bytes] of outputs) {
     const destination = path.join(directory, name);
-    if (check) assert.ok((await fs.readFile(destination)).equals(bytes), `${name} is stale; run npm run icons:generate`);
+    if (check)
+      assert.ok((await fs.readFile(destination)).equals(bytes), `${name} is stale; run npm run icons:generate`);
     else await fs.writeFile(destination, bytes);
   }
   console.log(`${check ? 'Checked' : 'Generated'} ${outputs.length} icon assets from lobotomy.svg`);
