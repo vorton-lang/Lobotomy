@@ -37,7 +37,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -132,7 +132,8 @@ async fn upgrade(
     // Register before the upgrade callback runs: shutdown can race with the handshake.
     let owner = service.sessions.token();
     ws.on_upgrade(move |socket| async move {
-        session(socket, service).await;
+        let (sink, stream) = socket.split();
+        session(sink, stream, service).await;
         drop(owner);
     })
 }
@@ -169,11 +170,14 @@ fn local_origin(headers: &HeaderMap) -> bool {
     origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")).is_some_and(is_local)
 }
 
-async fn session(socket: WebSocket, service: Service) {
+async fn session<S, R>(mut sink: S, mut stream: R, service: Service)
+where
+    S: futures::Sink<Message> + Unpin,
+    R: futures::Stream<Item = Result<Message, axum::Error>> + Unpin,
+{
     let shutdown = service.shutdown.clone();
-    let (mut sink, mut stream) = socket.split();
     let (out, mut outbox) = mpsc::channel::<String>(256);
-    let writer = tokio::spawn(async move {
+    let mut writer = Box::pin(async move {
         while let Some(text) = outbox.recv().await {
             if sink.send(Message::Text(text.into())).await.is_err() {
                 break;
@@ -218,17 +222,25 @@ async fn session(socket: WebSocket, service: Service) {
         }
     };
     // Covers sends to a full outbox too, so a slow client cannot hold shutdown open.
-    tokio::select! {
+    let stopping = tokio::select! {
         biased;
-        _ = shutdown.cancelled() => {}
-        _ = read => {}
-    }
-    // Dropping the receiver releases replies waiting on a full outbox. Requests already
-    // admitted may have side effects; finish them rather than aborting a database/store write.
-    writer.abort();
-    let _ = writer.await;
+        _ = shutdown.cancelled() => true,
+        _ = read => false,
+        _ = &mut writer => false,
+    };
     drop(out);
-    while requests.join_next().await.is_some() {}
+    // Admitted requests may have side effects, so finish them even after a disconnect.
+    let admitted = async { while requests.join_next().await.is_some() {} };
+    if stopping {
+        // Requests still own senders. Drain their replies alongside the requests until the
+        // channel closes; the existing session owner and backend deadline bound this wait.
+        futures::future::join(admitted, writer).await;
+    } else {
+        // A disconnected reader or failed writer cannot receive replies. Dropping the writer
+        // releases requests waiting on a full outbox without aborting their side effects.
+        drop(writer);
+        admitted.await;
+    }
 }
 
 /// Pushes an instance's changes to every connected GUI: new entries of its event log and the live
@@ -332,5 +344,119 @@ async fn call(service: &Service, method: &str, params: Value) -> anyhow::Result<
             Scope::Project(project) => view::answer(&project, method, params).await,
             Scope::Angela(angela) => view::answer_angela(&angela, &service.projects, method, params).await,
         },
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use crate::Backend;
+    use crate::host::{Cli, HarnessConfig};
+    use std::task::Poll;
+    use tokio::sync::oneshot;
+
+    #[derive(Clone, Copy)]
+    enum Ending {
+        Flush,
+        WriteFailure,
+        Disconnect,
+        Deadline,
+    }
+
+    #[tokio::test]
+    async fn shutdown_flushes_admitted_replies_within_its_existing_grace() {
+        for ending in [Ending::Flush, Ending::WriteFailure, Ending::Disconnect, Ending::Deadline] {
+            let dir = tempfile::tempdir().unwrap();
+            let cli = Cli { command: vec!["unused-test-cli".into()], reasoning_effort: None };
+            let host = Arc::new(
+                Host::open(
+                    dir.path(),
+                    HarnessConfig {
+                        claude: cli.clone(),
+                        codex: cli,
+                        interrupt_helper: vec![],
+                        terminal_helper: "unused".into(),
+                        probe_timeout: Duration::from_secs(1),
+                    },
+                )
+                .unwrap(),
+            );
+            let backend = Backend::start(host.clone(), 0).await.unwrap();
+            let service = Service {
+                host: host.clone(),
+                projects: backend.projects.clone(),
+                angela: Err("unused".into()),
+                shutdown: backend.serving.clone(),
+                sessions: backend.gui_sessions.clone(),
+            };
+            // The same owner as upgrade(), held through session() and the actual socket flush.
+            let owner = service.sessions.token();
+            let cancelled = service.shutdown.clone();
+            let (incoming, stream) = futures::channel::mpsc::unbounded();
+            incoming
+                .unbounded_send(Ok(Message::Text(
+                    r#"{"id":1,"method":"command","params":{"name":"shutdown","args":{}}}"#.into(),
+                )))
+                .unwrap();
+            let (flushing, started) = oneshot::channel();
+            let (release, gate) = oneshot::channel();
+            let (flushed, received) = oneshot::channel();
+            let sink = futures::sink::unfold(Some((flushing, gate, flushed)), move |mut gates, message| async move {
+                if let Message::Text(text) = message {
+                    let value: Value = serde_json::from_str(&text).unwrap();
+                    if value["id"] == 1 {
+                        let (flushing, gate, flushed) = gates.take().unwrap();
+                        flushing.send(()).unwrap();
+                        gate.await.unwrap();
+                        if matches!(ending, Ending::WriteFailure) {
+                            return Err(std::io::Error::other("disconnected while flushing"));
+                        }
+                        flushed.send(value).unwrap();
+                    }
+                }
+                Ok(gates)
+            });
+            let mut connection = Box::pin(async move {
+                session(Box::pin(sink), stream, service).await;
+                drop(owner);
+            });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::select! {
+                    _ = &mut connection => panic!("session ended before the reply began flushing"),
+                    _ = started => {}
+                }
+                host.shutdown_requested.notified().await;
+                if matches!(ending, Ending::Disconnect) {
+                    drop(incoming);
+                    connection.await;
+                    assert!(received.await.is_err(), "a disconnect aborts the blocked writer");
+                    backend.shutdown(Duration::from_secs(5)).await;
+                    return;
+                }
+                let expires = matches!(ending, Ending::Deadline);
+                let grace = if expires { Duration::ZERO } else { Duration::from_secs(5) };
+                let mut stopped = tokio::spawn(backend.shutdown(grace));
+                cancelled.cancelled().await;
+                // Poll the real session after cancellation, with flush still gated. Aborting
+                // its writer here makes this Ready and deterministically loses the reply.
+                assert!(matches!(futures::poll!(&mut connection), Poll::Pending), "reply lost during shutdown");
+                if expires {
+                    (&mut stopped).await.unwrap();
+                } else {
+                    assert!(!stopped.is_finished(), "the session still owns its pending reply");
+                }
+                release.send(()).unwrap();
+                connection.await;
+                match ending {
+                    Ending::WriteFailure => assert!(received.await.is_err()),
+                    _ => assert_eq!(received.await.unwrap(), json!({"id":1,"result":null})),
+                }
+                if !expires {
+                    stopped.await.unwrap();
+                }
+            })
+            .await
+            .expect("session cleanup exceeded the test's watchdog");
+        }
     }
 }

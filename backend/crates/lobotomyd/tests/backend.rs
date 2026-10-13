@@ -1139,13 +1139,11 @@ async fn shutdown_leaves_a_running_store_job_and_its_lock_alive() {
 
 /// A trial runs the executor's command in a copy of the candidate, in a terminal of its own. Stop
 /// ends it and deletes the copy; shutdown stops a trial still open; startup deletes leftovers
-/// (frontend.md §8). Linux needs a desktop, which CI does not have.
+/// (frontend.md §8). On Unix, run explicitly with a display and xfce4-terminal or xterm.
 #[tokio::test]
+#[cfg_attr(unix, ignore = "requires a graphical display and xfce4-terminal or xterm")]
 async fn a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown() {
     use lobotomyd::trial::{self, StartTrial};
-    if cfg!(unix) && std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let backend = start(dir.path()).await;
     let project = backend.project.clone();
@@ -1554,7 +1552,8 @@ async fn a_mismatch_reaches_the_users_conversation_with_angela() {
     let turn =
         wait_for("the executor's turn to run", || last(&project.db).filter(|t| t.state == TurnState::Running)).await;
     let flag = lobotomy_core::report::FlagMismatch { body: "原话说先别大改，解读要求重写".into() };
-    project.db.execute(&Caller::Role { role: "Malkuth".into(), turn_id: turn.id }, &flag).unwrap();
+    let caller = Caller::Role { role: "Malkuth".into(), turn_id: turn.id };
+    project.db.execute(&caller, &flag).unwrap();
     project.wake.notify_one();
 
     let hers = angela_turn_ended(&angela).await;
@@ -1562,6 +1561,26 @@ async fn a_mismatch_reaches_the_users_conversation_with_angela() {
     let mismatch = told.iter().find(|m| m.body.starts_with("⚠ ")).expect("a message of its own");
     assert_eq!(mismatch.source, "runtime");
     assert!(mismatch.body.contains("Malkuth（任务「测试任务」）：原话说先别大改，解读要求重写"), "{}", mismatch.body);
+
+    // Holding Angela after a failure must not hide the executor's next notice from the user.
+    let failed = angela_turn_for(&angela, &tell_angela(&angela, "FAKE:fail")).await;
+    assert_eq!(failed.outcome, Some(lobotomy_core::turn::Outcome::Failed));
+    let flag = lobotomy_core::report::FlagMismatch { body: "暂停时仍要告知用户".into() };
+    project.db.execute(&caller, &flag).unwrap();
+    project.wake.notify_one();
+    let notice = wait_for("the notice while Angela holds", || {
+        angela
+            .db
+            .read(|c| lobotomy_core::task::queued_messages(c, "Angela"))
+            .unwrap()
+            .into_iter()
+            .find(|m| m.body.starts_with("⚠ ") && m.body.contains("暂停时仍要告知用户"))
+    })
+    .await;
+    assert_eq!(notice.source, "runtime");
+    assert_eq!(angela.db.read(|c| lobotomy_core::turn::last_turn(c, "Angela")).unwrap().unwrap().id, failed.id);
+    let cursor = angela.db.read(lobotomy_core::manager::cursors).unwrap().pop().unwrap();
+    assert_eq!(cursor.seq, project.db.read(lobotomy_core::view::last_event).unwrap());
     backend.shutdown(Duration::from_secs(5)).await;
 }
 

@@ -11,11 +11,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lobotomy_core::ledger::ledger_lines;
-use lobotomy_core::manager::{Cursor, TellManager, cursors};
+use lobotomy_core::manager::{Cursor, ScheduleManagerTurn, cursors};
 use lobotomy_core::task::queued_messages;
-use lobotomy_core::turn::{MarkUnfinishedUnknown, RegisterTurn, current_session, unfinished_turn};
+use lobotomy_core::turn::{MarkUnfinishedUnknown, TurnRegistered, current_session, unfinished_turn};
 use lobotomy_core::view::manager::{ChangesRead, changes_since, project_read, settled};
-use lobotomy_core::view::overview;
+use lobotomy_core::view::{last_event, overview};
 use lobotomy_harness::{Harness, MCP_SERVER};
 use rusqlite::Transaction;
 use tokio::task::JoinHandle;
@@ -119,11 +119,21 @@ async fn tick(instance: &Arc<Instance>, projects: &Projects) -> anyhow::Result<(
     if instance.host.is_blocked(&harness)? {
         return Ok(());
     }
-    tell(instance, projects).await?;
-    if let Some(turn) = ignore_rejection(runtime(instance, RegisterTurn { role: ROLE.into() }).await)? {
+    let prepared = prepare(instance, projects).await?;
+    if let Some(turn) = register_prepared(instance, prepared).await? {
         launch(instance, turn.turn_id);
     }
     launch_registered(instance).await
+}
+
+async fn register_prepared(
+    instance: &Instance,
+    prepared: Option<ScheduleManagerTurn>,
+) -> anyhow::Result<Option<TurnRegistered>> {
+    match prepared {
+        Some(prepared) => Ok(ignore_rejection(runtime(instance, prepared).await)?.flatten()),
+        None => Ok(None),
+    }
 }
 
 /// What a settled project waits for: nothing in it moves on without the user (manager-actions.md
@@ -165,8 +175,8 @@ struct Seen {
 /// what changed in each project goes in her input, and her cursors move past it. A project she sees
 /// for the first time starts her cursor at its present. Nothing is told while her turn runs: it
 /// comes with her next one.
-async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
-    let (inbox, running, fresh, cursors) = db(instance, |db| {
+async fn prepare(instance: &Instance, projects: &Projects) -> anyhow::Result<Option<ScheduleManagerTurn>> {
+    let (inbox, running, fresh, cursors, as_of) = db(instance, |db| {
         db.read(|c| {
             Ok((
                 !queued_messages(c, ROLE)?.is_empty(),
@@ -181,12 +191,13 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
                     }
                 },
                 cursors(c)?,
+                last_event(c)?,
             ))
         })
     })
     .await?;
     if running {
-        return Ok(());
+        return Ok(None);
     }
     let cursors: HashMap<String, Cursor> = cursors.into_iter().map(|c| (c.project_id.clone(), c)).collect();
     let blocked: Vec<String> = Harness::ALL
@@ -223,6 +234,7 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
 
     // A role questioning her interpretation goes to the user unfiltered, in a message of its own in
     // her conversation, and wakes her to correct herself (manager-actions.md §2.3).
+    let mut messages = Vec::new();
     for s in &seen {
         let Ok(changes) = &s.changes else { continue };
         if changes.mismatches.is_empty() {
@@ -233,7 +245,7 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
             s.name,
             changes.mismatches.iter().map(|m| format!("- {m}")).collect::<Vec<_>>().join("\n")
         );
-        runtime(instance, TellManager { role: ROLE.into(), body: Some(body), cursors: Vec::new() }).await?;
+        messages.push(body);
     }
     let wakes = |s: &Seen| {
         s.changes.as_ref().is_ok_and(|c| !c.mismatches.is_empty() || (s.settled.is_some() && c.by_others > 0))
@@ -272,8 +284,8 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
     // (manager-actions.md §3.4).
     let runs = !woken.is_empty() || inbox;
     let recalled = if runs && fresh { recall(instance, projects).await? } else { None };
-    if moved.is_empty() && recalled.is_none() {
-        return Ok(());
+    if !runs && moved.is_empty() {
+        return Ok(None);
     }
     let states: Vec<String> = woken
         .iter()
@@ -286,9 +298,10 @@ async fn tell(instance: &Instance, projects: &Projects) -> anyhow::Result<()> {
         (true, false) => "各项目自上次以来的变化".to_owned(),
     };
     sections.splice(0..0, recalled);
-    let body = (!sections.is_empty()).then(|| format!("{summary}\n\n{}", sections.join("\n\n")));
-    runtime(instance, TellManager { role: ROLE.into(), body, cursors: moved }).await?;
-    Ok(())
+    if !sections.is_empty() {
+        messages.push(format!("{summary}\n\n{}", sections.join("\n\n")));
+    }
+    Ok(Some(ScheduleManagerTurn { role: ROLE.into(), as_of, messages, cursors: moved, register: runs }))
 }
 
 /// Her ledger in the first input of a new session: the entries that hold, by scope, hypotheses
@@ -318,8 +331,13 @@ fn bullets(lines: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::host::{Cli, HarnessConfig};
+    use lobotomy_core::Caller;
     use lobotomy_core::Db;
+    use lobotomy_core::ledger::{AddLedgerEntry, LedgerKind};
     use lobotomy_core::role::list_roles;
+    use lobotomy_core::task::SendMessage;
+    use lobotomy_core::turn::{EndTurn, NewNativeSession, Outcome, RegisterTurn, SessionIdentified, load_turn};
 
     use super::*;
 
@@ -331,5 +349,112 @@ mod tests {
         let roles = db.read(list_roles).unwrap();
         let names: Vec<_> = roles.iter().map(|r| (r.name.as_str(), r.kind.as_str(), r.slot.is_none())).collect();
         assert_eq!(names, [(ROLE, "manager", true)]);
+    }
+
+    #[tokio::test]
+    async fn a_late_session_or_message_cannot_skip_the_first_turns_ledger() {
+        // The control and three specific interleavings; no CLI, timers or scheduler lottery.
+        for order in 0..4 {
+            let dir = tempfile::tempdir().unwrap();
+            let cli = Cli { command: vec!["unused-test-cli".into()], reasoning_effort: None };
+            let harness = HarnessConfig {
+                claude: cli.clone(),
+                codex: cli,
+                interrupt_helper: vec![],
+                terminal_helper: "unused".into(),
+                probe_timeout: Duration::from_secs(1),
+            };
+            let host = Arc::new(Host::open(dir.path(), harness).unwrap());
+            let projects = Projects::new(host.clone());
+            let instance = Instance::open(ID, &dir.path().join("angela"), host).unwrap();
+            let db = &instance.db;
+            db.write(seed).unwrap();
+            let send = |key: &str| {
+                db.execute(
+                    &Caller::User,
+                    &SendMessage {
+                        request_id: key.into(),
+                        role: ROLE.into(),
+                        task_id: None,
+                        body: key.into(),
+                        reply_to: None,
+                    },
+                )
+                .unwrap()
+            };
+            send("old session");
+            let first = db.execute(&Caller::Runtime, &RegisterTurn { role: ROLE.into() }).unwrap().turn_id;
+            db.execute(&Caller::Runtime, &SessionIdentified { turn_id: first.clone(), native_id: "old".into() })
+                .unwrap();
+            db.execute(
+                &Caller::Manager { turn_id: first.clone() },
+                &AddLedgerEntry {
+                    kind: LedgerKind::Goal,
+                    statement: "remember me".into(),
+                    evidence: vec![],
+                    task_id: None,
+                    confidence: None,
+                    supersedes: None,
+                },
+            )
+            .unwrap();
+            db.execute(&Caller::Runtime, &EndTurn { turn_id: first, outcome: Outcome::Completed, failure: None })
+                .unwrap();
+            let new_session = || {
+                db.execute(&Caller::User, &NewNativeSession { request_id: "new".into(), role: ROLE.into() }).unwrap()
+            };
+            let prepared = match order {
+                0 => {
+                    new_session();
+                    send("next");
+                    prepare(&instance, &projects).await.unwrap()
+                }
+                1 => {
+                    let p = prepare(&instance, &projects).await.unwrap();
+                    new_session();
+                    send("next");
+                    p
+                }
+                2 => {
+                    new_session();
+                    let p = prepare(&instance, &projects).await.unwrap();
+                    send("next");
+                    p
+                }
+                3 => {
+                    send("before rotation");
+                    let p = prepare(&instance, &projects).await.unwrap();
+                    new_session();
+                    send("next");
+                    p
+                }
+                _ => unreachable!(),
+            };
+            let mut turn = register_prepared(&instance, prepared).await.unwrap();
+            if order != 0 {
+                assert!(turn.is_none(), "old preparation must not register a turn, order={order}");
+                assert!(!db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty());
+                // The next wake reads the new state, rather than replaying stale preparation.
+                turn = register_prepared(&instance, prepare(&instance, &projects).await.unwrap()).await.unwrap();
+            }
+            let turn = db.read(|c| load_turn(c, &turn.unwrap().turn_id)).unwrap();
+            assert!(
+                turn.input.contains("## 你的记录") && turn.input.contains("remember me"),
+                "order={order}: {}",
+                turn.input
+            );
+            assert!(turn.input.contains("next"));
+            if order != 0 {
+                continue;
+            }
+            db.execute(&Caller::Runtime, &SessionIdentified { turn_id: turn.id.clone(), native_id: "new".into() })
+                .unwrap();
+            db.execute(&Caller::Runtime, &EndTurn { turn_id: turn.id, outcome: Outcome::Completed, failure: None })
+                .unwrap();
+            send("later in the same session");
+            let later =
+                register_prepared(&instance, prepare(&instance, &projects).await.unwrap()).await.unwrap().unwrap();
+            assert!(!db.read(|c| load_turn(c, &later.turn_id)).unwrap().input.contains("## 你的记录"));
+        }
     }
 }
