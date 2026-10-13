@@ -1,9 +1,12 @@
-// Not a test: captures the main states for review. Run with `npx playwright test screenshots`.
+// Not a test: captures the main states for review. Set SCREENSHOT_DIR and run
+// `npx playwright test screenshots` to enable the captures.
 
 import { expect, open as connect, taskPanel, test, type Backend } from './fixtures';
 import type { Page } from '@playwright/test';
 
 const out = process.env.SCREENSHOT_DIR ?? 'test-results/screenshots';
+// Decide before Playwright sets up the browser and the real backend fixtures.
+test.skip(!process.env.SCREENSHOT_DIR, 'review only');
 
 async function open(page: Page, backend: Backend) {
   await page.setViewportSize({ width: 1400, height: 860 });
@@ -12,7 +15,6 @@ async function open(page: Page, backend: Backend) {
 
 // A Codex that does not allow full access, and the settings (harness-adapter.md §1.9).
 test('screenshots of a managed Codex', async ({ page, backend }) => {
-  test.skip(!process.env.SCREENSHOT_DIR, 'review only');
   await open(page, backend);
   await page.getByRole('button', { name: '+ 新任务' }).click();
   const dialog = page.getByRole('dialog', { name: '新任务' });
@@ -40,7 +42,6 @@ test('screenshots of a managed Codex', async ({ page, backend }) => {
 });
 
 test('screenshots', async ({ page, backend }) => {
-  test.skip(!process.env.SCREENSHOT_DIR, 'review only');
   await open(page, backend);
   for (const [title, body] of [
     ['写 work.txt', 'FAKE:done'],
