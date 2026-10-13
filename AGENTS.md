@@ -37,7 +37,7 @@
 
 ### 流程
 
-全套测试很慢，主要时间花在等待进程和 I/O 上。所以本地只运行受改动影响的测试。推送到 main 后，CI 在 Windows 和 Ubuntu 上运行全套：格式、后端测试、Clippy（默认构建与 `ts-rs` 构建各一次）、GUI 类型的漂移检查（`npm run api:check`）、前端类型检查与单元测试、构建、e2e。
+全套测试很慢，主要时间花在等待进程和 I/O 上。所以本地只运行受改动影响的测试。推送到 main 后，CI 在 Windows 和 Ubuntu 上运行全套：格式（`cargo fmt` 与前端 Prettier）、后端测试、Clippy（默认构建与 `ts-rs` 构建各一次）、GUI 类型的漂移检查（`npm run api:check`）、前端 lint、类型检查与单元测试、构建、e2e。
 
 1. 本地运行下表中受影响的测试。
 2. 自己的改动通过后直接推送到 main，不开 PR，也不等 PR 的 CI。合进 main 后，CI 会把同样的测试再跑一遍。
@@ -57,14 +57,15 @@ agent 负责验收并合并这些修复 PR：看改动是否只修了失败的�
 | `backend/crates/lobotomyd/src/launch.rs`（子进程的环境） | `cargo test -p lobotomyd --test environment` |
 | `backend/crates/lobotomyd/src/gui` | `cargo test -p lobotomyd --test gui` |
 | 发给 GUI 的 Rust 类型：带 ts-rs 派生的结构，在 core、store 与 lobotomyd 中，例如 `core::view`、`lobotomyd/src/gui` | 在 `frontend/` 运行 `npm run api:generate`，提交生成的 `src/api/generated.ts`；再运行 `npm run api:check` |
-| `frontend/src` | `npm run typecheck` 和 `npm test`；改了界面行为时，加上相关的 e2e：`npx playwright test -g "<标题片段>"` |
+| `frontend/src` | `npm run lint`、`npm run typecheck` 和 `npm test`；改了界面行为时，加上相关的 e2e：`npx playwright test -g "<标题片段>"` |
 | 对话列表的滚动与分页 | 再加上 CPU 降速的滚动测试：`npx playwright test -g "slow machine"` |
-| `frontend/electron` | `npx playwright test e2e/electron.spec.ts` |
+| `frontend/electron` | `npm run lint` 和 `npx playwright test e2e/electron.spec.ts` |
 | 只改 `notes/`、注释或文档 | 不运行测试 |
 
 - 改动跨多个 crate，或改了 core 中运行时依赖的命令时，加上 `lobotomyd` 中相关路径的测试。
 - 改了共用的测试工具时，本地只运行用到改动部分的测试，整套交给 CI。共用的测试工具包括：假 CLI（`tests/fixtures/fake-*.mjs`）、`tests/common`、`e2e/fixtures.ts`、`e2e/mocked.ts`。
 - e2e 使用 debug 版后端。改了后端之后，先运行 `cargo build -p lobotomyd`，再运行 e2e。
 - 改了 Rust 代码后，提交前运行 `cargo fmt`，以及受影响 crate 的 `cargo clippy -p <crate> --all-targets -- -D warnings`。
+- 改了 `frontend/` 中的代码后，提交前在 `frontend/` 运行 `npm run format`。它不改 `src/api/generated.ts`；这个文件只由 `npm run api:generate` 生成。
 - 默认忽略的真实 CLI 测试会消耗订阅额度。只在改了 adapter 的参数、事件解析或 MCP 接口时运行，例如 `cargo test -p lobotomyd --test backend a_real_claude -- --ignored`。MCP 契约测试在 `--test mcp_contract` 中，也默认忽略。
 - 性能基线（`npm run bench`）每次推送到 main 时由 CI 运行，只记录，不设门槛。本地不运行；改了渲染或流式更新时，看 CI 的 bench 摘要。
