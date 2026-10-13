@@ -512,6 +512,8 @@ export function attentionSummary(a: Attention): string {
       return quotaNote(a.domain);
     case 'job_failed':
       return `运行时的工作出错：${a.key}`;
+    case 'display_changed':
+      return a.display.busy ? '正在接入展示分支' : '展示分支变化待处理';
     case 'preview_stopped':
       return `预览已停止：${a.reason}`;
     case 'question':
@@ -542,6 +544,8 @@ export function attentionKey(a: Attention): string {
       return `quota:${a.domain.harness}`;
     case 'job_failed':
       return `job:${a.key}`;
+    case 'display_changed':
+      return 'display';
     case 'preview_stopped':
       return 'preview';
     case 'question':

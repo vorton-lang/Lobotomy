@@ -403,6 +403,12 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
         None => None,
     };
     let (task, attempt) = current_work(cx.tx, role)?;
+    if crate::project::load_project(cx.tx)?.is_some() {
+        crate::display::require_no_adoption(cx.tx)?;
+        if task.is_none() {
+            crate::display::require_current(cx.tx)?;
+        }
+    }
     if let Some(task) = &task {
         // Outside execution, messages to the executor wait (data-model.md §4.2).
         if task.phase != Phase::Executing {

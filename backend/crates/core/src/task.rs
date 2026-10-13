@@ -1046,6 +1046,7 @@ impl Command for StartAttempt {
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<AttemptStarted> {
         caller.require_runtime()?;
+        crate::display::require_current(cx.tx)?;
         let task = load_task(cx.tx, &self.task_id)?;
         if task.phase != Phase::Queued {
             return Err(Error::rejected("not_queued", format!("task {} is {}", task.id, task.phase.as_str())));

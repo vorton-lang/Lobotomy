@@ -21,6 +21,8 @@ pub struct Project {
     pub jobs: Mutex<HashMap<String, AbortHandle>>,
     /// Store work that failed, by key, with the reason. It waits for the user's retry.
     pub failed: Mutex<HashMap<String, String>>,
+    /// Serializes observation/adoption admission with scheduling and preview writes (#67).
+    pub activity: tokio::sync::Mutex<()>,
     /// The verification site is one directory: a verification holds this from writing it until
     /// the processes of its last check have ended (#12).
     pub verify_site: tokio::sync::Mutex<()>,
@@ -52,6 +54,7 @@ impl Project {
             store: Arc::new(store),
             jobs: Mutex::new(HashMap::new()),
             failed: Mutex::new(HashMap::new()),
+            activity: tokio::sync::Mutex::new(()),
             verify_site: tokio::sync::Mutex::new(()),
             instance: Arc::new(instance),
         })
@@ -62,7 +65,7 @@ impl Project {
     /// (data-model.md §5).
     pub fn stop_checks(&self) {
         for (key, job) in self.jobs.lock().unwrap().iter() {
-            if key.starts_with("verify:") {
+            if key.starts_with("verify:") || key.starts_with("adopt:") {
                 job.abort();
             }
         }

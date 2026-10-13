@@ -54,9 +54,15 @@ pub async fn run(project: Arc<Project>, shutdown: CancellationToken) {
 }
 
 async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
+    let _gate = project.activity.lock().await;
     reconcile(project).await?;
     // Nothing runs before a repository is connected: there is no integration version to work on.
     if db(project, |db| db.read(load_project)).await?.is_none() {
+        return Ok(());
+    }
+    crate::display::observe(project).await?;
+    if let Some(a) = db(project, |db| db.read(lobotomy_core::display::pending)).await? {
+        spawn_job(project, format!("adopt:{}", a.id), crate::display::adopt(project.clone(), a.id));
         return Ok(());
     }
     store_work(project).await?;
@@ -72,7 +78,13 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
             db(project, move |db| db.read(|c| Ok((occupant(c, &name)?.is_some(), next_queued_task(c, &name)?))))
                 .await?;
         if !busy && let Some(task) = next {
+            let current = db(project, |db| db.read(lobotomy_core::display::require_current)).await;
+            if ignore_rejection(current)?.is_none() {
+                continue;
+            }
             let code_start = results::code_start(project, &task.id).await?;
+            // Composing a reopened task can take time; check after it, immediately before start.
+            crate::display::observe(project).await?;
             ignore_rejection(runtime(project, StartAttempt { task_id: task.id, code_start }).await)?;
         }
         // Without a task the slot follows the integration version (harness-adapter.md §3).

@@ -111,6 +111,16 @@ fn waiting_line(attention: &Attention) -> WaitingLine {
         Attention::Accept { task_id, title, .. } => line("accept", None, Some(task_id), title.clone()),
         Attention::Quota { domain } => line("quota", None, None, domain.harness.clone()),
         Attention::JobFailed { key, reason } => line("job_failed", None, None, format!("{key}：{reason}")),
+        Attention::DisplayChanged { display } => line(
+            "display_changed",
+            None,
+            None,
+            match &display.state {
+                crate::display::DisplayState::Changed { commit } => format!("展示分支的提交 {commit} 等待显式接入"),
+                crate::display::DisplayState::Blocked { reason } => reason.clone(),
+                _ => "正在检查展示分支".into(),
+            },
+        ),
         Attention::PreviewStopped { reason } => line("preview_stopped", None, None, reason.clone()),
         Attention::Question { question, .. } => line("question_to_user", None, None, question.clone()),
     }
@@ -648,6 +658,7 @@ mod tests {
             config: None,
             roles: Vec::new(),
             tasks,
+            display: None,
             preview_stopped: None,
             questions: vec![],
         };

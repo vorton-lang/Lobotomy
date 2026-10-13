@@ -42,6 +42,9 @@ pub struct Overview {
     pub seq: i64,
     pub project: Option<Project>,
     pub config: Option<ConfigView>,
+    /// Display observation and adoption progress appear as an attention entry.
+    #[serde(skip)]
+    pub display: Option<crate::display::DisplayView>,
     pub roles: Vec<RoleView>,
     pub tasks: Vec<TaskView>,
     /// Why the preview stopped, if it did. The GUI sees it as an attention entry.
@@ -147,7 +150,8 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
     }
     let preview_stopped = if project.is_some() { preview_stopped(conn)? } else { None };
     let questions = open.into_iter().filter(|q| q.task_id.is_none() && !has_reply(q)).collect();
-    Ok(Overview { seq, project, config, roles, tasks, preview_stopped, questions })
+    let display = if project.is_some() { Some(crate::display::view(conn)?) } else { None };
+    Ok(Overview { seq, project, config, display, roles, tasks, preview_stopped, questions })
 }
 
 /// The role's task is executing, yet nothing will move it on without the user: the last turn of
@@ -240,6 +244,9 @@ pub enum Attention {
         key: String,
         reason: String,
     },
+    DisplayChanged {
+        display: crate::display::DisplayView,
+    },
     PreviewStopped {
         reason: String,
     },
@@ -308,6 +315,11 @@ pub fn attention(
     }
     out.extend(quota.iter().filter(|d| d.is_blocked()).map(|d| Attention::Quota { domain: d.clone() }));
     out.extend(failed.iter().map(|(key, reason)| Attention::JobFailed { key: key.clone(), reason: reason.clone() }));
+    if let Some(display) = &overview.display
+        && (display.state != crate::display::DisplayState::Current || display.busy)
+    {
+        out.push(Attention::DisplayChanged { display: display.clone() });
+    }
     if let Some(reason) = &overview.preview_stopped {
         out.push(Attention::PreviewStopped { reason: reason.clone() });
     }

@@ -4,6 +4,7 @@
 
 pub mod angela;
 pub mod capability;
+pub mod display;
 pub mod gui;
 pub mod host;
 pub mod instance;

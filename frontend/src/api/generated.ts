@@ -12,6 +12,8 @@ dropping: Array<string>, };
 
 export type Action = "read_only" | "edit_docs" | "edit_code";
 
+export type AdoptDisplay = { request_id: string, target: string, expected_rev: number, };
+
 export type AdoptOutsideChanges = { request_id: string, capture_id: string, title: string, body: string, criteria: string, };
 
 export type AngelaStatus = {
@@ -104,7 +106,7 @@ conflicts: Array<string>, };
 
 export type AttemptEnd = "candidate" | "abandoned";
 
-export type Attention = { "kind": "hold", role: string, hold: Hold, } | { "kind": "outside_changes", role: string, capture: Capture, } | { "kind": "unknown_turn", role: string, turn_id: string, } | { "kind": "task_blocked", task_id: string, title: string, reason: string, } | { "kind": "stalled", role: string, task_id: string, title: string, turn_id: string, report_error: string | null, } | { "kind": "accept", task_id: string, title: string, verification_id: string, } | { "kind": "quota", domain: Domain, } | { "kind": "job_failed", key: string, reason: string, } | { "kind": "preview_stopped", reason: string, } | { "kind": "question", id: string, question: string, asked_at: number, };
+export type Attention = { "kind": "hold", role: string, hold: Hold, } | { "kind": "outside_changes", role: string, capture: Capture, } | { "kind": "unknown_turn", role: string, turn_id: string, } | { "kind": "task_blocked", task_id: string, title: string, reason: string, } | { "kind": "stalled", role: string, task_id: string, title: string, turn_id: string, report_error: string | null, } | { "kind": "accept", task_id: string, title: string, verification_id: string, } | { "kind": "quota", domain: Domain, } | { "kind": "job_failed", key: string, reason: string, } | { "kind": "display_changed", display: DisplayView, } | { "kind": "preview_stopped", reason: string, } | { "kind": "question", id: string, question: string, asked_at: number, };
 
 export type BlobParams = { hash: string, };
 
@@ -177,6 +179,10 @@ export type DiscardOutsideChanges = { request_id: string, capture_id: string, };
 export type DiscardUncaptured = { request_id: string, capture_id: string, };
 
 export type DiskUsage = { raw_output: RawOutput, };
+
+export type DisplayState = { "kind": "unchecked" } | { "kind": "current" } | { "kind": "changed", commit: string, } | { "kind": "blocked", reason: string, };
+
+export type DisplayView = { state: DisplayState, expected_rev: number, busy: boolean, unavailable: string | null, error: string | null, };
 
 export type Domain = { harness: string, account: string,
 /**
@@ -667,6 +673,7 @@ export type ReadMethods = {
 export type Commands = {
   abandon: { params: Abandon; result: null };
   accept: { params: Accept; result: string };
+  adopt_display: { params: AdoptDisplay; result: string };
   adopt_outside_changes: { params: AdoptOutsideChanges; result: Created };
   approve_new_files: { params: ApproveNewFiles; result: null };
   archive_project: { params: ProjectParams; result: null };

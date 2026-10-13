@@ -252,7 +252,7 @@ async fn still_verifying(project: &Arc<Project>, verification_id: &str) -> anyho
 /// Runs one check command in the verification site, with the same environment trimming as a
 /// role (harness-adapter.md §1.6). A check that runs past its timeout is ended with everything it
 /// started.
-async fn run_check(project: &Arc<Project>, check: &Check, cwd: &Path) -> anyhow::Result<CheckOutcome> {
+pub(crate) async fn run_check(project: &Arc<Project>, check: &Check, cwd: &Path) -> anyhow::Result<CheckOutcome> {
     let started = Instant::now();
     let mut spawned = launch::spawn(launch::What::Shell(&check.command), cwd, &project.empty_gh_config_dir()).await?;
     let io = launch::run(&mut spawned, b"", read_capped).await?;
@@ -306,6 +306,19 @@ async fn read_capped(mut stream: impl AsyncRead + Unpin) -> String {
 /// Brings the user's repository to the latest integration version, if it is as the last preview
 /// left it (harness-adapter.md §4.3).
 pub async fn preview(project: Arc<Project>, job: PreviewJob) -> anyhow::Result<()> {
+    let _gate = project.activity.lock().await;
+    let id = job.outbox_id.clone();
+    let pending = db(&project, move |db| {
+        db.read(|c| {
+            let pending: bool =
+                c.query_row("SELECT state = 'pending' FROM outbox WHERE id = ?1", [id], |r| r.get(0))?;
+            Ok(pending && lobotomy_core::display::pending(c)?.is_none())
+        })
+    })
+    .await?;
+    if !pending {
+        return Ok(());
+    }
     let p = project.clone();
     let j = job.clone();
     let written =

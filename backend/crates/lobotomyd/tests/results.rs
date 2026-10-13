@@ -154,3 +154,61 @@ if (original === 'candidate A') {{
     let v = db.read(|c| latest_verification(c, &b)).unwrap().unwrap();
     assert_eq!(v.state, VerificationState::Passed, "A's late write did not reach B's check");
 }
+
+/// #67: acceptance still stops a diverged preview. Explicit adoption replaces the entire
+/// baseline with the external tree and makes even a previously loaded preview job harmless.
+#[tokio::test]
+async fn external_display_adoption_preserves_acceptance_and_supersedes_old_preview() {
+    use lobotomy_core::display::{self, AdoptDisplay};
+    use lobotomy_core::project::require_project;
+    use lobotomy_core::verify::{Accept, next_preview, preview_stopped};
+    let dir = tempfile::tempdir().unwrap();
+    let project = open_project(dir.path(), fake_codex()).await;
+    let db = &project.db;
+    let initial = db.read(require_project).unwrap();
+    let task = create_task(&project, "internal change");
+    start_attempt(&project, &task).await;
+    make_candidate(&project, "internal only").await;
+    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
+    results::verify(project.clone(), v.clone()).await.unwrap();
+    // The display branch has an independent commit before worker acceptance.
+    let repo = user_repo(dir.path());
+    std::fs::write(repo.join("external.txt"), "external only").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "external"]);
+    let external = git(&repo, &["rev-parse", "HEAD"]);
+    db.execute(
+        &Caller::User,
+        &Accept {
+            request_id: "accept".into(),
+            task_id: task.clone(),
+            verification_id: v,
+            criteria_version: 1,
+            expected_integration: initial.integration,
+            dropping: vec![],
+        },
+    )
+    .unwrap();
+    let internal = db.read(require_project).unwrap().integration;
+    let job = db.read(next_preview).unwrap().unwrap();
+    results::preview(project.clone(), job.clone()).await.unwrap();
+    assert!(db.read(preview_stopped).unwrap().is_some());
+    assert_eq!(db.read(require_project).unwrap().integration, internal);
+    let a = lobotomyd::display::begin(
+        &project,
+        AdoptDisplay { request_id: "adopt".into(), target: external.clone(), expected_rev: 2 },
+    )
+    .await
+    .unwrap();
+    lobotomyd::display::adopt(project.clone(), a.clone()).await.unwrap();
+    assert_eq!(db.read(|c| display::load(c, &a)).unwrap().state, "applied");
+    assert_eq!(project.store.pinned(&format!("{a}-previous")).unwrap(), Some(internal));
+    results::preview(project.clone(), job).await.unwrap();
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), external);
+    assert!(!repo.join("work.txt").exists(), "the internal change is not overlaid");
+    assert_eq!(db.read(|c| lobotomy_core::task::load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Done);
+    let next = create_task(&project, "after adoption");
+    start_attempt(&project, &next).await;
+    assert!(project.slot_dir("worker").join("external.txt").exists());
+    assert!(!project.slot_dir("worker").join("work.txt").exists());
+}

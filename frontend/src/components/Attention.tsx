@@ -80,17 +80,58 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
           <Reply role="Angela" taskId={null} placeholder="回复 Angela" />
         </div>
       );
+    case 'display_changed':
+      return <DisplayCard display={a.display} />;
     case 'preview_stopped':
       return (
         <div className="card warn">
           <p>预览已停止：{a.reason}</p>
-          <p className="muted">把仓库恢复到上次预览的状态后重试。Lobotomy 不会覆盖你的文件。</p>
+          <p className="muted">可恢复到上次预览状态后重试，也可在内部保存点接入已提交的展示分支。</p>
           <div className="actions">
             <button onClick={() => run('retry_preview', {})}>重试预览</button>
           </div>
         </div>
       );
   }
+}
+
+function DisplayCard({ display }: { display: Extract<Attention, { kind: 'display_changed' }>['display'] }) {
+  const { submit, busy } = useCommand('adopt_display');
+  const state = display.state;
+  return (
+    <div className="card warn">
+      {display.busy ? (
+        <p>正在检查并接入展示分支，暂不启动新任务。</p>
+      ) : state.kind === 'changed' ? (
+        <>
+          <p>
+            展示分支有外部提交：<code>{state.commit}</code>
+          </p>
+          <p>接入将采用这个提交的完整代码状态作为后续任务的基线。旧任务与成果记录仍保留。</p>
+        </>
+      ) : state.kind === 'blocked' ? (
+        <p>{state.reason}</p>
+      ) : state.kind === 'unchecked' ? (
+        <p>正在检查展示分支。</p>
+      ) : (
+        <p>展示分支已回到上次预览状态。</p>
+      )}
+      {display.error && <p className="muted failure">上次接入未成功：{display.error}</p>}
+      {!display.busy && display.unavailable && <p className="muted">{display.unavailable}</p>}
+      {state.kind !== 'current' && <p className="muted">可以创建或重开排队任务；处理展示分支变化后开始执行。</p>}
+      {state.kind === 'changed' && (
+        <div className="actions">
+          <button
+            className="primary"
+            disabled={busy || display.busy || !!display.unavailable}
+            onClick={() => submit({ target: state.commit, expected_rev: display.expected_rev })}
+          >
+            接入
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Paths a card lists: the first dozen, then how many there are. */
