@@ -9,22 +9,19 @@ use lobotomy_core::verify::{Accept, FinishPreview, PreviewResult, next_preview};
 use lobotomy_core::{Caller, Db};
 
 fn changed(db: &Db, target: &str) {
-    let p = db.read(require_project).unwrap();
-    db.execute(
-        &Caller::Runtime,
-        &ObserveDisplay { previewed: p.previewed, state: DisplayState::Changed { commit: target.into() } },
-    )
-    .unwrap();
+    db.execute(&Caller::Runtime, &ObserveDisplay { state: DisplayState::Changed { commit: target.into() } }).unwrap();
 }
 fn cmd(db: &Db) -> AdoptDisplay {
     AdoptDisplay {
         request_id: "adopt".into(),
+        acknowledged: vec![],
         target: "external".into(),
         expected_rev: db.read(require_project).unwrap().integration_rev,
     }
 }
 fn finish(db: &Db, id: &str) {
-    db.execute(&Caller::Runtime, &FinishAdoption { id: id.into(), checks: vec![], error: None }).unwrap();
+    db.execute(&Caller::Runtime, &FinishAdoption { id: id.into(), checks: vec![], blobs: vec![], error: None })
+        .unwrap();
 }
 
 #[test]
@@ -140,13 +137,19 @@ fn adoption_supersedes_previews_and_preserves_accepted_task_history() {
     .unwrap();
     let old_preview = db.read(next_preview).unwrap().unwrap();
     changed(&db, "external");
-    let id = db.execute(&Caller::User, &cmd(&db)).unwrap();
+    let request = cmd(&db);
+    assert_eq!(rejection(db.execute(&Caller::User, &request)), "unpreviewed_publications");
+    let unseen = db.read(view).unwrap().unpreviewed;
+    assert_eq!(unseen.len(), 1);
+    assert_eq!((unseen[0].task_id.as_str(), unseen[0].commit.as_str()), (task.as_str(), "internal"));
+    let id = db.execute(&Caller::User, &AdoptDisplay { acknowledged: vec!["internal".into()], ..request }).unwrap();
     assert_eq!(
         rejection(db.execute(&Caller::Runtime, &lobotomy_core::workspace::AlignIdleSlot { role: ROLE.into() })),
         "adoption_pending"
     );
     finish(&db, &id);
     assert!(db.read(next_preview).unwrap().is_none());
+    assert!(db.read(view).unwrap().unpreviewed.is_empty());
     assert_eq!(
         rejection(db.execute(
             &Caller::Runtime,
@@ -164,7 +167,7 @@ fn adoption_supersedes_previews_and_preserves_accepted_task_history() {
 }
 
 #[test]
-fn saved_taskless_changes_block_adoption_before_and_after_queueing() {
+fn taskless_changes_block_adoption_until_the_user_decides() {
     use lobotomy_core::capture::{CaptureResult, FinishCapture, pending_captures};
     let db = db();
     idle_slot(&db);
@@ -193,37 +196,74 @@ fn saved_taskless_changes_block_adoption_before_and_after_queueing() {
         },
     )
     .unwrap();
-    assert_eq!(rejection(db.execute(&Caller::User, &cmd(&db))), "not_at_savepoint");
-    assert!(db.read(view).unwrap().unavailable.unwrap().contains("继续任务外改动"));
+    let id = db.execute(&Caller::User, &cmd(&db)).unwrap();
+    finish(&db, &id);
+    assert_eq!(db.read(require_project).unwrap().integration, "external");
 }
 
 #[test]
-fn reopening_a_saved_candidate_blocks_admission_and_an_inflight_adoption() {
+fn queued_candidates_do_not_block_admission_or_final_cas() {
     let db = db();
     let (task, candidate) = candidate(&db);
     db.execute(
         &Caller::User,
-        &Abandon { request_id: "close".into(), task_id: task.clone(), reason: "keep as history".into() },
+        &Abandon { request_id: "close".into(), task_id: task.clone(), reason: "keep history".into() },
     )
     .unwrap();
     changed(&db, "external");
-    // Closed history does not block admission, but reopening it during checks invalidates CAS.
-    let id = db.execute(&Caller::User, &cmd(&db)).unwrap();
     db.execute(&Caller::User, &Reopen { request_id: "reopen".into(), task_id: task.clone() }).unwrap();
+    let id = db.execute(&Caller::User, &cmd(&db)).unwrap();
     finish(&db, &id);
-    let failed = db.read(|c| load(c, &id)).unwrap();
-    assert_eq!(failed.state, "failed");
-    assert_eq!(failed.error, db.read(view).unwrap().unavailable);
-    assert_eq!(db.read(require_project).unwrap().integration, BASE);
-    let retry = AdoptDisplay { request_id: "retry".into(), ..cmd(&db) };
-    assert_eq!(rejection(db.execute(&Caller::User, &retry)), "not_at_savepoint");
+    assert_eq!(db.read(|c| load(c, &id)).unwrap().state, "applied");
+    assert_eq!(db.read(require_project).unwrap().integration, "external");
     assert_eq!(db.read(|c| lobotomy_core::verify::work_so_far(c, &task)).unwrap(), Some(candidate));
+}
+
+#[test]
+fn adoption_errors_follow_the_observed_target() {
+    let db = db();
+    changed(&db, "external");
+    let id = db.execute(&Caller::User, &cmd(&db)).unwrap();
     db.execute(
-        &Caller::User,
-        &Abandon { request_id: "close-again".into(), task_id: task, reason: "leave it closed".into() },
+        &Caller::Runtime,
+        &FinishAdoption { id, checks: vec![], blobs: vec![], error: Some("target failed".into()) },
     )
     .unwrap();
-    let id = db.execute(&Caller::User, &retry).unwrap();
+    assert_eq!(db.read(view).unwrap().error.as_deref(), Some("target failed"));
+    changed(&db, "next");
+    assert!(db.read(view).unwrap().error.is_none());
+    changed(&db, "external");
+    assert_eq!(db.read(view).unwrap().error.as_deref(), Some("target failed"));
+    db.execute(&Caller::Runtime, &ObserveDisplay { state: DisplayState::Current }).unwrap();
+    assert!(db.read(view).unwrap().error.is_none());
+}
+
+#[test]
+fn a_preview_receipt_invalidates_an_old_unpreviewed_confirmation() {
+    let db = db();
+    let (task, _) = candidate(&db);
+    let v = verify(&db, &task, "internal", vec![], vec![]);
+    db.execute(
+        &Caller::User,
+        &Accept {
+            request_id: "accept".into(),
+            task_id: task,
+            verification_id: v,
+            expected_integration: BASE.into(),
+            criteria_version: 1,
+            dropping: vec![],
+        },
+    )
+    .unwrap();
+    let old_preview = db.read(next_preview).unwrap().unwrap();
+    changed(&db, "external");
+    let confirmed = AdoptDisplay { acknowledged: vec!["internal".into()], ..cmd(&db) };
+    db.execute(&Caller::Runtime, &FinishPreview { outbox_id: old_preview.outbox_id, result: PreviewResult::Written })
+        .unwrap();
+    changed(&db, "external");
+    assert!(db.read(view).unwrap().unpreviewed.is_empty());
+    assert_eq!(rejection(db.execute(&Caller::User, &confirmed)), "unpreviewed_publications");
+    let id = db.execute(&Caller::User, &AdoptDisplay { acknowledged: vec![], ..confirmed }).unwrap();
     finish(&db, &id);
     assert_eq!(db.read(require_project).unwrap().integration, "external");
 }

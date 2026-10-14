@@ -494,3 +494,20 @@ fn the_preview_stops_when_the_user_changed_the_repository() {
     let diverged = repo::fast_forward(&f.user_repo, &f.store, "main", &f.head, &target).unwrap();
     assert!(matches!(diverged, Some(Diverged::Branch { .. })));
 }
+
+#[test]
+fn inspecting_the_display_does_not_refresh_the_users_index() {
+    let f = fixture();
+    let index = f.user_repo.join(".git/index");
+    let before = fs::read(&index).unwrap();
+    // The content is unchanged but its cached stat data is stale: ordinary status can refresh it.
+    let tracked = f.user_repo.join("src/lib.rs");
+    fs::write(&tracked, fs::read(&tracked).unwrap()).unwrap();
+    let state = repo::inspect(&f.user_repo).unwrap();
+    assert!(state.dirty.is_empty());
+    assert_eq!(state.head.as_deref(), Some(f.head.as_str()));
+    assert_eq!(fs::read(&index).unwrap(), before);
+    // A user commit can own the index lock while the background observation reads the repository.
+    fs::write(f.user_repo.join(".git/index.lock"), "user owns this lock").unwrap();
+    assert_eq!(repo::inspect(&f.user_repo).unwrap(), state);
+}

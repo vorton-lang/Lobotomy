@@ -14,7 +14,7 @@ export function NewTask({
   onClose: () => void;
 }) {
   const display = useStore((s) => s.snapshot?.attention.find((a) => a.kind === 'display_changed')?.display);
-  const waiting = !!display && (display.state.kind !== 'current' || display.busy);
+  const waiting = !!display?.start_blocked;
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [criteria, setCriteria] = useState('');

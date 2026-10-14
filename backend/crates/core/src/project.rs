@@ -151,8 +151,8 @@ impl Command for Onboard {
             params![serde_json::to_string(&ProjectConfig::default())?, caller.scope(), cx.now],
         )?;
         cx.tx.execute(
-            "INSERT INTO display_observation VALUES (1, ?1, ?2)",
-            params![self.head, serde_json::to_string(&crate::display::DisplayState::Current)?],
+            "INSERT INTO display_observation VALUES (1, ?1)",
+            params![serde_json::to_string(&crate::display::DisplayState::Current)?],
         )?;
         cx.emit(
             "project.onboarded",

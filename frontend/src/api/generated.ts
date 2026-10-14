@@ -12,7 +12,11 @@ dropping: Array<string>, };
 
 export type Action = "read_only" | "edit_docs" | "edit_code";
 
-export type AdoptDisplay = { request_id: string, target: string, expected_rev: number, };
+export type AdoptDisplay = { request_id: string, target: string, expected_rev: number,
+/**
+ * Unpreviewed publication commits the user confirmed will leave the integration baseline.
+ */
+acknowledged: Array<string>, };
 
 export type AdoptOutsideChanges = { request_id: string, capture_id: string, title: string, body: string, criteria: string, };
 
@@ -180,9 +184,9 @@ export type DiscardUncaptured = { request_id: string, capture_id: string, };
 
 export type DiskUsage = { raw_output: RawOutput, };
 
-export type DisplayState = { "kind": "unchecked" } | { "kind": "current" } | { "kind": "changed", commit: string, } | { "kind": "blocked", reason: string, };
+export type DisplayState = { "kind": "current" } | { "kind": "changed", commit: string, } | { "kind": "blocked", commit: string | null, reason: string, };
 
-export type DisplayView = { state: DisplayState, expected_rev: number, busy: boolean, unavailable: string | null, error: string | null, };
+export type DisplayView = { state: DisplayState, expected_rev: number, busy: boolean, start_blocked: boolean, unpreviewed: Array<UnpreviewedPublication>, unavailable: string | null, error: string | null, };
 
 export type Domain = { harness: string, account: string,
 /**
@@ -626,6 +630,8 @@ export type TurnParams = { turn_id: string, };
 export type TurnRegistered = { turn_id: string, };
 
 export type TurnState = "registered" | "running" | "ended" | "unknown";
+
+export type UnpreviewedPublication = { task_id: string, title: string, commit: string, };
 
 export type Verification = { id: string, task_id: string, attempt_id: string, capture_id: string,
 /**

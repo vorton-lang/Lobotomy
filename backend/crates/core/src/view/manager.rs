@@ -116,8 +116,8 @@ fn waiting_line(attention: &Attention) -> WaitingLine {
             None,
             None,
             match &display.state {
-                crate::display::DisplayState::Changed { commit } => format!("展示分支的提交 {commit} 等待显式接入"),
-                crate::display::DisplayState::Blocked { reason } => reason.clone(),
+                crate::display::DisplayState::Changed { commit } => format!("展示分支的提交 {commit} 等待显式采用"),
+                crate::display::DisplayState::Blocked { reason, .. } => reason.clone(),
                 _ => "正在检查展示分支".into(),
             },
         ),

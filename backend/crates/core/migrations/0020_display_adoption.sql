@@ -2,7 +2,6 @@
 -- not a worker publication. Old publication rows and all task evidence remain historical.
 CREATE TABLE display_observation (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  previewed TEXT NOT NULL,
   state TEXT NOT NULL
 ) STRICT;
 CREATE TABLE display_adoption (

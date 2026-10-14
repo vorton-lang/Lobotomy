@@ -162,9 +162,10 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: Comma
     if name == <lobotomy_core::display::AdoptDisplay as Command>::NAME {
         return Ok(serde_json::to_value(crate::display::begin(project, serde_json::from_value(args)?).await?)?);
     }
-    let _gate = project.activity.lock().await;
-    if name == "continue" || name == "new_native_session" {
+    if name == Continue::NAME || name == NewNativeSession::NAME {
+        let _gate = project.activity.lock().await;
         crate::display::observe(project).await?;
+        user_commands!(Continue, NewNativeSession);
     }
     project_commands!(user_commands);
     match name.as_str() {

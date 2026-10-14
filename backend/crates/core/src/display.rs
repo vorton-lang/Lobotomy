@@ -4,37 +4,41 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::item::{Blob, record_blobs};
 use crate::project::{current_config, require_project};
-use crate::task::{Phase, load_task};
-use crate::verify::{CheckOutcome, tasks_in_phase, work_so_far};
+use crate::verify::CheckOutcome;
 use crate::{Caller, Command, Cx, Error, Result};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum DisplayState {
-    Unchecked,
     Current,
     Changed { commit: String },
-    Blocked { reason: String },
+    Blocked { commit: Option<String>, reason: String },
+}
+
+impl DisplayState {
+    fn allows_start(&self, previewed: &str) -> bool {
+        match self {
+            Self::Current => true,
+            Self::Blocked { commit: Some(commit), .. } => commit == previewed,
+            _ => false,
+        }
+    }
 }
 
 pub fn observation(conn: &Connection) -> Result<DisplayState> {
-    let p = require_project(conn)?;
-    let row: Option<(String, String)> = conn
-        .query_row("SELECT previewed, state FROM display_observation WHERE singleton = 1", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
-        .optional()?;
-    match row {
-        Some((base, state)) if base == p.previewed => Ok(serde_json::from_str(&state)?),
-        _ => Ok(DisplayState::Unchecked),
+    let state: Option<String> =
+        conn.query_row("SELECT state FROM display_observation WHERE singleton = 1", [], |r| r.get(0)).optional()?;
+    match state {
+        Some(state) => Ok(serde_json::from_str(&state)?),
+        None => Ok(DisplayState::Current),
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ObserveDisplay {
-    pub previewed: String,
     pub state: DisplayState,
 }
 impl Command for ObserveDisplay {
@@ -42,14 +46,11 @@ impl Command for ObserveDisplay {
     type Output = ();
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
         caller.require_runtime()?;
-        if require_project(cx.tx)?.previewed != self.previewed {
-            return Err(Error::rejected("stale_display", "展示记录已变化，请重新检查"));
-        }
         let changed = observation(cx.tx)? != self.state;
         cx.tx.execute(
-            "INSERT INTO display_observation VALUES (1, ?1, ?2)
-             ON CONFLICT(singleton) DO UPDATE SET previewed = excluded.previewed, state = excluded.state",
-            params![self.previewed, serde_json::to_string(&self.state)?],
+            "INSERT INTO display_observation VALUES (1, ?1)
+             ON CONFLICT(singleton) DO UPDATE SET state = excluded.state",
+            params![serde_json::to_string(&self.state)?],
         )?;
         if changed {
             cx.emit("display.observed", "project", json!({ "state": self.state }))?;
@@ -89,13 +90,13 @@ pub fn load(conn: &Connection, id: &str) -> Result<Adoption> {
 
 pub fn require_no_adoption(conn: &Connection) -> Result<()> {
     if pending(conn)?.is_some() {
-        return Err(Error::rejected("adoption_pending", "正在接入展示分支，暂不启动新工作"));
+        return Err(Error::rejected("adoption_pending", "正在采用展示分支，暂不启动新工作"));
     }
     Ok(())
 }
 pub fn require_current(conn: &Connection) -> Result<()> {
     require_no_adoption(conn)?;
-    if observation(conn)? != DisplayState::Current {
+    if !observation(conn)?.allows_start(&require_project(conn)?.previewed) {
         return Err(Error::rejected("display_changed", "已排队，处理展示分支变化后开始"));
     }
     Ok(())
@@ -114,19 +115,6 @@ pub fn require_savepoint(conn: &Connection) -> Result<()> {
     )?;
     if busy {
         return Err(Error::rejected("not_at_savepoint", "等待执行者退出、采集保存及任务验收完成；暂停不等于保存点"));
-    }
-    // Use the same source as code_start: queued work can still carry a candidate or an origin
-    // capture. Closed tasks keep that history without scheduling it for replay.
-    for task in tasks_in_phase(conn, Phase::Queued)? {
-        if work_so_far(conn, &task)?.is_some() {
-            return Err(Error::rejected(
-                "not_at_savepoint",
-                format!(
-                    "排队任务「{}」仍携带候选成果或任务外改动，启动时会重放；接入前请先完成或放弃该任务，历史成果仍保留",
-                    load_task(conn, &task)?.title
-                ),
-            ));
-        }
     }
     for role in crate::role::list_roles(conn)? {
         match crate::workspace::require_slot_free(conn, &role.name, None) {
@@ -155,6 +143,8 @@ pub struct AdoptDisplay {
     pub request_id: String,
     pub target: String,
     pub expected_rev: i64,
+    /// Unpreviewed publication commits the user confirmed will leave the integration baseline.
+    pub acknowledged: Vec<String>,
 }
 impl Command for AdoptDisplay {
     const NAME: &'static str = "adopt_display";
@@ -170,7 +160,17 @@ impl Command for AdoptDisplay {
         if p.integration_rev != self.expected_rev
             || observation(cx.tx)? != (DisplayState::Changed { commit: self.target.clone() })
         {
-            return Err(Error::rejected("stale_display", "展示提交或内部版本已变化，请查看最新状态后接入"));
+            return Err(Error::rejected("stale_display", "展示提交或内部版本已变化，请查看最新状态后采用"));
+        }
+        let mut expected: Vec<_> = unpreviewed(cx.tx)?.into_iter().map(|p| p.commit).collect();
+        let mut acknowledged = self.acknowledged.clone();
+        expected.sort_unstable();
+        acknowledged.sort_unstable();
+        if expected != acknowledged {
+            return Err(Error::rejected(
+                "unpreviewed_publications",
+                "请确认尚未展示的已验收成果将退出集成版本；清单变化后需重新确认",
+            ));
         }
         let id = crate::id::new_id("adopt");
         cx.tx.execute(
@@ -187,6 +187,7 @@ impl Command for AdoptDisplay {
 pub struct FinishAdoption {
     pub id: String,
     pub checks: Vec<CheckOutcome>,
+    pub blobs: Vec<Blob>,
     pub error: Option<String>,
 }
 impl Command for FinishAdoption {
@@ -198,6 +199,7 @@ impl Command for FinishAdoption {
         if a.state != "pending" {
             return Ok(());
         }
+        record_blobs(cx.tx, &self.blobs, cx.now)?;
         let p = require_project(cx.tx)?;
         let (config_version, config) = current_config(cx.tx)?;
         let observed = observation(cx.tx)?;
@@ -209,9 +211,9 @@ impl Command for FinishAdoption {
         let error = self.error.clone().or_else(|| {
             if p.integration_rev != a.expected_rev || p.integration != a.previous || config_version != a.config_version
             {
-                Some("内部版本或检查配置已变化，请重新接入".into())
+                Some("内部版本或检查配置已变化，请重新采用".into())
             } else if observed != (DisplayState::Changed { commit: a.target.clone() }) {
-                Some("展示仓库已变化，请查看最新状态后接入".into())
+                Some("展示目录已变化，请查看最新状态后采用".into())
             } else if savepoint_error.is_some() {
                 savepoint_error
             } else if self.checks.len() != config.checks.len()
@@ -235,13 +237,33 @@ impl Command for FinishAdoption {
                 params![a.target,a.expected_rev])?;
             cx.tx.execute("UPDATE outbox SET state='superseded',done_at=?1 WHERE kind='preview' AND state IN ('pending','stopped')", [cx.now])?;
             cx.tx.execute(
-                "UPDATE display_observation SET previewed=?1,state=?2 WHERE singleton=1",
-                params![a.target, serde_json::to_string(&DisplayState::Current)?],
+                "UPDATE display_observation SET state=?1 WHERE singleton=1",
+                params![serde_json::to_string(&DisplayState::Current)?],
             )?;
         }
         cx.emit("display.adoption_finished", &a.id, json!({ "target": a.target, "state": state, "error": error }))?;
         Ok(())
     }
+}
+
+/// Accepted publications whose preview has not reached the display directory. Superseded
+/// previews are already covered by a later preview or an explicit adoption, so are historical.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+pub struct UnpreviewedPublication {
+    pub task_id: String,
+    pub title: String,
+    pub commit: String,
+}
+pub fn unpreviewed(conn: &Connection) -> Result<Vec<UnpreviewedPublication>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.task_id, t.title, p.commit_id FROM publication p JOIN task t ON t.id=p.task_id
+         WHERE EXISTS(SELECT 1 FROM outbox o WHERE o.kind='preview' AND o.state IN ('pending','stopped')
+           AND json_extract(o.payload, '$.target')=p.commit_id) ORDER BY p.rev",
+    )?;
+    Ok(stmt
+        .query_map([], |r| Ok(UnpreviewedPublication { task_id: r.get(0)?, title: r.get(1)?, commit: r.get(2)? }))?
+        .collect::<std::result::Result<_, _>>()?)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -250,23 +272,37 @@ pub struct DisplayView {
     pub state: DisplayState,
     pub expected_rev: i64,
     pub busy: bool,
+    pub start_blocked: bool,
+    pub unpreviewed: Vec<UnpreviewedPublication>,
     pub unavailable: Option<String>,
     pub error: Option<String>,
 }
 pub fn view(conn: &Connection) -> Result<DisplayView> {
-    let error: Option<String> = conn
-        .query_row("SELECT error FROM display_adoption ORDER BY rowid DESC LIMIT 1", [], |r| r.get(0))
-        .optional()?
-        .flatten();
+    let state = observation(conn)?;
+    let p = require_project(conn)?;
+    let busy = pending(conn)?.is_some();
+    let error = match &state {
+        DisplayState::Changed { commit } | DisplayState::Blocked { commit: Some(commit), .. } => conn
+            .query_row(
+                "SELECT error FROM display_adoption WHERE target=?1 ORDER BY rowid DESC LIMIT 1",
+                [commit],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten(),
+        _ => None,
+    };
     let unavailable = match require_savepoint(conn) {
         Ok(()) => None,
         Err(Error::Rejected { message, .. }) => Some(message),
         Err(e) => return Err(e),
     };
     Ok(DisplayView {
-        state: observation(conn)?,
-        expected_rev: require_project(conn)?.integration_rev,
-        busy: pending(conn)?.is_some(),
+        start_blocked: busy || !state.allows_start(&p.previewed),
+        state,
+        expected_rev: p.integration_rev,
+        busy,
+        unpreviewed: unpreviewed(conn)?,
         unavailable,
         error,
     })

@@ -221,11 +221,6 @@ impl Store {
         }
     }
 
-    /// Unresolved jj tree conflicts in a fixed imported commit.
-    pub fn conflicts(&self, commit: &str) -> Result<Vec<String>> {
-        Ok(conflicts(&self.commit(commit)?.tree()))
-    }
-
     /// Whether two commits have the same content.
     pub fn same_tree(&self, a: &str, b: &str) -> Result<bool> {
         Ok(self.commit(a)?.tree().tree_ids() == self.commit(b)?.tree().tree_ids())

@@ -37,6 +37,18 @@ pub async fn recover(project: &Arc<Project>) -> anyhow::Result<()> {
     if !unknown.is_empty() {
         tracing::info!(turns = ?unknown, "turns left unfinished by the last run are unknown until reconciled");
     }
+    if let Some(a) = db(project, |db| db.read(lobotomy_core::display::pending)).await? {
+        runtime(
+            project,
+            lobotomy_core::display::FinishAdoption {
+                id: a.id,
+                checks: vec![],
+                blobs: vec![],
+                error: Some("后端重启中断了采用；请查看当前状态后手动重新采用".into()),
+            },
+        )
+        .await?;
+    }
     results::sweep(project).await
 }
 
@@ -54,18 +66,20 @@ pub async fn run(project: Arc<Project>, shutdown: CancellationToken) {
 }
 
 async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
-    let _gate = project.activity.lock().await;
     reconcile(project).await?;
     // Nothing runs before a repository is connected: there is no integration version to work on.
     if db(project, |db| db.read(load_project)).await?.is_none() {
         return Ok(());
     }
-    crate::display::observe(project).await?;
-    if let Some(a) = db(project, |db| db.read(lobotomy_core::display::pending)).await? {
-        spawn_job(project, format!("adopt:{}", a.id), crate::display::adopt(project.clone(), a.id));
-        return Ok(());
+    {
+        let _gate = project.activity.lock().await;
+        crate::display::observe(project).await?;
+        if let Some(a) = db(project, |db| db.read(lobotomy_core::display::pending)).await? {
+            spawn_job(project, format!("adopt:{}", a.id), crate::display::adopt(project.clone(), a.id));
+            return Ok(());
+        }
+        store_work(project).await?;
     }
-    store_work(project).await?;
     let roles = db(project, |db| db.read(list_roles)).await?;
     for role in roles {
         // A blocked quota domain starts nothing new; running turns end on their own. Only the
@@ -84,9 +98,12 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
             }
             let code_start = results::code_start(project, &task.id).await?;
             // Composing a reopened task can take time; check after it, immediately before start.
+            let _gate = project.activity.lock().await;
             crate::display::observe(project).await?;
             ignore_rejection(runtime(project, StartAttempt { task_id: task.id, code_start }).await)?;
         }
+        let _gate = project.activity.lock().await;
+        crate::display::observe(project).await?;
         // Without a task the slot follows the integration version (harness-adapter.md §3).
         if role.slot.is_some() {
             ignore_rejection(runtime(project, AlignIdleSlot { role: role.name.clone() }).await)?;

@@ -21,7 +21,7 @@ pub struct Project {
     pub jobs: Mutex<HashMap<String, AbortHandle>>,
     /// Store work that failed, by key, with the reason. It waits for the user's retry.
     pub failed: Mutex<HashMap<String, String>>,
-    /// Serializes observation/adoption admission with scheduling and preview writes (#67).
+    /// Serializes observation/adoption admission with starts and job scheduling (#67).
     pub activity: tokio::sync::Mutex<()>,
     /// The verification site is one directory: a verification holds this from writing it until
     /// the processes of its last check have ended (#12).
