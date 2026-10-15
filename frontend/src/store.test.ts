@@ -1,6 +1,16 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import type { ConnectionEvents } from './api/connection';
-import type { AngelaStatus, Attention, HostSnapshot, Snapshot } from './api/types';
+import type {
+  AngelaStatus,
+  Attention,
+  HostSnapshot,
+  Item,
+  Message,
+  RoleView,
+  Snapshot,
+  ThreadPage,
+  Turn,
+} from './api/types';
 
 interface Pending {
   method: string;
@@ -30,7 +40,17 @@ vi.mock('./api/connection', async (original) => ({
   },
 }));
 
-import { ANGELA, chooseProject, connect, scope, selectProject, run, totalAttention, useStore } from './store';
+import {
+  ANGELA,
+  chooseProject,
+  connect,
+  loadOlder,
+  scope,
+  selectProject,
+  run,
+  totalAttention,
+  useStore,
+} from './store';
 
 afterEach(() => {
   // A debounced refresh still waiting would swallow the next test's.
@@ -245,6 +265,115 @@ test('on 「全部」 without Angela nothing names her', async () => {
   await answer('host', { ...host('p1', 'p2'), angela: angela('数据库是更新版本的 Lobotomy 写的') });
   expect(scope()).toBe(null);
   expect(pending('snapshot')).toHaveLength(0);
+});
+
+const turnEvent = (project: string) => ({
+  type: 'events' as const,
+  project,
+  events: [
+    { seq: 2, kind: 'turn.ended', command_id: null, caller: null, caller_turn_id: null, entity: 't1', payload: {} },
+  ],
+});
+
+const turn = (state: 'running' | 'ended') => ({ id: 't1', role: 'Malkuth', state }) as Turn;
+const item = (id: string, seq: number) => ({ id, seq, turn_id: 't1', kind: 'agent_message' }) as Item;
+const queued = { id: 'm1', role: 'Malkuth', turn_id: null } as Message;
+const threadPage = (items: Item[], state: 'running' | 'ended', has_more = false): ThreadPage => ({
+  items,
+  has_more,
+  turns: { t1: turn(state) },
+  messages: [],
+  commands: {},
+  queued: state === 'running' ? [queued] : [],
+});
+
+/** The window shows p1's thread: turn t1 runs and a message waits for it. */
+function showThread() {
+  useStore.setState({
+    host: host('p1', 'p2'),
+    project: 'p1',
+    snapshot: { ...snapshot('full'), roles: [{ name: 'Malkuth', kind: 'worker' } as RoleView] },
+    thread: {
+      role: 'Malkuth',
+      items: [item('b', 5)],
+      turns: { t1: turn('running') },
+      messages: [],
+      commands: {},
+      queued: [queued],
+      hasMore: true,
+      loaded: true,
+    },
+  });
+}
+
+test('a thread page read earlier does not bring back an older turn state or queue', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  showThread();
+  const older = loadOlder();
+  // Two refreshes of the turn states; the second does not wait for the first.
+  probe.events!.push(turnEvent('p1'));
+  await vi.advanceTimersByTimeAsync(120);
+  probe.events!.push(turnEvent('p1'));
+  await vi.advanceTimersByTimeAsync(120);
+  const [page, first, second] = pending('thread');
+  expect(page.params).toMatchObject({ before: 5 });
+
+  second.resolve(threadPage([item('b', 5)], 'ended'));
+  await vi.advanceTimersByTimeAsync(0);
+  first.resolve(threadPage([item('b', 5)], 'running'));
+  page.resolve(threadPage([item('a', 4)], 'running'));
+  await older;
+  const thread = useStore.getState().thread;
+  expect(thread.turns.t1.state).toBe('ended');
+  expect(thread.queued).toEqual([]);
+  // The older page still goes in front.
+  expect(thread.items.map((i) => i.id)).toEqual(['a', 'b']);
+});
+
+test('an older page answered first does not drop the newest page read before it', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  showThread();
+  probe.events!.push(turnEvent('p1'));
+  await vi.advanceTimersByTimeAsync(120);
+  const older = loadOlder();
+  const [newest, page] = pending('thread');
+  expect(page.params).toMatchObject({ before: 5 });
+
+  // The older page carries only the turns of its items.
+  page.resolve({ ...threadPage([item('a', 4)], 'running'), turns: {}, queued: [] });
+  await older;
+  newest.resolve(threadPage([item('b', 5)], 'ended'));
+  await vi.advanceTimersByTimeAsync(0);
+  const thread = useStore.getState().thread;
+  expect(thread.turns.t1.state).toBe('ended');
+  expect(thread.queued).toEqual([]);
+  expect(thread.items.map((i) => i.id)).toEqual(['a', 'b']);
+});
+
+test('a thread read from an earlier visit to the project does not apply after the window returns', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  showThread();
+  probe.events!.push(turnEvent('p1'));
+  await vi.advanceTimersByTimeAsync(120);
+  const [before] = pending('thread');
+  probe.pending = [];
+
+  const away = selectProject('p2');
+  await answer('snapshot', snapshot('full'));
+  await away;
+  const back = selectProject('p1');
+  await answer('snapshot', { ...snapshot('full'), roles: [{ name: 'Malkuth', kind: 'worker' } as RoleView] });
+  await answer('thread', threadPage([item('b', 5)], 'ended'));
+  await back;
+  // The refresh from the first visit answers last.
+  before.resolve(threadPage([item('b', 5)], 'running'));
+  await vi.advanceTimersByTimeAsync(0);
+  const thread = useStore.getState().thread;
+  expect(thread.turns.t1.state).toBe('ended');
+  expect(thread.queued).toEqual([]);
 });
 
 test('typed commands keep the project and supplied retry id', async () => {
