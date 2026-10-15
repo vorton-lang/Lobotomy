@@ -173,3 +173,4 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 | 事项 | 设计与来源 |
 |---|---|
 | `PR_SET_PDEATHSIG` 已在代码中设置，在 Linux 上实测它的设置竞态与启动线程；后端重启后按命令行中的 turn 标识对账；在 Linux 上重跑 CLI 实测；CI 的 Linux 作业从 ubuntu-24.04 迁到 Ubuntu 26 | harness-adapter.md §1.8、§6；data-model.md §3.3；#6 |
+
