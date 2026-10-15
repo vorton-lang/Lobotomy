@@ -321,12 +321,12 @@ cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-thre
 
 | Role | 执行现场 |
 |---|---|
-| Angela（manager） | 不占槽位；工作目录是 host 目录下的一个空目录，按绝对路径读各项目的主仓库（data-model.md §10.6） |
+| Angela（manager） | 不占槽位；工作目录是 host 目录下的一个空目录，按绝对路径读各项目的展示目录（data-model.md §10.6） |
 | Binah（tech_lead） | 槽位 `tl`（未实现，roadmap 待排） |
 | Malkuth（worker） | 槽位 `worker` |
 | Yesod（reviewer） | 在固定的候选成果上单独物化的审查现场；现场中的改动不影响成果（未实现，roadmap 待排） |
 
-角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。Angela 读主仓库，与用户看到同一份代码；她的指令写明主仓库是展示用的预览目录，不修改（data-model.md §10.6，用户确认，2026-10-11）。
+角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。Angela 读展示目录，与用户看到同一份代码；她的指令写明展示目录用于预览，不修改（data-model.md §10.6，用户确认，2026-10-11）。
 
 - **执行现场不是事实来源。** 工作目录只是 CLI 的执行环境，不能反过来推断业务事实；业务事实以 SQLite 为准（#6 §1）。
 - **只有 Lobotomy 创建执行现场。** 不使用 `claude -w`、`codex --worktree`，`EnterWorktree` 已在 1.6 中禁用。
@@ -357,7 +357,7 @@ cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-thre
   - 采集时，运行时对本次改动的文件按上述规则统一换行，再写入提交；统一后的内容同时写回槽位，使 agent 的下一个 turn 和槽位中的 git 看到的与采集结果一致。
   - 物化时，jj 写出存储中的内容，运行时再把 `eol=crlf` 的文件改成 CRLF。
   - 槽位中的 git 设 `core.autocrlf=false`、`core.eol=lf`，并把 `core.attributesFile` 指向不存在的文件；role 与检查命令的环境中设 `GIT_ATTR_NOSYSTEM=1`。这样槽位中的 git 只按仓库的 `.gitattributes` 处理换行，在每台机器上相同。
-  - 用户的主仓库不在此列：预览用用户自己的 git 和配置执行 `git merge --ff-only`，与用户手动合并相同。
+  - 用户的展示目录不在此列：预览用用户自己的 git 和配置执行 `git merge --ff-only`，与用户手动合并相同。
 
   理由与实测：
   - Git 2.49，Windows。系统配置 `autocrlf=true` 时，CRLF 的改动不出现在 `git diff` 中；`git checkout -- <文件>` 写回的是 CRLF，jj 会把它采集为每一行都改了。

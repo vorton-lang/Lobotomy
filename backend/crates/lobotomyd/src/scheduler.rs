@@ -102,8 +102,6 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
             crate::display::observe(project).await?;
             ignore_rejection(runtime(project, StartAttempt { task_id: task.id, code_start }).await)?;
         }
-        let _gate = project.activity.lock().await;
-        crate::display::observe(project).await?;
         // Without a task the slot follows the integration version (harness-adapter.md §3).
         if role.slot.is_some() {
             ignore_rejection(runtime(project, AlignIdleSlot { role: role.name.clone() }).await)?;
