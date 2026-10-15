@@ -3,10 +3,11 @@
 // these check what the window makes of the host snapshot. 「全部」 is the conversation with Angela
 // (roadmap.md M4 step 1).
 import { expect, test, type Page } from '@playwright/test';
+import { devOrigin } from '../dev-server.mjs';
 import type { AngelaStatus, Attention, HarnessView, HostSnapshot, Push, Snapshot, Turn } from '../src/api/types';
 import { detail, role, task } from './mocked';
 
-const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
+const origin = process.env.LOBOTOMY_TEST_URL ?? devOrigin;
 
 const exported = task('task1', '导出报表', 'accepting');
 const accept: Attention = { kind: 'accept', task_id: 'task1', title: exported.title, verification_id: 'v-task1' };

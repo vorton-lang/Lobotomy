@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { devOrigin } from '../dev-server.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(here, '..', '..', 'backend');
@@ -98,9 +99,7 @@ export { expect };
 /** Opens the GUI on the test's backend and waits until it is connected. */
 export async function open(page: Page, backend: Backend) {
   const url = `ws://127.0.0.1:${backend.port}/gui`;
-  await page.goto(
-    `http://127.0.0.1:5173/?backend=${encodeURIComponent(url)}&token=${encodeURIComponent(backend.token)}`,
-  );
+  await page.goto(`${devOrigin}/?backend=${encodeURIComponent(url)}&token=${encodeURIComponent(backend.token)}`);
   await expect(page.getByText('已连接')).toBeVisible();
 }
 

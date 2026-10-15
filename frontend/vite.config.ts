@@ -1,6 +1,7 @@
 import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import { devPort } from './dev-server.mjs';
 
 // Agent output is rendered as HTML; the built app only runs its own scripts and talks only to
 // the local backend. The dev server needs inline scripts for hot reload, so it goes without.
@@ -27,7 +28,7 @@ export default defineConfig({
   base: './',
   plugins: [react(), contentSecurityPolicy],
   // IPv4 explicitly: `localhost` may bind only ::1 and then not answer 127.0.0.1.
-  server: { host: '127.0.0.1', port: 5173, strictPort: true },
+  server: { host: '127.0.0.1', port: devPort, strictPort: true },
   worker: { format: 'es' },
   // styles.test.ts reads the stylesheet; Vitest otherwise replaces CSS with an empty string.
   test: { environment: 'node', include: ['src/**/*.test.ts'], css: { include: [/styles\.css/] } },

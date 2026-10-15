@@ -3,10 +3,11 @@
 // without the variable it is skipped. screenshots.spec.ts covers flows with the real backend.
 
 import { expect, test, type Page } from '@playwright/test';
+import { devOrigin } from '../dev-server.mjs';
 import type { AngelaStatus, Attention, HostSnapshot, Snapshot, Turn } from '../src/api/types';
 import { detail, role, task } from './mocked';
 
-const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
+const origin = process.env.LOBOTOMY_TEST_URL ?? devOrigin;
 const out = process.env.SCREENSHOT_DIR;
 const now = Date.now();
 const ago = (minutes: number) => now - minutes * 60_000;

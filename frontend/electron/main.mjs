@@ -9,6 +9,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { devOrigin } from '../dev-server.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dev = process.argv.includes('--dev');
@@ -233,7 +234,7 @@ function createWindow() {
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('http://127.0.0.1:5173') && !url.startsWith('file://')) event.preventDefault();
+    if (!url.startsWith(devOrigin) && !url.startsWith('file://')) event.preventDefault();
   });
   window.on('close', (event) => {
     if (!quitting) {
@@ -241,7 +242,7 @@ function createWindow() {
       window.hide();
     }
   });
-  if (dev) void window.loadURL('http://127.0.0.1:5173');
+  if (dev) void window.loadURL(devOrigin);
   else void window.loadFile(path.join(here, '..', 'dist', 'index.html'));
 }
 

@@ -2,10 +2,11 @@
 // fed snapshots, thread pages and task details the test controls. The backend's own rules have
 // Rust tests; these check only what the GUI makes of them (AGENTS.md "测试的目的").
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
+import { devOrigin } from '../dev-server.mjs';
 import type { CommandRecord, Item, LogEvent, Message, Push, Snapshot, TaskDetail, Turn } from '../src/api/types';
 import { PROJECT, detail, hostSnapshot, role, task } from './mocked';
 
-const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
+const origin = process.env.LOBOTOMY_TEST_URL ?? devOrigin;
 
 const turn = (id: string, taskId: string | null): Turn => ({
   id,
