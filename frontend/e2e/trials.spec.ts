@@ -1,6 +1,7 @@
 // The trial controls exercise the real renderer and WebSocket client, but never launch a
 // terminal in the test runner. Backend process/candidate isolation has its own Rust tests.
 import { expect, test, type Page } from '@playwright/test';
+import { devOrigin } from '../dev-server.mjs';
 import type { Attempt, Capture, Snapshot, TaskDetail, TrialView } from '../src/api/types';
 import { hostSnapshot } from './mocked';
 
@@ -179,7 +180,7 @@ async function openTrial(page: Page, initial = detail()) {
       }
     });
   });
-  await page.goto('http://127.0.0.1:5173/?backend=ws://127.0.0.1:9999/gui&token=trial-test');
+  await page.goto(`${devOrigin}/?backend=ws://127.0.0.1:9999/gui&token=trial-test`);
   await expect(page.getByText('已连接', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: /体验候选成果/ }).click();
   const panel = page.getByRole('region', { name: '体验候选成果', exact: true });

@@ -1,9 +1,10 @@
 // Exercise live pushes through the store, transcript components and the real Markdown worker.
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
+import { devOrigin } from '../dev-server.mjs';
 import type { LiveTurn, Snapshot, ThreadPage } from '../src/api/types';
 import { PROJECT, hostSnapshot } from './mocked';
 
-const origin = process.env.LOBOTOMY_TEST_URL ?? 'http://127.0.0.1:5173';
+const origin = process.env.LOBOTOMY_TEST_URL ?? devOrigin;
 
 async function openStream(page: Page) {
   let socket!: WebSocketRoute;
