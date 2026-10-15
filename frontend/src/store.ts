@@ -464,14 +464,36 @@ function setLive(live: Record<string, LiveTurn>) {
   useStore.setState({ live });
 }
 
+// Thread reads overlap: refreshes do not wait for each other, and older pages load meanwhile.
+// Each read is numbered; a page read before one already applied shows an older state.
+let threadRequest = 0;
+let appliedThread = 0;
+
+/**
+ * Reads a page of the thread and applies it if it still fits. A newest or newer page read before
+ * an applied one is dropped: that one already carries what it has. An older page fits while the
+ * item it was read before is still the oldest; read before an applied page, it only adds what the
+ * thread lacks and keeps the queue.
+ */
+async function readThread(params: { role: string; before?: number; after?: number }, mode: Mode) {
+  const { project } = useStore.getState();
+  const request = ++threadRequest;
+  const page = await call('thread', params);
+  if (!showing(project)) return;
+  const stale = request < appliedThread;
+  if (mode === 'older' ? useStore.getState().thread.items[0]?.seq !== params.before : stale) return;
+  if (!stale) appliedThread = request;
+  useStore.setState((s) =>
+    mode === 'replace'
+      ? { thread: { ...mergePage(emptyThread(params.role), page, mode), loaded: true }, following: true }
+      : { thread: mergePage(s.thread, page, mode, stale) },
+  );
+}
+
 /** The newest page replaces the thread; the list follows its end again. */
 async function loadNewestThread() {
-  const { project, snapshot } = useStore.getState();
-  const role = mainRole(snapshot)?.name;
-  if (!role) return;
-  const page = await call('thread', { role });
-  if (!showing(project)) return;
-  useStore.setState({ thread: { ...mergePage(emptyThread(role), page, 'replace'), loaded: true }, following: true });
+  const role = mainRole(useStore.getState().snapshot)?.name;
+  if (role) await readThread({ role }, 'replace');
 }
 
 /** Called on every scroll; changes the state only when following starts or stops. */
@@ -484,44 +506,42 @@ let older: Promise<void> | null = null;
 /** Loads the page before the oldest item. A call while a page loads waits for that one. */
 export function loadOlder(): Promise<void> {
   older ??= (async () => {
-    const { project, thread } = useStore.getState();
+    const { thread } = useStore.getState();
     if (!thread.hasMore || thread.items.length === 0) return;
-    const page = await call('thread', { role: thread.role, before: thread.items[0].seq });
-    if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'older') }));
+    await readThread({ role: thread.role, before: thread.items[0].seq }, 'older');
   })().finally(() => (older = null));
   return older;
 }
 
 async function catchUp() {
-  const { project, thread } = useStore.getState();
+  const { thread } = useStore.getState();
   if (!thread.loaded) return;
-  const after = thread.items.at(-1)?.seq ?? 0;
-  const page = await call('thread', { role: thread.role, after });
-  if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'newer') }));
+  await readThread({ role: thread.role, after: thread.items.at(-1)?.seq ?? 0 }, 'newer');
 }
 
 /** A turn can change state without new items (it ends); the newest page carries its state. */
 async function refreshTurns() {
-  const { project, thread } = useStore.getState();
-  if (!thread.loaded) return;
-  const page = await call('thread', { role: thread.role });
-  if (showing(project)) useStore.setState((s) => ({ thread: mergePage(s.thread, page, 'newer') }));
+  const { thread } = useStore.getState();
+  if (thread.loaded) await readThread({ role: thread.role }, 'newer');
 }
 
-export function mergePage(thread: ThreadState, page: ThreadPage, mode: 'replace' | 'older' | 'newer'): ThreadState {
+type Mode = 'replace' | 'older' | 'newer';
+
+/** A `stale` page, read before one already applied, only adds what the thread lacks. */
+export function mergePage(thread: ThreadState, page: ThreadPage, mode: Mode, stale = false): ThreadState {
   const known = new Set(thread.items.map((i) => i.id));
   const fresh = page.items.filter((i) => !known.has(i.id));
   const items =
     mode === 'replace' ? page.items : mode === 'older' ? [...fresh, ...thread.items] : [...thread.items, ...fresh];
   const messages = new Map(thread.messages.map((m) => [m.id, m]));
-  for (const m of page.messages) messages.set(m.id, m);
+  for (const m of page.messages) if (!stale || !messages.has(m.id)) messages.set(m.id, m);
   return {
     ...thread,
     items,
-    turns: { ...thread.turns, ...page.turns },
+    turns: stale ? { ...page.turns, ...thread.turns } : { ...thread.turns, ...page.turns },
     messages: [...messages.values()],
-    commands: { ...thread.commands, ...page.commands },
-    queued: page.queued,
+    commands: stale ? { ...page.commands, ...thread.commands } : { ...thread.commands, ...page.commands },
+    queued: stale ? thread.queued : page.queued,
     hasMore: mode === 'newer' ? thread.hasMore : page.has_more,
   };
 }
