@@ -1,5 +1,7 @@
 # Tests on Windows and Linux; skip only the documentation/metadata paths listed below.
 # On main, also record the performance baseline without budgets (notes/perf-baseline.md).
+# Pull requests always run, so that `ci-ok`, the check main's ruleset requires, reports even
+# when the tests are skipped; `changes` lists the same paths as `paths-ignore` below.
 
 name: CI
 
@@ -14,13 +16,6 @@ on:
       - 'LICENSE'
       - '.git-blame-ignore-revs'
   pull_request:
-    paths-ignore:
-      - 'notes/**'
-      - 'README.md'
-      - 'AGENTS.md'
-      - 'CLAUDE.md'
-      - 'LICENSE'
-      - '.git-blame-ignore-revs'
   workflow_dispatch:
 
 concurrency:
@@ -34,8 +29,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=true
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            files=$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename')
+            echo "$files" | grep -vqE '^(notes/|README\.md$|AGENTS\.md$|CLAUDE\.md$|LICENSE$|\.git-blame-ignore-revs$)' || code=false
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
     name: test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -113,6 +128,21 @@ jobs:
           name: playwright-${{ matrix.os }}
           path: frontend/test-results/
           if-no-files-found: ignore
+
+  # The one check main's ruleset requires: the tests passed, or the change only touches the
+  # paths listed above. A matrix job skipped as a whole has no per-OS check names to require.
+  ci-ok:
+    if: always()
+    needs: [changes, test]
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          [ "${{ needs.changes.result }}" = success ] || exit 1
+          case "${{ needs.test.result }}" in
+            success) ;;
+            skipped) [ "${{ needs.changes.outputs.code }}" = false ] ;;
+            *) exit 1 ;;
+          esac
 
   bench:
     name: bench (${{ matrix.os }})
