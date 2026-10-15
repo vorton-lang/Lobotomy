@@ -465,28 +465,27 @@ function setLive(live: Record<string, LiveTurn>) {
 }
 
 // Thread reads overlap: refreshes do not wait for each other, and older pages load meanwhile.
-// Each read is numbered; a page read before one already applied shows an older state.
+// Each newest or newer read is numbered; one read before an applied one shows an older state.
 let threadRequest = 0;
 let appliedThread = 0;
 
 /**
  * Reads a page of the thread and applies it if it still fits. A newest or newer page read before
- * an applied one is dropped: that one already carries what it has. An older page fits while the
- * item it was read before is still the oldest; read before an applied page, it only adds what the
- * thread lacks and keeps the queue.
+ * an applied one is dropped: that one already carries what it has. An older page carries only
+ * its own items' turns, not the newest state: it fits while the item it was read before is still
+ * the oldest, and only adds what the thread lacks, keeping the queue.
  */
 async function readThread(params: { role: string; before?: number; after?: number }, mode: Mode) {
   const { project } = useStore.getState();
-  const request = ++threadRequest;
+  const request = mode === 'older' ? 0 : ++threadRequest;
   const page = await call('thread', params);
   if (!showing(project)) return;
-  const stale = request < appliedThread;
-  if (mode === 'older' ? useStore.getState().thread.items[0]?.seq !== params.before : stale) return;
-  if (!stale) appliedThread = request;
+  if (mode === 'older' ? useStore.getState().thread.items[0]?.seq !== params.before : request < appliedThread) return;
+  if (mode !== 'older') appliedThread = request;
   useStore.setState((s) =>
     mode === 'replace'
       ? { thread: { ...mergePage(emptyThread(params.role), page, mode), loaded: true }, following: true }
-      : { thread: mergePage(s.thread, page, mode, stale) },
+      : { thread: mergePage(s.thread, page, mode, mode === 'older') },
   );
 }
 
@@ -527,7 +526,7 @@ async function refreshTurns() {
 
 type Mode = 'replace' | 'older' | 'newer';
 
-/** A `stale` page, read before one already applied, only adds what the thread lacks. */
+/** A `stale` page, older than what the thread shows, only adds what the thread lacks. */
 export function mergePage(thread: ThreadState, page: ThreadPage, mode: Mode, stale = false): ThreadState {
   const known = new Set(thread.items.map((i) => i.id));
   const fresh = page.items.filter((i) => !known.has(i.id));

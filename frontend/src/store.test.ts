@@ -331,6 +331,27 @@ test('a thread page read earlier does not bring back an older turn state or queu
   expect(thread.items.map((i) => i.id)).toEqual(['a', 'b']);
 });
 
+test('an older page answered first does not drop the newest page read before it', async () => {
+  vi.useFakeTimers();
+  connect('ws://unused');
+  showThread();
+  probe.events!.push(turnEvent('p1'));
+  await vi.advanceTimersByTimeAsync(120);
+  const older = loadOlder();
+  const [newest, page] = pending('thread');
+  expect(page.params).toMatchObject({ before: 5 });
+
+  // The older page carries only the turns of its items.
+  page.resolve({ ...threadPage([item('a', 4)], 'running'), turns: {}, queued: [] });
+  await older;
+  newest.resolve(threadPage([item('b', 5)], 'ended'));
+  await vi.advanceTimersByTimeAsync(0);
+  const thread = useStore.getState().thread;
+  expect(thread.turns.t1.state).toBe('ended');
+  expect(thread.queued).toEqual([]);
+  expect(thread.items.map((i) => i.id)).toEqual(['a', 'b']);
+});
+
 test('a thread read from an earlier visit to the project does not apply after the window returns', async () => {
   vi.useFakeTimers();
   connect('ws://unused');
