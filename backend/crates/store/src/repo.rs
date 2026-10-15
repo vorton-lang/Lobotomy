@@ -24,7 +24,7 @@ pub fn inspect(repo: &Path) -> Result<RepoState> {
     git.run(&["rev-parse", "--git-dir"])?;
     let branch = git.optional(&["symbolic-ref", "-q", "--short", "HEAD"])?;
     let head = git.optional(&["rev-parse", "-q", "--verify", "HEAD^{commit}"])?;
-    let args = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
+    let args = ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"];
     let out = git.output(&args)?;
     if !out.status.success() {
         return Err(Error::Git {

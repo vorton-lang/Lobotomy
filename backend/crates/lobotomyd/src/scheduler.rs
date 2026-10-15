@@ -37,6 +37,18 @@ pub async fn recover(project: &Arc<Project>) -> anyhow::Result<()> {
     if !unknown.is_empty() {
         tracing::info!(turns = ?unknown, "turns left unfinished by the last run are unknown until reconciled");
     }
+    if let Some(a) = db(project, |db| db.read(lobotomy_core::display::pending)).await? {
+        runtime(
+            project,
+            lobotomy_core::display::FinishAdoption {
+                id: a.id,
+                checks: vec![],
+                blobs: vec![],
+                error: Some("后端重启中断了采用；请查看当前状态后手动重新采用".into()),
+            },
+        )
+        .await?;
+    }
     results::sweep(project).await
 }
 
@@ -59,7 +71,15 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
     if db(project, |db| db.read(load_project)).await?.is_none() {
         return Ok(());
     }
-    store_work(project).await?;
+    {
+        let _gate = project.activity.lock().await;
+        crate::display::observe(project).await?;
+        if let Some(a) = db(project, |db| db.read(lobotomy_core::display::pending)).await? {
+            spawn_job(project, format!("adopt:{}", a.id), crate::display::adopt(project.clone(), a.id));
+            return Ok(());
+        }
+        store_work(project).await?;
+    }
     let roles = db(project, |db| db.read(list_roles)).await?;
     for role in roles {
         // A blocked quota domain starts nothing new; running turns end on their own. Only the
@@ -72,7 +92,14 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
             db(project, move |db| db.read(|c| Ok((occupant(c, &name)?.is_some(), next_queued_task(c, &name)?))))
                 .await?;
         if !busy && let Some(task) = next {
+            let current = db(project, |db| db.read(lobotomy_core::display::require_current)).await;
+            if ignore_rejection(current)?.is_none() {
+                continue;
+            }
             let code_start = results::code_start(project, &task.id).await?;
+            // Composing a reopened task can take time; check after it, immediately before start.
+            let _gate = project.activity.lock().await;
+            crate::display::observe(project).await?;
             ignore_rejection(runtime(project, StartAttempt { task_id: task.id, code_start }).await)?;
         }
         // Without a task the slot follows the integration version (harness-adapter.md §3).

@@ -51,6 +51,8 @@ interface State {
   commands?: Record<string, CommandRecord>;
   /** Answers a command and changes `state` as the backend would. */
   command?: (sent: Sent) => unknown;
+  /** An unsuccessful reply keeps the form's idempotency key for an exact retry. */
+  commandError?: string;
 }
 
 /**
@@ -129,7 +131,9 @@ async function openMocked(page: Page, state: State) {
           route.send(JSON.stringify({ id, error: { code: 'unexpected', message: method } }));
           return;
       }
-      route.send(JSON.stringify({ id, result }));
+      if (method === 'command' && state.commandError)
+        route.send(JSON.stringify({ id, error: { code: 'unavailable', message: state.commandError } }));
+      else route.send(JSON.stringify({ id, result }));
       if (changed) {
         const events: LogEvent[] = [
           {
@@ -415,4 +419,75 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
   await update('failed');
   await expect(panel.locator('.verification-details')).toHaveAttribute('open', '');
   await expect(panel.locator('.verification-details > summary .badge')).toHaveText('未通过');
+});
+
+// #67: a lost/unsuccessful reply retries the same fixed action. A new displayed version is
+// a new action; retaining the old key would permanently reject it as idempotency_key_reused.
+test('display adoption request identity follows the fixed target and internal version', async ({ page }) => {
+  const display = {
+    state: { kind: 'changed' as const, commit: 'external-a' },
+    expected_rev: 1,
+    busy: false,
+    start_blocked: true,
+    unpreviewed: [],
+    unavailable: '等待执行者退出、采集保存及任务验收完成' as string | null,
+    error: null,
+  };
+  const state: State = {
+    snapshot: { roles: [role(null)], tasks: [], attention: [{ kind: 'display_changed', display }] },
+    commandError: '采用回复未收到',
+  };
+  const backend = await openMocked(page, state);
+  const adopt = page.getByRole('button', { name: '采用', exact: true });
+  await expect(adopt).toBeDisabled();
+  await expect(page.locator('.attention .card')).toContainText('等待执行者退出');
+  expect(backend.sent).toHaveLength(0);
+  display.unavailable = null;
+  backend.push({ type: 'resync' });
+  await expect(adopt).toBeEnabled();
+  await adopt.click();
+  await expect(adopt).toBeEnabled();
+  await adopt.click();
+  await expect(adopt).toBeEnabled();
+  expect(backend.sent[1].args.request_id).toBe(backend.sent[0].args.request_id);
+  display.state.commit = 'external-b';
+  display.expected_rev = 2;
+  backend.push({ type: 'resync' });
+  await expect(page.locator('.attention .card')).toContainText('external-b');
+  await adopt.click();
+  await expect.poll(() => backend.sent.length).toBe(3);
+  expect(backend.sent[2].args).toMatchObject({ target: 'external-b', expected_rev: 2 });
+  expect(backend.sent[2].args.request_id).not.toBe(backend.sent[0].args.request_id);
+});
+
+test('display adoption lists unpreviewed accepted work and confirms the current list', async ({ page }) => {
+  const display = {
+    state: { kind: 'changed' as const, commit: 'external' },
+    expected_rev: 3,
+    busy: false,
+    start_blocked: true,
+    unavailable: null,
+    error: null,
+    unpreviewed: [{ task_id: 'old-task', title: '尚未展示的修复', commit: 'accepted-old' }],
+  };
+  const backend = await openMocked(page, {
+    snapshot: { roles: [role(null)], tasks: [], attention: [{ kind: 'display_changed', display }] },
+  });
+  const card = page.locator('.attention .card');
+  await expect(card).toContainText('尚未展示的修复');
+  await expect(card).toContainText('accepted-old');
+  await card.getByRole('button', { name: '采用', exact: true }).click();
+  await expect(card.getByRole('button', { name: '确认采用，保留历史' })).toBeVisible();
+  expect(backend.sent).toHaveLength(0);
+  display.unpreviewed = [{ task_id: 'new-task', title: '新的未展示成果', commit: 'accepted-new' }];
+  backend.push({ type: 'resync' });
+  await expect(card).toContainText('新的未展示成果');
+  await expect(card.getByRole('button', { name: '确认采用，保留历史' })).toHaveCount(0);
+  await card.getByRole('button', { name: '采用', exact: true }).click();
+  await card.getByRole('button', { name: '取消', exact: true }).click();
+  expect(backend.sent).toHaveLength(0);
+  await card.getByRole('button', { name: '采用', exact: true }).click();
+  await card.getByRole('button', { name: '确认采用，保留历史' }).click();
+  await expect.poll(() => backend.sent.length).toBe(1);
+  expect(backend.sent[0].args).toMatchObject({ target: 'external', expected_rev: 3, acknowledged: ['accepted-new'] });
 });

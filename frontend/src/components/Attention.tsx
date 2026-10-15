@@ -80,17 +80,91 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
           <Reply role="Angela" taskId={null} placeholder="回复 Angela" />
         </div>
       );
+    case 'display_changed':
+      return (
+        <DisplayCard
+          key={`${a.display.expected_rev}:${a.display.state.kind === 'changed' ? a.display.state.commit : a.display.state.kind}:${a.display.unpreviewed.map((p) => p.commit).join(',')}`}
+          display={a.display}
+        />
+      );
     case 'preview_stopped':
       return (
         <div className="card warn">
           <p>预览已停止：{a.reason}</p>
-          <p className="muted">把仓库恢复到上次预览的状态后重试。Lobotomy 不会覆盖你的文件。</p>
+          <p className="muted">可恢复到上次预览状态后重试，也可在内部保存点采用已提交的展示分支。</p>
           <div className="actions">
             <button onClick={() => run('retry_preview', {})}>重试预览</button>
           </div>
         </div>
       );
   }
+}
+
+function DisplayCard({ display }: { display: Extract<Attention, { kind: 'display_changed' }>['display'] }) {
+  const { submit, busy } = useCommand('adopt_display');
+  const [confirming, setConfirming] = useState(false);
+  const state = display.state;
+  return (
+    <div className="card warn">
+      {display.busy ? (
+        <p>正在检查并采用展示分支，暂不启动新任务。</p>
+      ) : state.kind === 'changed' ? (
+        <>
+          <p>
+            展示分支有外部提交：<code>{state.commit}</code>
+          </p>
+          <p>这个提交的完整代码状态将成为后续任务的基线。旧任务与成果记录仍保留。</p>
+        </>
+      ) : state.kind === 'blocked' ? (
+        <p>{state.reason}</p>
+      ) : (
+        <p>展示分支已回到上次预览状态。</p>
+      )}
+      {display.error && <p className="muted failure">上次采用未成功：{display.error}</p>}
+      {!display.busy && display.unavailable && <p className="muted">{display.unavailable}</p>}
+      {display.start_blocked && <p className="muted">可以创建或重开排队任务；处理展示分支变化后开始执行。</p>}
+      {display.unpreviewed.length > 0 && (
+        <>
+          <p>
+            以下已验收成果尚未写入展示目录。采用后它们将退出当前集成版本，后续任务使用外部提交的完整状态。历史成果仍保留。
+          </p>
+          <ul>
+            {display.unpreviewed.map((p) => (
+              <li key={p.commit}>
+                「{p.title}」：<code>{p.commit}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {state.kind === 'changed' && (
+        <div className="actions">
+          <button
+            className="primary"
+            disabled={busy || display.busy || !!display.unavailable}
+            onClick={() => {
+              if (display.unpreviewed.length && !confirming) {
+                setConfirming(true);
+                return;
+              }
+              submit({
+                target: state.commit,
+                expected_rev: display.expected_rev,
+                acknowledged: display.unpreviewed.map((p) => p.commit),
+              });
+            }}
+          >
+            {confirming ? '确认采用，保留历史' : '采用'}
+          </button>
+          {confirming && (
+            <button disabled={busy || display.busy} onClick={() => setConfirming(false)}>
+              取消
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Paths a card lists: the first dozen, then how many there are. */

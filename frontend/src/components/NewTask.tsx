@@ -1,7 +1,7 @@
 // A new task for a role. Made from changes outside any task, it starts from them (#14).
 
 import { useState } from 'react';
-import { selectTask, toast, useCommand } from '../store';
+import { selectTask, toast, useCommand, useStore } from '../store';
 import { Modal } from './common';
 
 export function NewTask({
@@ -13,6 +13,8 @@ export function NewTask({
   fromCapture?: string;
   onClose: () => void;
 }) {
+  const display = useStore((s) => s.snapshot?.attention.find((a) => a.kind === 'display_changed')?.display);
+  const waiting = !!display?.start_blocked;
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [criteria, setCriteria] = useState('');
@@ -27,11 +29,12 @@ export function NewTask({
     // An open task panel would cover the thread where the new task's work shows (#13); the
     // earlier task stays a click away in the Workboard.
     selectTask(null);
-    toast(`「${title}」已交给 ${executor}`);
+    toast(waiting ? `「${title}」已排队，处理展示分支变化后开始` : `「${title}」已交给 ${executor}`);
   };
   return (
     <Modal title={fromCapture ? '用这些改动建任务' : '新任务'} onClose={onClose}>
       {fromCapture && <p className="muted">任务从这些改动开始：执行者在它们的基础上继续，做完后照常验证、验收。</p>}
+      {waiting && <p className="muted">已排队的任务会在处理展示分支变化后开始。</p>}
       <label>
         标题
         <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />

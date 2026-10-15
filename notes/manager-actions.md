@@ -210,7 +210,7 @@ TL / Worker 各自通过 `org_checkpoint` 写语义检查点，因为它们最�
 
 ### 5.2 push
 
-v1 中 Lobotomy 不 push。用户的主仓库是集成版本的只读预览（见 harness-adapter.md §4.3）；push 与 GitHub 导出的内容范围、触发和批准单独处理（#6）。Manager 可以建议导出，但不执行。
+v1 中 Lobotomy 不 push。展示目录用于预览集成版本（见 harness-adapter.md §4.3）；push 与 GitHub 导出的内容范围、触发和批准单独处理（#6）。Manager 可以建议导出，但不执行。
 
 ### 5.3 外部系统由 Lobotomy 统一接入
 

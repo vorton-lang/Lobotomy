@@ -181,60 +181,83 @@ pub async fn verify(project: Arc<Project>, verification_id: String) -> anyhow::R
     let composed = blocking(move || p.store.compose(&pl.candidate, &pl.base, &pl.message, &author, &pin)).await??;
 
     let mut checks = Vec::new();
+    let mut blobs = Vec::new();
     // One verification at a time owns the site, from writing it until the processes of its last
     // check have ended: a check of an abandoned task that is still running must not write into
     // the next task's site (#12).
     let site = if composed.conflicts.is_empty() { Some(project.verify_site.lock().await) } else { None };
     if site.is_some() && still_verifying(&project, &verification_id).await? {
-        let (p, pl, commit) = (project.clone(), plan.clone(), composed.commit.clone());
-        blocking(move || -> anyhow::Result<()> {
-            let site = lobotomy_store::Workspace::new(p.verify_dir(), p.verify_state_dir());
-            let write = || site.materialize(&p.store, &commit, &pl.base, &pl.branch, &scope(&pl.config));
-            match write() {
-                // Nothing in the verification site is worth keeping; it starts over empty.
-                Err(lobotomy_store::Error::Blocked(_)) => {
-                    let aside = quarantine(&p, &p.verify_dir(), "verify")?;
-                    let _ = std::fs::remove_dir_all(p.verify_state_dir());
-                    write()?;
-                    let _ = std::fs::remove_dir_all(aside);
-                    Ok(())
-                }
-                other => Ok(other?),
-            }
-        })
-        .await??;
-        for check in &plan.config.checks {
-            // A task that left verification, such as one abandoned, starts no further checks.
-            // The checks that did not run keep the verification from passing.
-            if !still_verifying(&project, &verification_id).await? {
-                break;
-            }
-            let outcome = run_check(&project, check, &project.verify_dir()).await?;
-            let passed = outcome.passed();
-            checks.push(outcome);
-            if !passed {
-                break;
-            }
-        }
+        write_verify_site(&project, &composed.commit, &plan.base, &plan.branch, &plan.config).await?;
+        (checks, blobs) =
+            run_checks(&project, &plan.config.checks, || still_verifying(&project, &verification_id)).await?;
     }
     drop(site);
-    let p = project.clone();
-    let (checks, blobs) = blocking(move || {
-        let mut blobs = Vec::new();
-        let checks: Vec<CheckOutcome> = checks
-            .into_iter()
-            .map(|mut c| {
-                blobs.extend(externalize(&p.blobs, &mut c.output));
-                c
-            })
-            .collect();
-        (checks, blobs)
-    })
-    .await?;
     let finish =
         FinishVerification { verification_id, commit: composed.commit, conflicts: composed.conflicts, checks, blobs };
     runtime(&project, finish).await?;
     Ok(())
+}
+
+/// Writes the shared verification site. The caller holds `verify_site` through its last check.
+pub(crate) async fn write_verify_site(
+    project: &Arc<Project>,
+    commit: &str,
+    base: &str,
+    branch: &str,
+    config: &ProjectConfig,
+) -> anyhow::Result<()> {
+    let (p, commit, base, branch, scope) =
+        (project.clone(), commit.to_owned(), base.to_owned(), branch.to_owned(), scope(config));
+    blocking(move || -> anyhow::Result<()> {
+        let site = lobotomy_store::Workspace::new(p.verify_dir(), p.verify_state_dir());
+        let write = || site.materialize(&p.store, &commit, &base, &branch, &scope);
+        match write() {
+            Err(lobotomy_store::Error::Blocked(_)) => {
+                let aside = quarantine(&p, &p.verify_dir(), "verify")?;
+                let _ = std::fs::remove_dir_all(p.verify_state_dir());
+                write()?;
+                let _ = std::fs::remove_dir_all(aside);
+                Ok(())
+            }
+            other => Ok(other?),
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+/// Stops at the first failed check or when its owner no longer wants further checks, and moves
+/// large output to the existing blob store before either finish command is recorded.
+pub(crate) async fn run_checks<F, Fut>(
+    project: &Arc<Project>,
+    configured: &[Check],
+    mut active: F,
+) -> anyhow::Result<(Vec<CheckOutcome>, Vec<lobotomy_core::item::Blob>)>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = anyhow::Result<bool>>,
+{
+    let mut checks = Vec::new();
+    for check in configured {
+        if !active().await? {
+            break;
+        }
+        let outcome = run_check(project, check, &project.verify_dir()).await?;
+        let passed = outcome.passed();
+        checks.push(outcome);
+        if !passed {
+            break;
+        }
+    }
+    let p = project.clone();
+    blocking(move || {
+        let mut blobs = Vec::new();
+        for check in &mut checks {
+            blobs.extend(externalize(&p.blobs, &mut check.output));
+        }
+        (checks, blobs)
+    })
+    .await
 }
 
 /// Whether the verification's task still waits for it.
@@ -275,6 +298,12 @@ async fn run_check(project: &Arc<Project>, check: &Check, cwd: &Path) -> anyhow:
         [stdout.as_str(), stderr.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("\n");
     let lines: Vec<&str> = combined.lines().collect();
     let tail = lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n");
+    // A single long line must not copy the large output back into SQLite via `tail` or an error.
+    let mut start = tail.len().saturating_sub(8 * 1024);
+    while !tail.is_char_boundary(start) {
+        start += 1;
+    }
+    let tail = tail[start..].to_owned();
     Ok(CheckOutcome {
         command: check.command.clone(),
         exit_code,
@@ -306,6 +335,18 @@ async fn read_capped(mut stream: impl AsyncRead + Unpin) -> String {
 /// Brings the user's repository to the latest integration version, if it is as the last preview
 /// left it (harness-adapter.md §4.3).
 pub async fn preview(project: Arc<Project>, job: PreviewJob) -> anyhow::Result<()> {
+    let id = job.outbox_id.clone();
+    let pending = db(&project, move |db| {
+        db.read(|c| {
+            let pending: bool =
+                c.query_row("SELECT state = 'pending' FROM outbox WHERE id = ?1", [id], |r| r.get(0))?;
+            Ok(pending && lobotomy_core::display::pending(c)?.is_none())
+        })
+    })
+    .await?;
+    if !pending {
+        return Ok(());
+    }
     let p = project.clone();
     let j = job.clone();
     let written =

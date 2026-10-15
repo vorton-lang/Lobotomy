@@ -5,6 +5,7 @@
 pub mod capture;
 pub mod command;
 pub mod db;
+pub mod display;
 pub mod error;
 pub mod host;
 pub mod id;

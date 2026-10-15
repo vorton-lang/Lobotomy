@@ -499,6 +499,7 @@ pub(super) fn binding_fixtures() -> Value {
         config: None,
         roles: vec![],
         tasks: vec![],
+        display: None,
         preview_stopped: Some("not a wire field".into()),
         questions: vec![],
     };

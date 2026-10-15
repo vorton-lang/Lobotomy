@@ -639,6 +639,10 @@ impl Command for FinishPreview {
                     params![self.outbox_id, cx.now],
                 )?;
                 cx.tx.execute("UPDATE project SET previewed = ?1", [&target])?;
+                cx.tx.execute(
+                    "UPDATE display_observation SET state=?1 WHERE singleton=1",
+                    params![serde_json::to_string(&crate::display::DisplayState::Current)?],
+                )?;
                 cx.emit("preview.written", &self.outbox_id, json!({ "target": target }))?;
             }
             PreviewResult::Stopped { reason } => {

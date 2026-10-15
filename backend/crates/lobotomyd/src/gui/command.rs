@@ -159,6 +159,14 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: Comma
             $(if name == <$ty as Command>::NAME { return user::<$ty>(project, args).await; })*
         };
     }
+    if name == <lobotomy_core::display::AdoptDisplay as Command>::NAME {
+        return Ok(serde_json::to_value(crate::display::begin(project, serde_json::from_value(args)?).await?)?);
+    }
+    if name == Continue::NAME || name == NewNativeSession::NAME {
+        let _gate = project.activity.lock().await;
+        crate::display::observe(project).await?;
+        user_commands!(Continue, NewNativeSession);
+    }
     project_commands!(user_commands);
     match name.as_str() {
         name if name == START_TRIAL.name => {
@@ -246,6 +254,7 @@ pub(super) fn bindings(out: &mut super::bindings::Bindings) {
         ($($ty:ty),* $(,)?) => { $(out.command::<$ty>();)* };
     }
     project_commands!(export);
+    out.command::<lobotomy_core::display::AdoptDisplay>();
     runtime_bindings(out);
 }
 

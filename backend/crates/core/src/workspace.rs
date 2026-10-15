@@ -82,6 +82,7 @@ pub fn role_slot(conn: &Connection, role: &str) -> Result<Option<String>> {
 /// (`None`: a role without a task). The caller has made sure the slot's current content was
 /// captured (harness-adapter.md §3).
 pub(crate) fn plan(cx: &mut Cx<'_>, name: &str, target: &str, head: &str, task_id: Option<&str>) -> Result<String> {
+    crate::display::require_no_adoption(cx.tx)?;
     let id = match current_workspace(cx.tx, name)? {
         Some(ws) => {
             cx.tx.execute(

@@ -546,3 +546,32 @@ async fn angelas_references_show_the_records_they_name() {
     assert_eq!(refs["attachments"]["task_none"]["error"], "找不到这个引用");
     backend.shutdown(Duration::from_secs(5)).await;
 }
+
+#[tokio::test]
+async fn project_interrupt_and_terminate_do_not_wait_for_the_start_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let p = &backend.project;
+    p.running.lock().unwrap().insert(
+        "ending".into(),
+        lobotomyd::instance::RunningTurn {
+            pid: None,
+            interrupt_requested: false,
+            stop: tokio_util::sync::CancellationToken::new(),
+            task: None,
+        },
+    );
+    let mut gui = Client::connect(&backend).await;
+    let gate = p.activity.lock().await;
+    for (name, expected) in [("interrupt", "not_started"), ("terminate", "not_found")] {
+        let error = tokio::time::timeout(Duration::from_secs(1), gui.command(name, json!({ "turn_id": "ending" })))
+            .await
+            .expect("stop commands must remain responsive while starts are serialized")
+            .unwrap_err();
+        assert_eq!(error["code"], expected);
+    }
+    assert!(p.running.lock().unwrap()["ending"].interrupt_requested);
+    p.running.lock().unwrap().clear();
+    drop(gate);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
