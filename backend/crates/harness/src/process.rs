@@ -326,7 +326,6 @@ mod imp {
 #[cfg(unix)]
 mod imp {
     use std::io;
-    use std::os::unix::process::CommandExt;
 
     use tokio::process::{Child, Command};
 
