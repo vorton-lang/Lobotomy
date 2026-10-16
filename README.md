@@ -1,6 +1,8 @@
 # Lobotomy
 
-> 状态（2026-10-11）：M1 执行闭环、M2（第二个 harness：Claude Code）与 M3 多项目已经完成。M4 最小的全局 Manager Angela 的三步都已实现，等待真实使用中的验收，见 [Roadmap](notes/roadmap.md)。
+> 状态（2026-10-17）：M1 执行闭环、M2（第二个 harness：Claude Code）与 M3 多项目已经完成。M4 最小的全局 Manager Angela 的三步都已实现，见 [Roadmap](notes/roadmap.md)。
+>
+> 项目按 [#86](https://github.com/vorton-lang/Lobotomy/issues/86) 转向新方向，见 [技术方案](notes/tech-plan.md)。私有存储、采集、验证、预览与试用已经删除。新的 worker 层接上之前，应用中的执行者在空目录中运行，不能执行代码任务。
 
 一个长期在线、位于现有 coding harness 之上的 agent 组织运行时：用户主要与 Manager 协作，系统承载长期角色、原生 session、可恢复状态和组织级工作界面。
 
@@ -12,8 +14,7 @@
 
 - 给 Malkuth 建任务，看它的对话、工具调用和汇报；
 - 回答它提出的问题；它停下时，选择继续或新建会话；
-- 看候选成果的交付说明、diff 和检查结果，然后验收或退回。验收后，成果发布到你仓库的分支上；
-- 执行者提供试用命令时，点击后在电脑的独立终端里体验本轮候选副本。新一轮不会改写已经打开的旧副本。
+- 看执行者报告 `done` 时写的交付说明，然后验收或退回。验收只关闭任务，不发布任何内容；
 - 同时管理多个项目：在左侧的项目列表中新建、切换、归档。
 - 在「全部」中与 Angela 对话。她能读所有项目的现状，替你派活、验收、退回、放弃和暂停任务；你暂停的任务只有你能恢复。她回复中引用的原话和成果由运行时显示，点开成果是任务面板。
 - 项目停下来等你、或者活干完了时，Angela 会自己醒来，写一条合并的消息。她要你决定的问题列在「等你决定」中。
@@ -31,16 +32,18 @@
 
 应用发现后端已经在运行时，会连上它，不会启动新编译的那个。更新代码后，先在托盘中退出 Lobotomy，再运行 `npm start`。
 
-第一次启动时，选择一个 git 仓库。仓库的工作区要干净，并且检出在分支上。开发方式见 [frontend.md](notes/frontend.md) §7；改什么跑什么测试，见 [AGENTS.md](AGENTS.md)。
+第一次启动时，选择一个 git 仓库。后端只记下它的路径，不检查、不复制，也不写入这个仓库。开发方式见 [frontend.md](notes/frontend.md) §7；改什么跑什么测试，见 [AGENTS.md](AGENTS.md)。
 
 ## 资料
 
 设计（`notes/`）：
 
+- [Tech plan](notes/tech-plan.md)：#86 的新方向：分层、worker、forge 与治理、编排层（图、事件、Angela）、界面、现有代码的去留与顺序
+- [Worker interface](notes/worker-interface.md)：编排层与 worker 之间 task 级的接口：操作、状态、事件、交付物与证据、凭据
 - [Roadmap](notes/roadmap.md)：M1 执行闭环 → M2 第二个 harness → M3 多项目 → M4 最小的全局 Angela；其余按真实使用排序
 - [Architecture](notes/architecture.md)：进程、代码布局、技术选择与测试
 - [Data model](notes/data-model.md)：命令、占用、turn 与消息、任务流、副作用、对话记录、额度、项目与 host
-- [Harness adapter](notes/harness-adapter.md)：CLI 调用方式、执行现场、成果采集与集成（含实测）
+- [Harness adapter](notes/harness-adapter.md)：CLI 调用方式、执行现场、成果与验收（含实测）
 - [Roles and tasks](notes/roles-and-tasks.md)：角色类型与具名角色、任务生命周期、Workboard
 - [Manager actions](notes/manager-actions.md)：向下转发、向上附件、记录、会议与对外操作
 - Manager 的现行指令：[prompts/manager.md](backend/crates/lobotomyd/src/prompts/manager.md)（意图判断、信息过滤、任务翻译）
@@ -48,7 +51,7 @@
 - [UI/UX plan](notes/ui-ux-plan.md)：界面改进专项的原则、视觉方向与分阶段计划
 - [Performance baseline](notes/perf-baseline.md)：GUI 性能基线的测法与参考数据
 - [Ideas](notes/ideas.md)：暂不实现的小功能
-- 技术路线：[#5](https://github.com/vorton-lang/Lobotomy/issues/5) 存储与权威来源的权衡，[#6](https://github.com/vorton-lang/Lobotomy/issues/6) 推荐实现（SQLite + jj + Rust 后端 + Electron 前端）
+- 技术路线：[#5](https://github.com/vorton-lang/Lobotomy/issues/5) 存储与权威来源的权衡，[#6](https://github.com/vorton-lang/Lobotomy/issues/6) 推荐实现（SQLite + jj + Rust 后端 + Electron 前端；jj 私有存储已随 #86 删除）
 
 调研与背景（`notes/research/`）：
 

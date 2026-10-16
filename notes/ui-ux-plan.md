@@ -4,6 +4,7 @@
 > 起因：用户认为现在的界面"像个 dev 临时凑数的"（2026-10-11）。
 > 依据：§1 的现状审计；调研见 [research/ui-ux-survey.md](research/ui-ux-survey.md)，下文写作"调研 §x"。
 > 实现后的样子写进 [frontend.md](frontend.md) §7，选型写进 frontend.md §4.1；本文删掉已完成的部分，只保留计划与未完成的事。
+> **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户，2026-10-17）：新界面的骨架见 [tech-plan.md](tech-plan.md) §5。本计划继续使用 P0、P1 的视觉体系，§2 的原则，P2 的对话版式，P5 的标题栏、命令面板和 toast，以及 P6 的"上次看到这里"。P4 的任务面板、P3 的"等你决定"分类和项目列表退出。
 
 ## 0. 目标与边界
 

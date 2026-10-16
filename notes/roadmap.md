@@ -2,6 +2,7 @@
 
 > Status: 规划 v0.3（2026-10-10）
 > v0.1 的编号：M2 审查、M3 Binah 与会议（含 Claude adapter）、M4 Angela。旧 issue 中的编号按此对应。
+> 新方向（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)）的顺序建议见 [tech-plan.md](tech-plan.md) §7。其中建议旧设计的 M4 验收不再单独进行。
 
 ## 原则
 

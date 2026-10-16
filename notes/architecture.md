@@ -15,7 +15,7 @@ Electron 渲染进程 ──WebSocket /gui──→ lobotomyd
 Angela 的 CLI（每个 turn 一个进程）──MCP /mcp/angela/{token}──→ lobotomyd
 ```
 
-**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：`store` crate（jj 私有存储）、采集、验证、预览、展示分支采用与试用终端随 worker 层的替换退出。
+**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：`store` crate（jj 私有存储）、采集、验证、预览、展示分支采用与试用终端随 worker 层的替换退出。新方向的分层见 [tech-plan.md](tech-plan.md) §1，worker 接口见 [worker-interface.md](worker-interface.md)。
 
 - 一个后端进程管理所有项目和 Angela（data-model.md §10，frontend.md §1）。Angela 打不开时，项目照常运行。
 - lobotomyd 的模块：

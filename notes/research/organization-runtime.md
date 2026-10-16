@@ -178,6 +178,8 @@ GUI 中的 IM 视图只是 event stream 的一种 projection，不应成为底�
 
 ## 5. Session rotation is a separate control problem
 
+**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户，2026-10-17）：Angela 的会话由运行时自动轮换，不按本节与 §11 的建议在第一版手动决定。依据是"上下文管理不应该手动做"。规则见 ../tech-plan.md §4.5。
+
 是否继续老 session，应该综合考虑。
 
 ### 继续老 session 的收益
@@ -435,6 +437,8 @@ Start Meeting
 - 系统重新回到正常层级。
 
 ## 11. Session rotation UX
+
+**语义更新**（#86，用户，2026-10-17）：Angela 的会话由运行时自动轮换，见 §5 开头。
 
 第一版不需要自动判断切 session 时机。
 
