@@ -9,22 +9,22 @@
 Electron 主进程（窗口、托盘）──启动──→ lobotomyd：后端，常驻，每个 host 目录一个
 Electron 渲染进程 ──WebSocket /gui──→ lobotomyd
                                        ├─ host：项目登记、额度域、权限模式、CLI 配置（host.db）
-                                       ├─ 项目实例 × N：SQLite、jj 存储、文件库、槽位、调度器、试用
+                                       ├─ 项目实例 × N：SQLite、文件库、role 的工作目录、调度器
                                        └─ Angela 实例 × 1：她自己的 SQLite、文件库、调度器（host 目录下的 angela/）
 项目中 role 的 CLI（每个 turn 一个进程）──MCP /mcp/{project}/{token}──→ lobotomyd
 Angela 的 CLI（每个 turn 一个进程）──MCP /mcp/angela/{token}──→ lobotomyd
-lobotomyd ──启动──→ 试用终端（用户点「一键体验」时，frontend.md §8）
 ```
+
+**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：`store` crate（jj 私有存储）、采集、验证、预览、展示分支采用与试用终端随 worker 层的替换退出。
 
 - 一个后端进程管理所有项目和 Angela（data-model.md §10，frontend.md §1）。Angela 打不开时，项目照常运行。
 - lobotomyd 的模块：
   - `host.rs`：跨项目的状态。
   - `instance.rs`：运行 turn、保存对话记录的实例，是项目实例与 Angela 共有的部分：数据库、文件库、运行中的 turn 与它们的实时条目。runner、GUI 的推送和对话记录的读取对两者相同。
-  - `project.rs`：一个项目实例。在 `Instance` 之上加私有的 jj 存储、存储任务（物化、采集、验证、预览）和试用。
-  - `projects.rs`：从登记中打开项目、新建项目、记下打不开的项目，以及停止时逐个停下项目。
+  - `project.rs`：一个项目实例，现在只包着它的 `Instance`。
+  - `projects.rs`：从登记中打开项目、新建并接入项目、记下打不开的项目，以及停止时逐个停下项目。
   - `angela.rs`：Angela 的实例与调度器。调度器观察各项目，按规则为她登记 turn，规则见 manager-actions.md §6"Manager 什么时候运行"；她的数据位置见 data-model.md §10.6。
   - `mcp`：MCP 服务。`mod.rs` 是项目中 role 的工具，`angela.rs` 是 Angela 的工具。
-  - `trial.rs`：候选成果试用（frontend.md §8）。
   - `launch.rs`：后端启动的所有进程都经过它（harness-adapter.md §1.8）。
 - role 与 Angela 的 CLI 每个 turn 启动一次，结束即退出（harness-adapter.md §1.1）。
 
@@ -33,9 +33,8 @@ lobotomyd ──启动──→ 试用终端（用户点「一键体验」时，
 ```text
 backend/                 Rust workspace
   crates/core            业务对象、SQLite schema 与迁移、命令层（事务、幂等、事件序号）、GUI 的读模型（view）、host.db
-  crates/store           jj 存储的封装：接入、物化、采集、pin、rebase、预览。jj 的类型不出这个 crate
-  crates/harness         Claude 与 Codex 的 adapter：参数、事件解析；平台层（Windows 的 Job、控制台、句柄，Linux 的进程组，试用的原生终端）
-  crates/lobotomyd       后端进程：host、项目实例与 Angela、调度器、turn runner、采集与验证、试用、GUI WebSocket、MCP HTTP
+  crates/harness         Claude 与 Codex 的 adapter：参数、事件解析；平台层（Windows 的 Job、控制台、句柄，Linux 的进程组）
+  crates/lobotomyd       后端进程：host、项目实例与 Angela、调度器、turn runner、GUI WebSocket、MCP HTTP
     examples/            export-gui-types.rs：从 Rust 类型导出 GUI 的 TypeScript 类型（需 ts-rs feature）
     tests/fixtures       假 Codex、假 Claude（fake-*.mjs）
 frontend/                Electron + React + TypeScript
@@ -53,7 +52,6 @@ spikes/                  实测用的探针脚本
 |---|---|---|
 | SQLite 访问 | rusqlite（bundled） | 命令层持有短事务并向下传递（#6 §1），同步的 `Transaction` 正好合适。单写者、本地进程，不需要 SQLx 的异步连接池和编译期查库 |
 | 写入方式 | 每个项目一个写连接，WAL 模式；读用单独的只读连接（data-model.md §1）；命令在 `spawn_blocking` 中执行 | 单写者避免事务交错 |
-| jj | jj-lib，版本锁定为 `=0.45.1` | API 不稳定，锁定版本并封装在 `store` 中。只用 jj 的存储（git backend）、树合并和本地工作副本状态，不用操作日志与视图：业务事实在 SQLite 中，成果靠 pin 保留 |
 | 异步与 HTTP | tokio、axum | GUI 的 WebSocket 与 MCP 的 HTTP 由同一个服务提供（frontend.md §1） |
 | MCP | 官方 Rust SDK rmcp 3.5，封装在 lobotomyd 的 `mcp` 模块中，类型不出模块 | MCP 2026-07-28 版协议改为无状态：去掉会话与 `initialize` 握手，每个请求在 `_meta` 中带协议版本与能力。rmcp 同时支持新旧版本，默认校验 `Host`（只允许 loopback）。工具处理函数可以从请求上下文读到 URL 中的 token（harness-adapter.md §2） |
 | ID | 类型前缀加 ULID，例如 `task_01J…`，同一毫秒内也按生成顺序排序 | data-model.md §7.7 |

@@ -7,7 +7,7 @@
 
 - **每个里程碑都端到端可用。** 先打通一条完整链路，再增加对象种类和调度能力。
 - **主路径先存在。** 主路径是用户经 Angela 管理项目，借鉴 OpenAI Dots。用户也可以直接打开 Malkuth 等角色的窗口。这条直接通路是常设的二等入口，不是临时方案；用户自然选择，不强制。M1 已经验证"没有 Angela，控制流也能跑通"。
-- **接触成果是一等入口，直接指挥执行者是二等入口。** 用户在任何地方都能直接查看和试用成果。Angela 对话中引用的成果，点开就是任务面板中同一个 diff 与试用视图。二等入口指的是另一件事：绕过 Angela，直接给执行者发消息或建任务。依据：[#20](https://github.com/vorton-lang/Lobotomy/issues/20) 约束 5 要求用户能直接接触成果；Dots 式的主路径约束的是指挥执行者，不是查看成果（用户确认，2026-10-11）。
+- **接触成果是一等入口，直接指挥执行者是二等入口。** 用户在任何地方都能直接查看和试用成果。Angela 对话中引用的成果，点开就是任务面板。任务面板中的 diff 与试用随私有存储退出（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，2026-10-17），成果的入口随 worker 层的替换重新设计。二等入口指的是另一件事：绕过 Angela，直接给执行者发消息或建任务。依据：[#20](https://github.com/vorton-lang/Lobotomy/issues/20) 约束 5 要求用户能直接接触成果；Dots 式的主路径约束的是指挥执行者，不是查看成果（用户确认，2026-10-11）。
 - **事实、权威、判断分开。** 运行时持有事实，用户持有权威，Angela 与各 role 给出判断。判断不能冒充事实，也不能冒充权威。现有的例子：原文由运行时插入，Manager 只引用 ID；`decision` 必须引用用户原话；只有状态能触发通知；记忆不能给模型扩权（[#22](https://github.com/vorton-lang/Lobotomy/issues/22) §4）。新设计按这一条检查：事实归谁，权威归谁，判断有没有机会伪装成另外两者（用户确认，2026-10-11）。
 - **角色不绑定 harness。** 每个 role 都能换 harness，Angela 也一样。外部测试者没有 Claude，所有 role 都要能在 Codex 上运行。官方 CLI 担任 Angela 表现不佳时，可以改用自建的 API harness（用户确认，2026-10-09）。
 - **长期记忆由 Lobotomy 保存。** 不依赖 harness 自带的记忆或原生会话的上下文：harness 和模型会换，它们的上下文窗口和注意力也不同（用户确认，2026-10-09）。
@@ -18,7 +18,7 @@
 
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
-| **M1 执行闭环** | 用户在 GUI 中给 Malkuth 建任务 → 执行 → 采集并固定成果 → 验证 → 用户验收 → 发布 → 物化预览 | 完成。用户与测试者在 Windows 和 Linux 上用真实 Codex 走通全链路。设计见 [data-model.md](data-model.md)、[harness-adapter.md](harness-adapter.md)、[frontend.md](frontend.md) |
+| **M1 执行闭环** | 用户在 GUI 中给 Malkuth 建任务 → 执行 → 采集并固定成果 → 验证 → 用户验收 → 发布 → 物化预览 | 完成。用户与测试者在 Windows 和 Linux 上用真实 Codex 走通全链路。设计见 [data-model.md](data-model.md)、[harness-adapter.md](harness-adapter.md)、[frontend.md](frontend.md)。采集、验证、发布与预览已在重构中退出（#86，2026-10-17） |
 | **M2 第二个 harness** | Claude adapter | 完成，2026-10-10。设计与实测见 harness-adapter.md §1.2–§1.4，没有验证的事项见 §6 |
 | **M3 多项目** | 一个后端管理所有项目；项目列表、新建、归档与取消归档；全局汇总的"等你决定" | 完成，2026-10-11，用户用两个真实仓库验收。设计见 data-model.md §10、frontend.md §1–§3、harness-adapter.md §2 |
 | **M4 最小的全局 Angela** | 见下 | 第 1–3 步已实现（2026-10-11），等用户在实际使用中验收 |
@@ -29,9 +29,9 @@
 **第一优先级是降低用户回来接上工作的成本**（[#50](https://github.com/vorton-lang/Lobotomy/issues/50)，用户确认，2026-10-11）。用户回来时，应能直接试用成果、看懂关键变化、表达下一步意见，不必从聊天记录重新讲起。怎样帮助用户回来后进入状态，用户状态不确定时怎样协作，是开放的研究问题（[#60](https://github.com/vorton-lang/Lobotomy/issues/60)，关联 [#21](https://github.com/vorton-lang/Lobotomy/issues/21)、#50），不作为立即实现的方案。
 
 - 全局只有一个 Angela，放在 host（data-model.md §10.6）。她能看到所有未归档的项目，工具都带项目 ID。
-- 主区是与 Angela 的对话。各项目中 Malkuth 的对话、任务面板和"等你决定"保留为直接入口。Angela 引用的成果，点开就是任务面板中同一个 diff 与试用视图（见"原则"）。
+- 主区是与 Angela 的对话。各项目中 Malkuth 的对话、任务面板和"等你决定"保留为直接入口。Angela 引用的成果，点开就是任务面板（见"原则"）。
 - 她的工具：
-  - 读取：`list_projects`、`read_project`、`read_task`、`read_events`、`read_diff`；
+  - 读取：`list_projects`、`read_project`、`read_task`、`read_events`（`read_diff` 随私有存储退出，#86）；
   - 操作：`assign`、`send_to_role`、`accept`、`send_back`、`abandon`、`set_paused`；
   - 提问与记录：`ask_user`、`ledger_add`、`read_ledger`、`recent_replies`；
   - 回复中用 `[[quote:…]]` 引用用户原话，用 `[[att:…]]` 引用附件（[manager-actions.md](manager-actions.md) §1、§2）。
@@ -48,11 +48,11 @@
 - 收到模糊反馈时，Angela 不把理解的负担推回给用户，先在已授权范围内调查或做小实验，再带结果回来（#21）。这是对她行为的检查项，不是要统计的指标。
 - 实现分 3 步，每步做完都能使用。三步都已完成（2026-10-11）：
   1. **能对话、能读。** 她的数据库与 turn 在 host 目录下；「全部」的主区是与她的对话，所有项目的"等你决定"在右侧栏；她经 MCP 读所有项目，读取结果带边界（data-model.md §10.6）。设置中可以切换她的 harness。
-  2. **能操作。** 调用者 `manager`；派活、转发原话、验收、退回、放弃、暂停；回复中的引用由运行时渲染，附件带版本与当前有效性（manager-actions.md §2.1）。任务面板显示她派活时写的解读、允许的动作和停止条件，并写明任务是谁暂停的。只读调查的任务产生了文件改动时，运行时标出（roles-and-tasks.md §4）。
+  2. **能操作。** 调用者 `manager`；派活、转发原话、验收、退回、放弃、暂停；回复中的引用由运行时渲染，附件带版本与当前有效性（manager-actions.md §2.1）。任务面板显示她派活时写的解读、允许的动作和停止条件，并写明任务是谁暂停的。只读调查的任务产生了文件改动时，运行时标出（roles-and-tasks.md §4；随采集退出，#86）。
   3. **跟上变化。** 收件箱与唤醒、`ask_user`（manager-actions.md §6）；最小的记录与换会话时的投影，`ledger` 参数（manager-actions.md §3.4）；`flag_mismatch`（manager-actions.md §2.3）；`context`、用户手动指定回复对象、"已转给 …"标签（manager-actions.md §1.1）。
 - 验收之前补上三项（用户确认，2026-10-13，[#60](https://github.com/vorton-lang/Lobotomy/issues/60)）：
   - 她的每条输入开头写明用户的本地时间（data-model.md §10.6"她的输入"）。指令中的"时间与节奏"把它当作弱信号。
-  - 她用 `read_diff` 读候选成果与验证的 diff（data-model.md §10.6）。
+  - 她用 `read_diff` 读候选成果与验证的 diff（随私有存储退出，#86）。
   - 用户在设置中为每个 role 选模型和推理强度，两个 harness 各存一份（harness-adapter.md §1.2）。
 
   依据：验收要观察她能否先查证、再判断。她读不到 diff 时，判断出错就分不清是判断的问题，还是缺信息的问题。第三项来自验收前的试用：没有选择时，Claude role 用 CLI 默认的 Fable，Fable 的额度用完后她停了；Codex role 用默认的 `gpt-6.1-sol` 和 low，一次回复要几分钟（harness-adapter.md §1.2 的实测）。这一项不改"先不定 Angela 用哪个模型"：Lobotomy 不设默认模型，由用户选。
@@ -72,11 +72,11 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 
 | 约束 | 检验 |
 |---|---|
-| 1 先提供低成本的真实体验 | 已有：交付说明与候选成果试用（frontend.md §8）。M4 中 Angela 用已有的 diff、报告与试用；用户回来时，她的消息给出可运行的入口（#50）；试用的改进待排 |
+| 1 先提供低成本的真实体验 | 已有：交付说明。候选成果试用与 diff 随私有存储退出（#86）。M4 中 Angela 用已有的报告；用户回来时，她的消息给出可运行的入口（#50） |
 | 2 反馈影响后续自主选择 | M4：ledger 中的决定与约束进入后续任务说明 |
 | 3 保留自主展开的空间 | M4：Angela 的行为检查 |
 | 4 关键变化时重新共同判断 | M4：`ask_user` 只用于关键取舍 |
-| 5 用户能直接接触成果 | M1 已有；M4 中 Angela 引用的成果打开同一个 diff 与试用视图，项目中的直接入口保留 |
+| 5 用户能直接接触成果 | M4 中 Angela 引用的成果打开任务面板，项目中的直接入口保留；diff 与试用随私有存储退出（#86） |
 | 6 共识是可修订的工作依据 | M4：原话与推测分开，变更用 `supersedes` |
 
 ## 待排
@@ -102,7 +102,7 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 | 下层对记录的只读查询 | manager-actions.md §3.4 |
 | 用户纠正记录后，把更新送到受影响的活跃任务 | #22 §2 |
 | 下层的语义检查点 `org_checkpoint` | manager-actions.md §3.5 |
-| 附件引用 turn 输出、集成事件与 GitHub 条目 | manager-actions.md §2.1 |
+| 附件引用 turn 输出与 GitHub 条目 | manager-actions.md §2.1 |
 
 ### 通知
 
@@ -124,16 +124,13 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 | 事项 | 设计与来源 |
 |---|---|
 | 每次启动记录 CLI 版本；CLI 升级后新出现的工具在 Inspector 中标出 | harness-adapter.md §1.5、§1.6；data-model.md §10.2 |
-| "撤销这一轮"：用户命令，把槽位改写为上一个 turn 的采集 | harness-adapter.md §4.1；frontend.md §2 |
 | 在官方应用中接管与交还：在途 turn 怎么处理，怎样确认外部使用已经结束，交还后核对 session、HEAD 与工作区 | [#1](https://github.com/vorton-lang/Lobotomy/issues/1)；manager-actions.md §4.3；frontend.md §2 |
 
-### 审阅与试用
+### 审阅
 
 | 事项 | 设计与来源 |
 |---|---|
-| 审阅：diff 上的行内评论一次退回给执行者；改动可以看"这一轮相对上一轮" | ui-ux-plan.md §6、§8 第 3 条（用户确认，2026-10-12） |
 | 在编辑器中打开候选成果 | ui-ux-plan.md §6、§8 第 5 条；本文"接触成果是一等入口"（用户确认，2026-10-12） |
-| 试用的改进：阶段进展也能试用，不只是 done 的候选成果；在 GUI 或远程入口中看到试用的输出；Linux 上支持更多终端，并简化进程组接管（现在约 150 行握手，防的是罕见情况），需要在 Linux 桌面上实测，并补上 Linux 终端路径的测试 | #20；frontend.md §8 |
 
 ### 界面
 
@@ -150,9 +147,7 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 | 事项 | 设计与来源 |
 |---|---|
 | 大工具输出与保留的原始输出：所属任务关闭 30 天后回收全文；文件库的稀疏行索引 | data-model.md §7.3、§7.5 |
-| 归属与物化记录补全：隔离的旧现场与试用副本现在只按目录确定，试用与验证现场只登记在后端内存中；遗留内容在项目打开时删除 | data-model.md §5、§6；frontend.md §8 |
 | 清扫补全：没有记录的文件库文件、后端崩溃留下的 MCP 配置文件（含 token）、回收记录；删除失败后定期重试，GUI 显示占用的空间和原因 | data-model.md §6 |
-| jj 中采集记录与 pin 的保留期 | data-model.md §6；[#6](https://github.com/vorton-lang/Lobotomy/issues/6) |
 
 ### 性能基线
 
