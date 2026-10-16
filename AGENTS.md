@@ -55,7 +55,7 @@ agent 负责验收并合并这些修复 PR：看改动是否只修了失败的�
 | `backend/crates/lobotomyd` 的运行时（runner、MCP、额度、恢复） | `cargo test -p lobotomyd --test backend <名字片段>`，只运行名字含这个片段的测试，例如 `quota`、`claude`、`angela` |
 | `backend/crates/lobotomyd/src/launch.rs`（子进程的环境） | `cargo test -p lobotomyd --test environment` |
 | `backend/crates/lobotomyd/src/gui` | `cargo test -p lobotomyd --test gui` |
-| 发给 GUI 的 Rust 类型：带 ts-rs 派生的结构，在 core、store 与 lobotomyd 中，例如 `core::view`、`lobotomyd/src/gui` | 在 `frontend/` 运行 `npm run api:generate`，提交生成的 `src/api/generated.ts`；再运行 `npm run api:check` |
+| 发给 GUI 的 Rust 类型：带 ts-rs 派生的结构，在 core 与 lobotomyd 中，例如 `core::view`、`lobotomyd/src/gui` | 在 `frontend/` 运行 `npm run api:generate`，提交生成的 `src/api/generated.ts`；再运行 `npm run api:check` |
 | `frontend/src` | `npm run lint`、`npm run typecheck` 和 `npm test`；改了界面行为时，加上相关的 e2e：`npx playwright test -g "<标题片段>"` |
 | 对话列表的滚动与分页 | 再加上 CPU 降速的滚动测试：`npx playwright test -g "slow machine"` |
 | `frontend/electron` | `npm run lint` 和 `npx playwright test e2e/electron.spec.ts` |
