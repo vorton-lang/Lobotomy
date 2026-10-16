@@ -65,11 +65,9 @@ export interface SearchState {
 }
 
 /**
- * A page of the settings (frontend.md §7.8): the host's permissions, Angela, or one tab of a
- * project. The settings choose their page themselves; where the window is does not change it.
+ * A page of the settings (frontend.md §7.8): the host's permissions, Angela, or a project. The settings choose their page themselves; where the window is does not change it.
  */
-export type SettingsPage =
-  { kind: 'permissions' } | { kind: 'angela' } | { kind: 'project'; project: string; tab: 'general' | 'checks' };
+export type SettingsPage = { kind: 'permissions' } | { kind: 'angela' } | { kind: 'project'; project: string };
 
 /** The settings while they are open, with the snapshot of the page's project or of Angela. */
 export interface SettingsState {
@@ -743,8 +741,6 @@ function onPush(push: Push) {
               e.payload.task_id === selected),
         )
       )
-        refreshDetail();
-      else if (selected && push.events.some((e) => e.kind.startsWith('verification.') || e.kind.startsWith('capture.')))
         refreshDetail();
       if (push.events.some((e) => e.kind.startsWith('message.'))) refreshThread();
       if (push.events.some((e) => e.kind.startsWith('turn.'))) refreshTurnStates();

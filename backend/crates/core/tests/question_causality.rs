@@ -39,7 +39,6 @@ fn an_older_continue_message_does_not_answer_a_new_question() {
         let waiting = || reply_queued(&db, &task);
         assert!(!waiting(), "an older message is context, not a queued answer (manager={manager})");
         end_turn(&db, &first.turn_id);
-        pin_captures(&db);
         let contextual = register(&db);
         let input = db.read(|c| lobotomy_core::turn::load_turn(c, &contextual.turn_id)).unwrap().input;
         assert!(
@@ -85,12 +84,11 @@ fn reply_queued(db: &Db, task: &str) -> bool {
 }
 
 fn attention(db: &Db) -> Vec<Attention> {
-    db.read(|c| Ok(lobotomy_core::view::attention(&overview(c, "lobotomy")?, &[], &[], |_| false))).unwrap()
+    db.read(|c| Ok(lobotomy_core::view::attention(&overview(c, "lobotomy")?, &[], |_| false))).unwrap()
 }
 
 fn finish(db: &Db, turn: &str) {
     end_turn(db, turn);
-    pin_captures(db);
 }
 
 #[test]
@@ -129,7 +127,6 @@ fn a_question_generation_survives_duplicates_but_not_reasking_or_replacing() {
 fn manager_questions_match_individually_by_enqueue_order_and_recipient() {
     use lobotomy_core::manager::AskUser;
     let db = db();
-    idle_slot(&db);
     send(&db, "start", None, "看看现状");
     let first = register(&db);
     let caller = Caller::Role { role: ROLE.into(), turn_id: first.turn_id.clone() };
@@ -216,7 +213,6 @@ fn restarting_and_continuing_do_not_turn_context_into_an_answer_or_lift_a_pause(
         },
     )
     .unwrap();
-    pin_captures(&db);
     let resumed = db.execute(&Caller::User, &Continue { request_id: "continue".into(), role: ROLE.into() }).unwrap();
     let input = db.read(|c| lobotomy_core::turn::load_turn(c, &resumed.turn_id)).unwrap().input;
     assert!(input.contains("继续") && input.contains("仍在等待回答"), "{input}");
@@ -258,7 +254,7 @@ fn upgrading_recovers_boundaries_from_events_and_keeps_unknown_history_open() {
         // Restore the prior schema, including the old task mirror, without losing its data.
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE display_adoption; DROP TABLE display_observation;
+            "DROP TABLE IF EXISTS display_adoption; DROP TABLE IF EXISTS display_observation;
          DROP TABLE role_model; ALTER TABLE role ADD COLUMN model TEXT;
             ALTER TABLE task ADD COLUMN blocked_reason TEXT;
             UPDATE task SET blocked_reason = (SELECT body FROM question WHERE task_id = task.id AND closed_at IS NULL);

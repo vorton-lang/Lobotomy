@@ -7,7 +7,6 @@
 //! before 2026-07-28: rmcp answers each of their requests on its own.
 
 pub mod angela;
-mod diff;
 
 use std::sync::Arc;
 
@@ -20,7 +19,6 @@ use axum::{
 };
 use lobotomy_core::Caller;
 use lobotomy_core::report::{FlagMismatch, OrgReport, ReportEffect, ReportStatus};
-use lobotomy_core::task::Trial;
 use lobotomy_core::turn::turn_by_token;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -142,14 +140,6 @@ pub enum ReportStatusArg {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct TrialArg {
-    /// 从候选成果根目录运行的具体命令。Windows 上由 Windows PowerShell 执行，Linux 上由 sh 执行
-    pub command: String,
-    /// 用户运行此命令可以体验或验证什么
-    pub purpose: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct OrgReportArgs {
     /// 一句话标题
     pub title: String,
@@ -158,8 +148,6 @@ pub struct OrgReportArgs {
     pub status: ReportStatusArg,
     /// status 为 blocked 时，需要用户决定的问题
     pub blocked_on: Option<String>,
-    /// 仅 done 可附带的体验建议。只保存元数据，用户明确点击后才会运行，不会自动执行，也不是自动验证检查
-    pub trial: Option<TrialArg>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -230,13 +218,7 @@ impl OrgTools {
                 ReportStatusArg::Blocked => ReportStatus::Blocked,
                 ReportStatusArg::Done => ReportStatus::Done,
             };
-            let report = OrgReport {
-                title: args.title,
-                body: args.body,
-                status,
-                blocked_on: args.blocked_on,
-                trial: args.trial.map(|trial| Trial { command: trial.command, purpose: trial.purpose }),
-            };
+            let report = OrgReport { title: args.title, body: args.body, status, blocked_on: args.blocked_on };
             project.db.execute_recorded(&caller, &report)
         })
         .await
@@ -246,10 +228,9 @@ impl OrgTools {
             Ok((ReportEffect::Recorded, id)) => format!("已记录（{id}）。"),
             Ok((ReportEffect::Unchanged, id)) => format!("与之前的汇报相同，没有重复记录（{id}）。"),
             Ok((ReportEffect::Late, id)) => format!("这次汇报没有生效：它所属的执行轮已经结束（{id}）。"),
-            Ok((ReportEffect::NoTask, id)) => format!(
-                "这次汇报没有生效：这个 turn 不属于任何任务，done 和提问只对执行中的任务有效（{id}）。\
-                 你在这个 turn 里做的改动不会进入任何成果；用户会决定把它们建成任务还是丢弃。"
-            ),
+            Ok((ReportEffect::NoTask, id)) => {
+                format!("这次汇报没有生效：这个 turn 不属于任何任务，done 和提问只对执行中的任务有效（{id}）。")
+            }
             Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(format!("汇报被拒绝：{e}"))])),
         };
         project.wake.notify_one();
@@ -286,25 +267,6 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-
-    #[test]
-    fn org_report_trial_is_optional_and_described_in_the_schema() {
-        let legacy = json!({ "title": "完成", "body": "已验证", "status": "done" });
-        let args: OrgReportArgs = serde_json::from_value(legacy.clone()).unwrap();
-        assert!(args.trial.is_none(), "older workers do not need to send trial");
-
-        let mut with_trial = legacy;
-        with_trial["trial"] = json!({ "command": "npm run dev", "purpose": "体验页面" });
-        let args: OrgReportArgs = serde_json::from_value(with_trial).unwrap();
-        let trial = args.trial.unwrap();
-        assert_eq!((trial.command.as_str(), trial.purpose.as_str()), ("npm run dev", "体验页面"));
-
-        let schema = serde_json::to_value(schemars::schema_for!(OrgReportArgs)).unwrap();
-        assert!(schema["properties"]["trial"].is_object());
-        assert!(!schema["required"].as_array().unwrap().contains(&json!("trial")));
-        let required = schema["$defs"]["TrialArg"]["required"].as_array().unwrap();
-        assert!(required.contains(&json!("command")) && required.contains(&json!("purpose")));
-    }
 
     #[derive(serde::Deserialize, schemars::JsonSchema)]
     struct EchoArgs {

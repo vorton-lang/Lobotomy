@@ -15,7 +15,6 @@ use lobotomy_core::role::{Role, load_role};
 use lobotomy_core::turn::{
     EndTurn, Failure, FailureKind, InputDelivered, Outcome, SessionIdentified, Turn, TurnLaunched, load_turn,
 };
-use lobotomy_core::workspace::load_workspace;
 use lobotomy_core::{Caller, Command, Db, Error};
 use lobotomy_harness::event::{Event, Item, ItemKind};
 use lobotomy_harness::process::{self, Spawned};
@@ -136,18 +135,14 @@ fn instructions(role: &Role) -> String {
     text.replace("{name}", &role.name)
 }
 
-/// Where the turn's CLI runs: its slot (harness-adapter.md §3). The manager has no slot; her
-/// working directory is an empty directory of her own (data-model.md §10.6).
-async fn working_dir(instance: &Instance, turn: &Turn, role: &Role) -> anyhow::Result<PathBuf> {
-    match turn.workspace_id.clone() {
-        Some(id) => Ok(instance.slot_dir(&db(instance, move |db| db.read(|c| load_workspace(c, &id))).await?.name)),
-        None if role.kind == "manager" => {
-            let dir = instance.data_dir.join("work");
-            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-            Ok(dir)
-        }
-        None => anyhow::bail!("{} has no slot", role.name),
-    }
+/// Where the turn's CLI runs: an empty directory of the role's own. The manager's is her
+/// instance's `work` (data-model.md §10.6); a project's roles each have one under theirs. Roles
+/// get no copy of the repository until the worker layer is replaced (#86).
+fn working_dir(instance: &Instance, role: &Role) -> anyhow::Result<PathBuf> {
+    let work = instance.data_dir.join("work");
+    let dir = if role.kind == "manager" { work } else { work.join(&role.name) };
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
 }
 
 /// What the runner saw in the CLI's output.
@@ -208,8 +203,7 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
         return end(instance, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
     };
 
-    // A slot was ready when the turn was registered (harness-adapter.md §3).
-    let cwd = working_dir(instance, &turn, &role).await?;
+    let cwd = working_dir(instance, &role)?;
     let turns_dir = instance.data_dir.join("turns");
     std::fs::create_dir_all(&turns_dir).with_context(|| format!("creating {}", turns_dir.display()))?;
     let cli = instance.host.harness.cli(harness);
@@ -253,8 +247,7 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
     };
     let (program, prefix) = cli.program()?;
     let args: Vec<String> = prefix.iter().cloned().chain(args).collect();
-    let what = launch::What::Program { program, args: &args };
-    let mut spawned = match launch::spawn(what, &cwd, &instance.empty_gh_config_dir()).await {
+    let mut spawned = match launch::spawn(program, &args, &cwd, &instance.empty_gh_config_dir()) {
         Ok(spawned) => spawned,
         Err(e) => {
             let message = format!("无法启动 {}（{}）：{e:#}", harness.label(), program.display());

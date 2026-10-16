@@ -5,16 +5,12 @@
 mod common;
 
 use common::*;
-use lobotomy_core::capture::{CaptureResult, FinishCapture, pending_captures};
 use lobotomy_core::ledger::{CitedEntry, LedgerKind};
 use lobotomy_core::report::ReportStatus;
 use lobotomy_core::task::{
-    Action, Assign, ContextEntry, CreateTask, EditCriteria, Phase, Quote, Reopen, SendToRole, SetPaused, load_task,
-    queued_messages,
+    Accept, Action, Assign, ContextEntry, CreateTask, EditCriteria, Quote, Reopen, SendBack, SendToRole, SetPaused,
+    load_task, queued_messages,
 };
-use lobotomy_core::verify::{Accept, SendBack};
-use lobotomy_core::view::attachment::{Attachment, attachment};
-use lobotomy_core::view::manager::task_read;
 use lobotomy_core::view::overview;
 use lobotomy_core::{Caller, Db};
 
@@ -130,29 +126,6 @@ fn an_assignment_says_what_it_allows_and_when_to_stop() {
     }
 }
 
-/// A task that allows reading only and still changed files is marked, not refused: the user or the
-/// manager decides whether to accept it (roles-and-tasks.md §4).
-#[test]
-fn a_read_only_task_that_changed_files_is_marked_not_refused() {
-    let db = db();
-    let task = db.execute(&angela(), &assign("a1")).unwrap().id;
-    start(&db, &task);
-    let t = register(&db);
-    report(&db, &t.turn_id, ReportStatus::Done, None).unwrap();
-    end_turn(&db, &t.turn_id);
-    let capture = db.read(pending_captures).unwrap().pop().unwrap();
-    let result = CaptureResult::Pinned { commit: "c1".into(), changed: vec!["src/main.rs".into()] };
-    db.execute(&Caller::Runtime, &FinishCapture { capture_id: capture.id.clone(), result }).unwrap();
-    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, Phase::Verifying, "verification goes ahead");
-
-    let read = db.read(|c| task_read(c, &task)).unwrap();
-    assert_eq!(read.attempts[0].candidate.as_ref().unwrap().unallowed_changes, ["src/main.rs"]);
-    match db.read(|c| attachment(c, &capture.id)).unwrap() {
-        Some(Attachment::Candidate { unallowed_changes, .. }) => assert_eq!(unallowed_changes, 1),
-        other => panic!("not a candidate: {other:?}"),
-    }
-}
-
 /// The manager is the executor's user (manager-actions.md §0): her message answers its question as
 /// the user's does (#17), and says which words are the user's.
 #[test]
@@ -163,7 +136,6 @@ fn the_managers_message_quotes_the_user_and_answers_a_question() {
     let t = register(&db);
     report(&db, &t.turn_id, ReportStatus::Blocked, Some("用哪个端口？")).unwrap();
     end_turn(&db, &t.turn_id);
-    pin_captures(&db);
     let message = SendToRole {
         request_id: "s1".into(),
         role: ROLE.into(),
@@ -208,15 +180,12 @@ fn the_managers_message_quotes_the_user_and_answers_a_question() {
 #[test]
 fn the_manager_accepts_but_never_lets_the_users_words_go() {
     let db = db();
-    let (task, commit) = candidate(&db);
-    let v = verify(&db, &task, &commit, vec![], vec![]);
+    let task = candidate(&db);
     let added = send(&db, "m1", Some(&task), "异常行要能看到原始行号");
     let accept = |dropping: Vec<String>| Accept {
         request_id: format!("a{}", dropping.len()),
         task_id: task.clone(),
-        verification_id: v.clone(),
         criteria_version: 1,
-        expected_integration: BASE.into(),
         dropping,
     };
     assert_eq!(rejection(db.execute(&angela(), &accept(vec![]))), "undelivered_messages");

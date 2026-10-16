@@ -1,39 +1,21 @@
-// A task's detail over the thread: what the user asked, the criteria, the latest verification,
-// the candidate's changes, and the actions of its phase (data-model.md §9.2). It is a region of
+// A task's detail over the thread: what the user asked, the criteria, the executor's delivery,
+// and the actions of its phase (data-model.md §9.2). It is a region of
 // the window, not a dialog: the thread and the sidebar stay usable while it is open. Its left edge
 // drags it wider or narrower; it never gets wider than the thread.
 
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import type { CheckRun, TaskDetail } from '../api/types';
-import {
-  ACTION_LABEL,
-  jsonObject,
-  checkPassed,
-  checkSummary,
-  clock,
-  deliveryReport,
-  PHASE_LABEL,
-  PHASE_LOOK,
-  shortSha,
-  taskNow,
-  timeline,
-  unallowedChanges,
-  VERIFICATION_LABEL,
-  workRange,
-} from '../format';
+import type { TaskDetail } from '../api/types';
+import { ACTION_LABEL, clock, deliveryReport, PHASE_LABEL, PHASE_LOOK, taskNow, timeline } from '../format';
 import { run, selectTask, useStore } from '../store';
-import { ICON, Markdown, Modal, Output } from './common';
-import { DiffPool, DiffView } from './DiffView';
+import { ICON, Markdown, Modal } from './common';
 import { Sash, useWidth } from './Sash';
 import { StatusPill } from './Status';
-import { TrialControls } from './TrialControls';
 
 export function TaskPanel({ taskId }: { taskId: string }) {
   const column = useWidth('task-panel', 820, 360, 2400);
   const detail = useStore((s) => s.taskDetail);
   const task = useStore((s) => s.snapshot?.tasks.find((t) => t.id === taskId));
-  const integration = useStore((s) => s.snapshot?.project?.integration);
   // The task its executor works on now, when that is another one: after acceptance the next task
   // starts while this panel stays open (#18).
   const current = useStore((s) => {
@@ -48,30 +30,19 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const close = () => selectTask(null);
   const closed = task.phase === 'done' || task.phase === 'abandoned';
   const loaded = detail?.task.id === taskId ? detail : null;
-  const verification = loaded?.verifications.at(-1);
   const criteria = loaded?.criteria.at(-1);
   const latest = loaded?.attempts.at(-1);
   const delivery = loaded && deliveryReport(loaded.attempts);
-  // A verification of an earlier round stays visible, but never as the current result (#13).
-  const verifiedRound = loaded?.attempts.find((a) => a.id === verification?.attempt_id)?.seq;
-  const earlier = !!verification && verification.attempt_id !== latest?.id;
-  const acceptable = task.phase === 'accepting' && verification?.state === 'passed';
+  const acceptable = task.phase === 'accepting';
   // Messages the executor never got hold acceptance until the user decides about them (#14).
   const undelivered = loaded?.undelivered_messages ?? [];
-  const unallowed = loaded ? unallowedChanges(loaded) : [];
 
-  // Accepting names the verification, the criteria version, the integration head and the
-  // undelivered messages the user saw; the backend refuses if any differ (harness-adapter.md §4.2).
-  // The criteria version is the one shown below, not the snapshot's, which may be newer (#16).
+  // Accepting names the criteria version and the undelivered messages the user saw; the backend
+  // refuses if either differs. The criteria version is the one shown below, not the snapshot's,
+  // which may be newer (#16).
   const accept = (dropping: string[]) => {
-    if (!verification || !criteria || !integration) return;
-    return run('accept', {
-      task_id: task.id,
-      verification_id: verification.id,
-      criteria_version: criteria.version,
-      expected_integration: integration,
-      dropping,
-    });
+    if (!criteria) return;
+    return run('accept', { task_id: task.id, criteria_version: criteria.version, dropping });
   };
 
   return (
@@ -123,9 +94,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         <p className="muted">正在加载…</p>
       ) : (
         <div className="panel-body">
-          <p className="now">
-            {taskNow(task.phase, latest?.seq, verification && !earlier ? verification.state : null)}
-          </p>
+          <p className="now">{taskNow(task.phase, latest?.seq)}</p>
           {acceptable && undelivered.length > 0 && (
             <section className="card warn undelivered">
               <h3>还有 {undelivered.length} 条消息没有交给执行者</h3>
@@ -141,21 +110,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
                 </button>
                 <button onClick={() => accept(undelivered.map((m) => m.id))}>验收，不再投递这些消息</button>
               </div>
-            </section>
-          )}
-          {unallowed.length > 0 && (
-            // Marked, not refused (roles-and-tasks.md §4).
-            <section className="card warn" aria-label="超出允许的动作">
-              <h3>这是只读调查任务，候选成果却改了 {unallowed.length} 个文件</h3>
-              <p className="muted">运行时只标出，不拦截。是否验收由你或 Angela 决定。</p>
-              <ul>
-                {unallowed.slice(0, 10).map((path) => (
-                  <li key={path}>
-                    <code>{path}</code>
-                  </li>
-                ))}
-              </ul>
-              {unallowed.length > 10 && <p className="muted">另有 {unallowed.length - 10} 个</p>}
             </section>
           )}
           <section className={`delivery${delivery?.earlier ? ' earlier' : ''}`} aria-label="交付说明">
@@ -174,7 +128,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               <p className="muted">本轮还没有交付说明。</p>
             )}
           </section>
-          <TrialControls key={task.id} detail={loaded} />
           {loaded.task.assignment ? (
             // Angela's task: the user's words she quoted, then her own (roles-and-tasks.md §4).
             <>
@@ -211,35 +164,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             </h3>
             <Markdown text={criteria?.text || '（无）'} />
           </section>
-          {verification && (
-            // A failure of this round opens: sending back starts from its reasons.
-            <details
-              key={verification.id}
-              className={`verification-details${earlier ? ' earlier' : ''}`}
-              open={!earlier && verification.state === 'failed'}
-            >
-              <summary>
-                {earlier ? `上一轮的验证（第 ${verifiedRound} 轮）` : `验证（第 ${verifiedRound} 轮）`}{' '}
-                <span className={`badge ${verification.state}`}>{VERIFICATION_LABEL[verification.state]}</span>
-              </summary>
-              <p className="muted">
-                {earlier && `第 ${latest?.seq} 轮还没有验证。`}基于集成版本 {shortSha(verification.base)} · 检查设置第{' '}
-                {verification.config_version} 版 · {clock(verification.created_at)}
-              </p>
-              {verification.conflicts.length > 0 && <p className="error">冲突：{verification.conflicts.join('、')}</p>}
-              {loaded.checks
-                .filter((c) => c.verification_id === verification.id)
-                .map((check) => (
-                  <CheckView key={check.id} check={check} earlier={earlier} />
-                ))}
-              {verification.state !== 'running' &&
-                verification.conflicts.length === 0 &&
-                !loaded.checks.some((c) => c.verification_id === verification.id) && (
-                  <p className="muted">没有设置检查命令，验证只确认采集完整、没有冲突。可以在 ⚙ 设置里添加。</p>
-                )}
-            </details>
-          )}
-          <Changes key={`changes:${loaded.task.id}`} detail={loaded} />
           <History detail={loaded} />
         </div>
       )}
@@ -253,39 +177,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         />
       )}
     </section>
-  );
-}
-
-function CheckView({ check, earlier }: { check: CheckRun; earlier: boolean }) {
-  const ok = checkPassed(check);
-  return (
-    <details className={`check ${ok ? 'ok' : 'failed'}`} open={!ok && !earlier}>
-      <summary>
-        <code>{check.command}</code> · {checkSummary(check)}
-      </summary>
-      <Output value={jsonObject(check.output).stdout} />
-      <Output value={jsonObject(check.output).stderr} />
-    </details>
-  );
-}
-
-// The diff is computed only once the section is opened.
-function Changes({ detail }: { detail: TaskDetail }) {
-  const [open, setOpen] = useState(false);
-  const range = workRange(detail);
-  if (!range) return null;
-  return (
-    <details
-      className={`changes-details${range.earlier ? ' earlier' : ''}`}
-      onToggle={(e) => setOpen(e.currentTarget.open)}
-    >
-      <summary>改动 · {range.label}</summary>
-      {open && (
-        <DiffPool>
-          <DiffView from={range.from} to={range.to} />
-        </DiffPool>
-      )}
-    </details>
   );
 }
 
@@ -336,7 +227,7 @@ function EditCriteria(props: { taskId: string; version: number; text: string; on
   const [value, setValue] = useState(text);
   return (
     <Modal title="修改完成条件" onClose={onClose}>
-      <p className="muted">修改会生成新版本。任务在执行时，新版本会发给执行者；已有的验证结果仍然对应旧版本。</p>
+      <p className="muted">修改会生成新版本。任务在执行时，新版本会发给执行者。</p>
       <textarea value={value} onChange={(e) => setValue(e.target.value)} rows={6} autoFocus aria-label="完成条件" />
       <div className="actions">
         <button onClick={onClose}>取消</button>

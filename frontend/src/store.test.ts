@@ -63,7 +63,6 @@ afterEach(() => {
 const snapshot = (permission: 'full' | 'auto_review'): Snapshot => ({
   seq: 1,
   project: null,
-  config: null,
   roles: [],
   tasks: [],
   attention: [],
@@ -223,7 +222,7 @@ test('the window keeps its project while it stays open; at start it shows the on
 });
 
 test('the total counts each project’s items, Angela’s, and the host’s quota domains once', () => {
-  const accept = { kind: 'accept', task_id: 't', title: 'T', verification_id: 'v' } as const;
+  const accept = { kind: 'accept', task_id: 't', title: 'T' } as const;
   const quota = {
     kind: 'quota',
     domain: { harness: 'claude', account: '', blocked_at: 1, resets_at: null, message: null },

@@ -20,7 +20,7 @@
 // Flags placed before Claude's own arguments change the process itself:
 //   --fake-start-error  rejects its arguments: an error on stderr, nothing on stdout, exit code 1
 // Every run writes the environment it sees to last-env.json and its arguments to last-args.json,
-// inside .git when its cwd is a slot (so captures do not pick them up), else in its cwd.
+// inside .git when its cwd has one, else in its cwd.
 import fs from 'node:fs';
 import path from 'node:path';
 

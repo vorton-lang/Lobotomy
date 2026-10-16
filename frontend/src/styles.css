@@ -356,19 +356,8 @@ details[open] > summary::before {
   white-space: nowrap;
   user-select: none;
 }
-.badge.passed {
-  color: var(--done);
-  background: var(--done-soft);
-}
-.badge.failed {
-  color: var(--fail);
-  background: var(--fail-soft);
-}
 .badge.expired {
   color: var(--fail);
-  margin-left: 6px;
-}
-.badge.accepted {
   margin-left: 6px;
 }
 /* A round mark for a state, such as a turn that runs. */
@@ -974,13 +963,6 @@ button.project-item.selected:hover:not(:disabled) {
   border-left: 3px solid var(--line-strong);
   padding-left: 8px;
 }
-.card .paths {
-  margin: 0 0 6px;
-  padding-left: 20px;
-  font-size: var(--text-xs);
-  max-height: 160px;
-  overflow: auto;
-}
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -1223,25 +1205,10 @@ svg.mark {
   align-items: center;
   gap: 8px;
 }
-.check {
-  margin: 6px 0;
-}
-.check.failed summary {
-  color: var(--fail);
-}
 .history {
   padding-left: 20px;
   color: var(--muted);
   font-size: var(--text-sm);
-}
-.diff-note {
-  padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  margin: 6px 0;
-}
-.diff > * + * {
-  margin-top: 8px;
 }
 
 .backdrop {
@@ -1292,15 +1259,6 @@ svg.mark {
   font-size: var(--text-sm);
   font-weight: 600;
   margin: 16px 0 4px;
-}
-.check-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  margin: 6px 0;
-}
-.check-row input[type='number'] {
-  width: 90px;
 }
 /* The settings (components/Settings.tsx, frontend.md §7.8): their own navigation on the left,
    one setting per row on the right. */
@@ -1462,21 +1420,6 @@ svg.mark {
 .danger-zone .setting-row {
   border-bottom: none;
 }
-/* The form's save bar stays in view at the bottom of the page. */
-.settings-save {
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 24px;
-  padding: 12px 0 16px;
-  background: var(--bg);
-  border-top: 1px solid var(--line);
-}
-.settings-save .spacer {
-  flex: 1;
-}
 
 /* A column's edge that drags it wider or narrower (components/Sash.tsx). */
 .sash {
@@ -1566,28 +1509,6 @@ svg.mark {
   background-color: var(--highlight-current);
 }
 
-.verification-details,
-.changes-details {
-  margin-top: 20px;
-}
-.verification-details > summary,
-.changes-details > summary {
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
 .delivery {
   overflow-wrap: anywhere;
-}
-.trial-controls {
-  overflow-wrap: anywhere;
-}
-.trial-command {
-  background: var(--sunken);
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.trial-list {
-  margin-top: 12px;
 }

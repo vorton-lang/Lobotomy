@@ -7,7 +7,7 @@ use lobotomy_core::view::{Event, events_after, last_event};
 use lobotomy_core::{Caller, Db};
 
 mod common;
-use common::{create, db, ready_slot, register, report};
+use common::{create, db, register, report};
 
 fn events(db: &Db, after: i64) -> Vec<Event> {
     db.read(|c| events_after(c, after)).unwrap()
@@ -29,7 +29,7 @@ fn all_events_of_a_command_name_its_record() {
     let db = db();
     let task = create(&db, "r1");
     let before = last(&db);
-    let (_, id) = db.execute_recorded(&Caller::Runtime, &StartAttempt { task_id: task, code_start: None }).unwrap();
+    let (_, id) = db.execute_recorded(&Caller::Runtime, &StartAttempt { task_id: task }).unwrap();
     let written = events(&db, before);
     assert!(written.len() > 1, "starting an attempt writes several events");
     assert!(written.iter().all(|e| e.command_id.as_deref() == Some(id.as_str())), "every one names the command");
@@ -40,8 +40,7 @@ fn all_events_of_a_command_name_its_record() {
 fn events_tell_the_user_the_runtime_and_a_role_apart() {
     let db = db();
     let task = create(&db, "r1");
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: task, code_start: None }).unwrap();
-    ready_slot(&db);
+    db.execute(&Caller::Runtime, &StartAttempt { task_id: task }).unwrap();
     let turn = register(&db);
     report(&db, &turn.turn_id, ReportStatus::Progress, None).unwrap();
 

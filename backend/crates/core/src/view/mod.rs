@@ -2,8 +2,7 @@
 //! one call of `Db::read`, so it sees one committed state (#16).
 //!
 //! The GUI's connection in `lobotomyd` adds what only the running backend knows: the live items of
-//! running turns, the host's quota domains and settings, failed store jobs, and whether a process
-//! still runs.
+//! running turns, the host's quota domains and settings, and whether a process still runs.
 
 pub mod attachment;
 pub mod manager;
@@ -16,9 +15,8 @@ use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::capture::{Capture, capture_in_progress, outside_changes};
 use crate::error::Result;
-use crate::project::{Project, ProjectConfig, current_config, load_project};
+use crate::project::{Project, load_project};
 use crate::quota::Domain;
 use crate::role::{Role, list_roles};
 use crate::task::{
@@ -26,10 +24,8 @@ use crate::task::{
     undelivered_user_messages,
 };
 use crate::turn::{Hold, Outcome, Turn, TurnState, hold, last_turn, unfinished_turn};
-use crate::verify::{Verification, latest_verification, preview_stopped};
-use crate::workspace::{Workspace, current_workspace};
 
-pub use task::{CheckRun, Criteria, Decision, Publication, TaskDetail, task_detail};
+pub use task::{Criteria, Decision, TaskDetail, task_detail};
 pub use thread::{
     CommandRecord, Found, Item, Match, MatchKind, SearchQuery, ThreadPage, ThreadQuery, search, thread_page,
 };
@@ -41,26 +37,12 @@ pub struct Overview {
     /// The last event it includes; pushed events after it apply on top.
     pub seq: i64,
     pub project: Option<Project>,
-    pub config: Option<ConfigView>,
-    /// Display observation and adoption progress appear as an attention entry.
-    #[serde(skip)]
-    pub display: Option<crate::display::DisplayView>,
     pub roles: Vec<RoleView>,
     pub tasks: Vec<TaskView>,
-    /// Why the preview stopped, if it did. The GUI sees it as an attention entry.
-    #[serde(skip)]
-    pub preview_stopped: Option<String>,
     /// The manager's open questions to the user; only her database has any. The GUI sees them as
     /// attention entries.
     #[serde(skip)]
     pub questions: Vec<crate::manager::Question>,
-}
-
-#[derive(Serialize)]
-#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
-pub struct ConfigView {
-    pub version: i64,
-    pub config: ProjectConfig,
 }
 
 #[derive(Serialize)]
@@ -73,9 +55,6 @@ pub struct RoleView {
     pub last_turn: Option<Turn>,
     pub hold: Option<Hold>,
     pub stalled: Option<Stalled>,
-    /// Changes a turn outside any task left in the slot, waiting for the user (#14).
-    pub outside: Option<Capture>,
-    pub workspace: Option<Workspace>,
     pub queued_messages: usize,
 }
 
@@ -95,7 +74,6 @@ pub struct TaskView {
     pub task: Task,
     pub attempt_seq: Option<i64>,
     pub attempt_open: bool,
-    pub verification: Option<Verification>,
     /// The user's messages its executor never got; accepting needs the user to let them go (#14).
     pub undelivered_messages: usize,
     /// A reply from the user or Angela waits for the executor's next turn (#17).
@@ -107,17 +85,9 @@ pub struct TaskView {
 pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
     let seq = last_event(conn)?;
     let project = load_project(conn)?;
-    let config = match project {
-        Some(_) => Some(current_config(conn).map(|(version, config)| ConfigView { version, config })?),
-        None => None,
-    };
     let mut queued = Vec::new();
     let mut roles = Vec::new();
     for role in list_roles(conn)? {
-        let workspace = match &role.slot {
-            Some(slot) => current_workspace(conn, slot)?,
-            None => None,
-        };
         let messages = queued_messages(conn, &role.name)?;
         let mut view = RoleView {
             task_id: occupant(conn, &role.name)?,
@@ -125,8 +95,6 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
             last_turn: last_turn(conn, &role.name)?,
             hold: hold(conn, &role.name)?,
             stalled: None,
-            outside: outside_changes(conn, &role.name)?,
-            workspace,
             queued_messages: messages.len(),
             role,
         };
@@ -142,28 +110,21 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
         tasks.push(TaskView {
             attempt_seq: attempt.as_ref().map(|a| a.seq),
             attempt_open: attempt.is_some_and(|a| a.ended_at.is_none()),
-            verification: latest_verification(conn, &task.id)?,
             undelivered_messages: undelivered_user_messages(conn, &task.id)?.len(),
             reply_queued: open.iter().any(|q| q.task_id.as_deref() == Some(&task.id) && has_reply(q)),
             task,
         });
     }
-    let preview_stopped = if project.is_some() { preview_stopped(conn)? } else { None };
     let questions = open.into_iter().filter(|q| q.task_id.is_none() && !has_reply(q)).collect();
-    let display = if project.is_some() { Some(crate::display::view(conn)?) } else { None };
-    Ok(Overview { seq, project, config, display, roles, tasks, preview_stopped, questions })
+    Ok(Overview { seq, project, roles, tasks, questions })
 }
 
 /// The role's task is executing, yet nothing will move it on without the user: the last turn of
-/// the attempt completed without done or a question, and nothing is queued, running, held or
-/// being captured (#13).
+/// the attempt completed without done or a question, and nothing is queued, running or held
+/// (#13).
 fn stalled(conn: &Connection, role: &RoleView, mcp_server: &str) -> Result<Option<Stalled>> {
     let (Some(task_id), Some(last)) = (&role.task_id, &role.last_turn) else { return Ok(None) };
-    if role.unfinished.is_some()
-        || role.hold.is_some()
-        || role.queued_messages > 0
-        || capture_in_progress(conn, &role.role.name)?.is_some()
-    {
+    if role.unfinished.is_some() || role.hold.is_some() || role.queued_messages > 0 {
         return Ok(None);
     }
     let task = load_task(conn, task_id)?;
@@ -201,16 +162,10 @@ fn stalled(conn: &Connection, role: &RoleView, mcp_server: &str) -> Result<Optio
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum Attention {
-    /// The role waits: continue, start a new session, or decide on a stopped capture.
+    /// The role waits: continue, or start a new session.
     Hold {
         role: String,
         hold: Hold,
-    },
-    /// A turn outside any task changed files; no task starts in the slot until the user makes a
-    /// task of them or discards them (#14).
-    OutsideChanges {
-        role: String,
-        capture: Capture,
     },
     /// The backend restarted while this turn's CLI ran, and the CLI still runs.
     UnknownTurn {
@@ -235,20 +190,9 @@ pub enum Attention {
     Accept {
         task_id: String,
         title: String,
-        verification_id: String,
     },
     Quota {
         domain: Domain,
-    },
-    JobFailed {
-        key: String,
-        reason: String,
-    },
-    DisplayChanged {
-        display: crate::display::DisplayView,
-    },
-    PreviewStopped {
-        reason: String,
     },
     /// The manager asked the user something only the user decides (manager-actions.md §6
     /// `ask_user`). The user's next message to her answers it.
@@ -260,14 +204,9 @@ pub enum Attention {
 }
 
 /// What waits for the user, in the order the GUI lists it: each role's, each task's, blocked
-/// quota domains, failed store jobs (`failed`, by key with the reason) and a stopped preview.
-/// `still_runs` tells whether an unknown turn's CLI is still alive.
-pub fn attention(
-    overview: &Overview,
-    quota: &[Domain],
-    failed: &[(String, String)],
-    still_runs: impl Fn(&Turn) -> bool,
-) -> Vec<Attention> {
+/// quota domains and the manager's questions. `still_runs` tells whether an unknown turn's CLI is
+/// still alive.
+pub fn attention(overview: &Overview, quota: &[Domain], still_runs: impl Fn(&Turn) -> bool) -> Vec<Attention> {
     let mut out = Vec::new();
     for role in &overview.roles {
         let name = &role.role.name;
@@ -279,9 +218,6 @@ pub fn attention(
         }
         if let Some(hold) = &role.hold {
             out.push(Attention::Hold { role: name.clone(), hold: hold.clone() });
-        }
-        if let Some(capture) = &role.outside {
-            out.push(Attention::OutsideChanges { role: name.clone(), capture: capture.clone() });
         }
         if let Some(stalled) = &role.stalled {
             let task = overview.tasks.iter().find(|t| t.task.id == stalled.task_id).map(|t| &t.task);
@@ -303,26 +239,11 @@ pub fn attention(
         {
             out.push(Attention::TaskBlocked { task_id: t.id.clone(), title: t.title.clone(), reason: reason.clone() });
         }
-        if t.phase == Phase::Accepting
-            && let Some(v) = &view.verification
-        {
-            out.push(Attention::Accept {
-                task_id: t.id.clone(),
-                title: t.title.clone(),
-                verification_id: v.id.clone(),
-            });
+        if t.phase == Phase::Accepting {
+            out.push(Attention::Accept { task_id: t.id.clone(), title: t.title.clone() });
         }
     }
     out.extend(quota.iter().filter(|d| d.is_blocked()).map(|d| Attention::Quota { domain: d.clone() }));
-    out.extend(failed.iter().map(|(key, reason)| Attention::JobFailed { key: key.clone(), reason: reason.clone() }));
-    if let Some(display) = &overview.display
-        && (display.state != crate::display::DisplayState::Current || display.busy)
-    {
-        out.push(Attention::DisplayChanged { display: display.clone() });
-    }
-    if let Some(reason) = &overview.preview_stopped {
-        out.push(Attention::PreviewStopped { reason: reason.clone() });
-    }
     out.extend(overview.questions.iter().map(|q| Attention::Question {
         id: q.id.clone(),
         question: q.body.clone(),

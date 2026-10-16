@@ -46,7 +46,7 @@ fn only_the_user_can_create_tasks_and_only_the_runtime_starts_attempts() {
     );
     assert_eq!(rejection(r), "forbidden");
     let id = create(&db, "r2", "t");
-    assert_eq!(rejection(db.execute(&Caller::User, &StartAttempt { task_id: id, code_start: None })), "forbidden");
+    assert_eq!(rejection(db.execute(&Caller::User, &StartAttempt { task_id: id })), "forbidden");
 }
 
 #[test]
@@ -75,9 +75,9 @@ fn starting_an_attempt_occupies_the_executor() {
     assert_eq!(task(&db, &a).phase, Phase::Executing);
     assert_eq!(db.read(|c| occupant(c, "Malkuth")).unwrap(), Some(a.clone()));
     // The executor is busy, so the second task cannot start.
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: b, code_start: None })), "role_busy");
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: b })), "role_busy");
     // A task in execution cannot start another attempt.
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a, code_start: None })), "not_queued");
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a })), "not_queued");
 }
 
 #[test]
@@ -102,10 +102,7 @@ fn paused_tasks_do_not_start() {
     let db = db();
     let a = create(&db, "r1", "a");
     db.execute(&Caller::User, &SetPaused { request_id: "p1".into(), task_id: a.clone(), paused: true }).unwrap();
-    assert_eq!(
-        rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone(), code_start: None })),
-        "paused"
-    );
+    assert_eq!(rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: a.clone() })), "paused");
     db.execute(&Caller::User, &SetPaused { request_id: "p2".into(), task_id: a.clone(), paused: false }).unwrap();
     start(&db, &a);
 }
@@ -286,37 +283,12 @@ fn reopening_queues_the_task_and_the_next_attempt_gets_a_new_number() {
 fn every_change_lands_in_the_event_log_in_order() {
     let db = db();
     let a = create(&db, "r1", "a");
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: a, code_start: None }).unwrap();
+    db.execute(&Caller::Runtime, &StartAttempt { task_id: a }).unwrap();
     let kinds: Vec<String> = db
         .read(|c| {
             let mut stmt = c.prepare("SELECT kind FROM event ORDER BY seq")?;
             Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
         })
         .unwrap();
-    assert_eq!(
-        kinds,
-        ["project.onboarded", "task.created", "workspace.materializing", "message.queued", "attempt.started"]
-    );
-}
-
-#[test]
-fn attempt_json_keeps_null_defaults_and_distinct_read_errors() {
-    use lobotomy_core::{Error, task::open_attempt};
-    let db = db();
-    let id = create(&db, "json", "read JSON");
-    start(&db, &id);
-    let attempt = db.read(|c| open_attempt(c, &id)).unwrap().unwrap();
-    assert!(attempt.conflicts.is_empty() && attempt.trial.is_none());
-    for value in ["'invalid JSON'", "'null'", "x'00'"] {
-        let error = db
-            .read(|c| {
-                c.execute(&format!("UPDATE attempt SET conflicts = {value} WHERE task_id = ?1"), [&id])?;
-                open_attempt(c, &id)
-            })
-            .unwrap_err();
-        match value {
-            "x'00'" => assert!(matches!(error, Error::Sqlite(_))),
-            _ => assert!(matches!(error, Error::Json(_))),
-        }
-    }
+    assert_eq!(kinds, ["project.onboarded", "task.created", "message.queued", "attempt.started"]);
 }

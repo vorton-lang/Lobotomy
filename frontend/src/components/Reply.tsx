@@ -1,22 +1,11 @@
 // Angela's reply with the references the runtime renders (manager-actions.md §2.1): `[[quote:…]]`
 // shows the user's own message with its time; `[[att:…]]` shows one line the runtime writes, with
-// the version it is bound to and whether it still holds now, and opens the task in its project.
+// whether it still holds now, and opens the task in its project.
 
 import { useEffect, useMemo } from 'react';
 import { ChevronRight } from 'lucide-react';
 import type { AttachmentView, QuotedMessage, Resolved } from '../api/types';
-import {
-  attachmentAccepted,
-  attachmentExpired,
-  attachmentLine,
-  attachmentMetadata,
-  attachmentWarning,
-  clock,
-  previewLine,
-  splitReply,
-  jsonObject,
-  textOf,
-} from '../format';
+import { attachmentExpired, attachmentLine, clock, previewLine, splitReply, jsonObject, textOf } from '../format';
 import { selectProject, useStore, wantForwards, wantRefs } from '../store';
 import { ICON, Markdown } from './common';
 
@@ -108,20 +97,16 @@ function Attachment({ id }: { id: string }) {
     );
   if (!attachment) return <p className="muted">正在读取附件…</p>;
   const expired = attachmentExpired(attachment);
-  const warning = attachmentWarning(attachment);
   const task = attachment.task_id;
   return (
     <button
       className={`ref-attachment${expired ? ' expired' : ''}`}
-      title={attachmentMetadata(attachment)}
       disabled={!task}
       onClick={() => task && void selectProject(attachment.project, task)}
     >
       <ChevronRight {...ICON} size={14} />
       {attachmentLine(attachment)}
-      {warning && <span className="badge expired">{warning}</span>}
       {expired && <span className="badge expired">{expired}</span>}
-      {!expired && attachmentAccepted(attachment) && <span className="badge passed accepted">已验收</span>}
     </button>
   );
 }

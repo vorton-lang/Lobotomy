@@ -13,8 +13,7 @@ use crate::id::new_id;
 use crate::prompts;
 use crate::sql::sql_enum;
 use crate::task::{
-    Attempt, Message, Phase, Replied, Task, attempt_brief, load_task, occupant, open_attempt, queue_message,
-    queued_messages,
+    Attempt, Message, Phase, Replied, Task, brief, load_task, occupant, open_attempt, queue_message, queued_messages,
 };
 
 sql_enum! {
@@ -91,13 +90,11 @@ pub struct Turn {
     pub registered_at: i64,
     pub started_at: Option<i64>,
     pub ended_at: Option<i64>,
-    /// The slot generation the turn runs in (harness-adapter.md §3).
-    pub workspace_id: Option<String>,
 }
 
 const TURN_SELECT: &str = "SELECT t.id, t.role, s.harness, t.native_session_id, s.native_id, t.task_id, t.attempt_id,
        t.token, t.input, t.state, t.outcome, t.failure, t.pid, t.process_start, t.done_at,
-       t.registered_at, t.started_at, t.ended_at, t.workspace_id
+       t.registered_at, t.started_at, t.ended_at
      FROM turn t JOIN native_session s ON s.id = t.native_session_id";
 
 fn turn_from_row(r: &Row<'_>) -> Result<Turn> {
@@ -120,7 +117,6 @@ fn turn_from_row(r: &Row<'_>) -> Result<Turn> {
         registered_at: r.get(15)?,
         started_at: r.get(16)?,
         ended_at: r.get(17)?,
-        workspace_id: r.get(18)?,
     })
 }
 
@@ -160,8 +156,7 @@ pub fn last_turn_in(conn: &Connection, session_id: &str) -> Result<Option<Turn>>
     .pop())
 }
 
-/// The role's unfinished turn. A role has at most one, whatever the session, because it has one
-/// slot (data-model.md §2).
+/// The role's unfinished turn. A role has at most one, whatever the session (data-model.md §2).
 pub fn unfinished_turn(conn: &Connection, role: &str) -> Result<Option<Turn>> {
     Ok(query_turns(conn, "WHERE t.role = ?1 AND t.state <> 'ended' LIMIT 1", [role])?.pop())
 }
@@ -279,8 +274,6 @@ pub fn compose_input(
 pub enum Hold {
     /// The last turn of the current attempt was interrupted or failed (harness-adapter.md §1.7).
     Abnormal { turn: Box<Turn> },
-    /// The runtime stopped the latest capture (harness-adapter.md §4.1).
-    CaptureStopped { capture: Box<crate::capture::Capture> },
     /// A completed turn left no harness session id; only a new native session helps (#10).
     SessionUnidentified { session_id: String },
 }
@@ -290,46 +283,30 @@ impl Hold {
     fn code(&self) -> &'static str {
         match self {
             Hold::Abnormal { .. } => "held",
-            Hold::CaptureStopped { .. } => "capture_stopped",
             Hold::SessionUnidentified { .. } => "session_unidentified",
         }
     }
 }
 
-/// What keeps a role from its next turn until someone acts.
-enum Waiting {
-    /// The runtime: the last turn's scene is not captured yet (harness-adapter.md §4.1). The
-    /// capture's id.
-    Runtime(String),
-    /// The user.
-    User(Hold),
-}
-
-/// The one place that decides whether a role waits. [`hold`], [`register`] and [`Continue`] all
-/// ask here, so what the GUI shows and what the runtime refuses cannot drift apart (#16).
-fn waiting(conn: &Connection, role: &str) -> Result<Option<Waiting>> {
-    if let Some(capture) = crate::capture::capture_in_progress(conn, role)? {
-        return Ok(Some(Waiting::Runtime(capture.id)));
-    }
-    if let Some(capture) = crate::capture::stopped_capture(conn, role)? {
-        return Ok(Some(Waiting::User(Hold::CaptureStopped { capture: Box::new(capture) })));
-    }
+/// Why the role waits for the user, if it does: the one place that decides it. [`register`] and
+/// [`Continue`] ask here too, so what the GUI shows and what the runtime refuses cannot drift apart
+/// (#16).
+pub fn hold(conn: &Connection, role: &str) -> Result<Option<Hold>> {
     let (task, attempt) = current_work(conn, role)?;
     let Some(session) = current_session(conn, role, task.as_ref().map(|t| t.id.as_str()))? else {
         return Ok(None);
     };
     if let Some(turn) = abnormal_last_turn(conn, &session, attempt.as_ref().map(|a| a.id.as_str()))? {
-        return Ok(Some(Waiting::User(Hold::Abnormal { turn: Box::new(turn) })));
+        return Ok(Some(Hold::Abnormal { turn: Box::new(turn) }));
     }
     if lost_session_id(conn, &session)? {
-        return Ok(Some(Waiting::User(Hold::SessionUnidentified { session_id: session.id })));
+        return Ok(Some(Hold::SessionUnidentified { session_id: session.id }));
     }
     Ok(None)
 }
 
 /// The session's last turn, if it belongs to the current attempt and did not end normally. A turn
-/// of an attempt that has ended does not hold: the capture or the user has already moved the work
-/// on (#11).
+/// of an attempt that has ended does not hold: the work has already moved on (#11).
 fn abnormal_last_turn(conn: &Connection, session: &NativeSession, attempt_id: Option<&str>) -> Result<Option<Turn>> {
     Ok(last_turn_in(conn, &session.id)?.filter(|last| is_abnormal(last) && last.attempt_id.as_deref() == attempt_id))
 }
@@ -348,15 +325,6 @@ fn lost_session_id(conn: &Connection, session: &NativeSession) -> Result<bool> {
         )
         .optional()?
         .is_some())
-}
-
-/// Why the role waits for the user, if it does. While the last turn's scene is being captured it
-/// waits for the runtime, which is not a hold.
-pub fn hold(conn: &Connection, role: &str) -> Result<Option<Hold>> {
-    Ok(match waiting(conn, role)? {
-        Some(Waiting::User(hold)) => Some(hold),
-        Some(Waiting::Runtime(_)) | None => None,
-    })
 }
 
 /// The GUI gets this from "继续"; the turn's MCP token stays in its record (`Turn::token`).
@@ -382,32 +350,15 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     if let Some(running) = unfinished_turn(cx.tx, role)? {
         return Err(Error::rejected("turn_unfinished", format!("{role} has unfinished turn {}", running.id)));
     }
-    // The last turn's scene is captured before the next turn touches the slot (harness-adapter.md
-    // §4.1). A role that holds waits for the user's choice; continuing is one of the choices, and
-    // gets past an abnormal turn or a stopped capture, never past a lost session id.
-    match waiting(cx.tx, role)? {
-        Some(Waiting::Runtime(capture)) => {
-            return Err(Error::rejected("capture_pending", format!("capture {capture} of {role} is pending")));
-        }
-        Some(Waiting::User(hold)) if continuation.is_none() => {
-            return Err(Error::rejected(hold.code(), format!("{role} waits for the user: {}", hold.code())));
-        }
-        _ => {}
+    // A role that holds waits for the user's choice; continuing is one of the choices, and gets
+    // past an abnormal turn, never past a lost session id.
+    if let Some(hold) = hold(cx.tx, role)?
+        && continuation.is_none()
+    {
+        return Err(Error::rejected(hold.code(), format!("{role} waits for the user: {}", hold.code())));
     }
-    // Turns only run in a slot that holds its target (harness-adapter.md §3).
-    let workspace_id = match crate::workspace::role_slot(cx.tx, role)? {
-        Some(slot) => match crate::workspace::current_workspace(cx.tx, &slot)? {
-            Some(ws) if ws.state == crate::workspace::WorkspaceState::Ready => Some(ws.id),
-            _ => return Err(Error::rejected("slot_not_ready", format!("slot {slot} of {role} is not ready"))),
-        },
-        None => None,
-    };
     let (task, attempt) = current_work(cx.tx, role)?;
-    if task.is_none() && crate::project::load_project(cx.tx)?.is_some() {
-        crate::display::require_current(cx.tx)?;
-    }
     if let Some(task) = &task {
-        crate::display::require_no_adoption(cx.tx)?;
         // Outside execution, messages to the executor wait (data-model.md §4.2).
         if task.phase != Phase::Executing {
             return Err(Error::rejected("not_executing", format!("task {} is {}", task.id, task.phase.as_str())));
@@ -472,10 +423,9 @@ fn register(cx: &mut Cx<'_>, role: &str, continuation: Option<Continuation<'_>>)
     let turn_id = new_id("turn");
     let token = new_id("tok");
     cx.tx.execute(
-        "INSERT INTO turn (id, role, native_session_id, task_id, attempt_id, token, input, state, registered_at,
-                           workspace_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'registered', ?8, ?9)",
-        params![turn_id, role, session.id, task_id, attempt_id, token, input, cx.now, workspace_id],
+        "INSERT INTO turn (id, role, native_session_id, task_id, attempt_id, token, input, state, registered_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'registered', ?8)",
+        params![turn_id, role, session.id, task_id, attempt_id, token, input, cx.now],
     )?;
     let mut ids: Vec<String> = Vec::new();
     if let Some(turn) = resend {
@@ -605,8 +555,8 @@ impl Command for SessionIdentified {
     }
 }
 
-/// Ends a turn, releases the role's run right and records the intent to capture the slot
-/// (data-model.md §3.2; harness-adapter.md §4.1). Ending an ended turn again changes nothing.
+/// Ends a turn and releases the role's run right (data-model.md §3.2). When the turn reported
+/// `done`, its task moves to acceptance. Ending an ended turn again changes nothing.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EndTurn {
     pub turn_id: String,
@@ -634,7 +584,7 @@ impl Command for EndTurn {
             &turn.id,
             json!({ "role": turn.role, "outcome": self.outcome, "failure": self.failure }),
         )?;
-        crate::capture::intend(cx, &turn, self.outcome)?;
+        crate::task::done_turn_ended(cx, &turn)?;
         Ok(())
     }
 }
@@ -664,11 +614,11 @@ impl Command for MarkUnfinishedUnknown {
 
 // ---- user commands ----
 
-/// Starts a turn after one of the current attempt that did not end normally, or after a capture
-/// the runtime stopped. The input starts with a note, followed by the queued messages
-/// (data-model.md §9.2 "继续"; harness-adapter.md §1.7, §4.1). After a turn the harness never
-/// began, its input goes again instead of the note (data-model.md §3.4). Only the user issues it;
-/// the runtime never continues on its own, quota failures included (data-model.md §8.5).
+/// Starts a turn after one of the current attempt that did not end normally. The input starts
+/// with a note, followed by the queued messages (data-model.md §9.2 "继续"; harness-adapter.md
+/// §1.7). After a turn the harness never began, its input goes again instead of the note
+/// (data-model.md §3.4). Only the user issues it; the runtime never continues on its own, quota
+/// failures included (data-model.md §8.5).
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Continue {
@@ -694,32 +644,16 @@ impl Command for Continue {
             Some(session) => abnormal_last_turn(cx.tx, session, attempt_id.as_deref())?,
             None => None,
         };
-        let stopped = crate::capture::stopped_capture(cx.tx, &self.role)?;
-        if last.is_none() && stopped.is_none() {
+        let Some(last) = last else {
             return Err(Error::rejected("nothing_to_continue", format!("{} has no turn to continue", self.role)));
-        }
+        };
         // A turn the harness never began changed nothing and told the role nothing: its input
         // goes again as it was, with no note about it.
-        let resend = last.as_ref().filter(|last| last.failure.as_ref().is_some_and(|f| f.unstarted));
-        let mut notes = Vec::new();
-        if let Some(last) = &last
-            && resend.is_none()
-        {
+        let resend = last.failure.as_ref().is_some_and(|f| f.unstarted).then_some(&last);
+        let note = resend.is_none().then(|| {
             let interrupted = last.outcome == Some(Outcome::Interrupted);
-            notes.push(prompts::continue_note(interrupted, last.failure.as_ref().map(|f| f.kind)));
-        }
-        if let Some(stopped) = &stopped {
-            notes.push(crate::capture::stopped_note(stopped));
-            // The executor deals with the list, so the stopped done no longer counts.
-            if let Some(attempt_id) = &attempt_id {
-                cx.tx.execute(
-                    "UPDATE attempt SET done_turn_id = NULL, done_summary = NULL, trial = NULL
-                     WHERE id = ?1 AND done_turn_id = ?2",
-                    params![attempt_id, stopped.turn_id],
-                )?;
-            }
-        }
-        let note = (!notes.is_empty()).then(|| notes.join("\n\n"));
+            prompts::continue_note(interrupted, last.failure.as_ref().map(|f| f.kind))
+        });
         register(cx, &self.role, Some(Continuation { note, resend }))
     }
 }
@@ -771,7 +705,7 @@ fn end_current_session(cx: &mut Cx<'_>, role: &str) -> Result<bool> {
 /// A new session has not seen the attempt's brief, so it is queued again (data-model.md §4.1).
 fn queue_brief_again(cx: &mut Cx<'_>, role: &str) -> Result<()> {
     if let (Some(task), Some(attempt)) = current_work(cx.tx, role)? {
-        let body = format!("{}{}", prompts::NEW_SESSION, attempt_brief(cx.tx, &task, attempt.seq, &attempt.conflicts)?);
+        let body = format!("{}{}", prompts::NEW_SESSION, brief(cx.tx, &task, attempt.seq)?);
         queue_message(cx, role, &Caller::Runtime, Some(&task.id), &body)?;
     }
     Ok(())

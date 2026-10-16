@@ -118,8 +118,6 @@ jobs:
           ELECTRON_DISABLE_SANDBOX: '1'
         run: |
           npx playwright install --with-deps chromium
-          sudo apt-get install --no-install-recommends -y xterm
-          xvfb-run --auto-servernum cargo test --manifest-path ../backend/Cargo.toml --locked -p lobotomyd --test backend a_trial_runs_in_a_copy_and_ends_with_stop_or_shutdown -- --ignored --exact
           xvfb-run --auto-servernum npx playwright test
       - name: Keep Playwright's traces of failures
         if: failure()

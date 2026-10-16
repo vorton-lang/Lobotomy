@@ -22,21 +22,13 @@ pub struct Role {
     pub model: Option<String>,
     /// The reasoning effort chosen likewise.
     pub effort: Option<String>,
-    pub slot: Option<String>,
 }
 
-const ROLE_SELECT: &str = "SELECT r.name, r.kind, r.harness, m.model, m.effort, r.slot FROM role r
+const ROLE_SELECT: &str = "SELECT r.name, r.kind, r.harness, m.model, m.effort FROM role r
                            LEFT JOIN role_model m ON m.role = r.name AND m.harness = r.harness";
 
 fn role_from_row(r: &Row<'_>) -> rusqlite::Result<Role> {
-    Ok(Role {
-        name: r.get(0)?,
-        kind: r.get(1)?,
-        harness: r.get(2)?,
-        model: r.get(3)?,
-        effort: r.get(4)?,
-        slot: r.get(5)?,
-    })
+    Ok(Role { name: r.get(0)?, kind: r.get(1)?, harness: r.get(2)?, model: r.get(3)?, effort: r.get(4)? })
 }
 
 pub fn load_role(conn: &Connection, name: &str) -> Result<Role> {

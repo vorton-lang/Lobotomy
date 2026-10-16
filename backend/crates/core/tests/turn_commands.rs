@@ -2,20 +2,19 @@ use lobotomy_core::item::{BlobStore, NewItem, STORAGE_THRESHOLD, externalize, re
 use lobotomy_core::report::{OrgReport, ReportEffect, ReportStatus};
 use lobotomy_core::role::{SetRoleModel, load_role};
 use lobotomy_core::task::{
-    Abandon, CreateTask, EditCriteria, Reopen, StartAttempt, load_task, open_attempt, queued_messages,
+    Abandon, CreateTask, EditCriteria, Reopen, SendBack, StartAttempt, load_task, open_attempt, queued_messages,
 };
 use lobotomy_core::turn::{
     Continue, EndTurn, Failure, FailureKind, InputDelivered, MarkUnfinishedUnknown, NewNativeSession, Outcome,
     RegisterTurn, SessionIdentified, SetRoleHarness, TurnLaunched, TurnRegistered, TurnState, current_session,
     load_turn, turn_by_token,
 };
-use lobotomy_core::verify::{CheckOutcome, FinishVerification, StartVerification};
 use lobotomy_core::view::{Attention, attention, overview};
 use lobotomy_core::{Caller, Db};
 use serde_json::json;
 
 mod common;
-use common::{ROLE, db, pin_captures, rejection, report, start};
+use common::{ROLE, db, rejection, report, start};
 
 /// Creates a task and starts its first attempt; the brief waits in the inbox.
 fn started_task(db: &Db) -> String {
@@ -46,10 +45,8 @@ fn send(db: &Db, request_id: &str, body: &str) {
     common::send(db, request_id, None, body);
 }
 
-/// Ends the turn and lets the store capture the slot.
 fn end(db: &Db, turn_id: &str, outcome: Outcome) {
     db.execute(&Caller::Runtime, &EndTurn { turn_id: turn_id.into(), outcome, failure: None }).unwrap();
-    pin_captures(db);
 }
 
 #[test]
@@ -142,7 +139,6 @@ fn a_quota_failure_is_named_in_the_continue_note() {
     let failure = Failure { resets_at: Some(1), ..Failure::new(FailureKind::Quota, "limit") };
     db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id, outcome: Outcome::Failed, failure: Some(failure) })
         .unwrap();
-    pin_captures(&db);
     // A quota failure holds the role like any failure; only the user continues (data-model.md §8.5).
     send(&db, "m1", "额度恢复了");
     assert_eq!(rejection(register(&db)), "held");
@@ -229,15 +225,15 @@ fn a_reopened_task_starts_in_a_fresh_session() {
 }
 
 #[test]
-fn a_running_turn_of_an_abandoned_task_blocks_the_next_task() {
+fn a_running_turn_of_an_abandoned_task_holds_the_next_tasks_turn() {
     let db = db();
     let a = started_task(&db);
     let b = create_named(&db, "c2", "下一个任务");
     let t = register(&db).unwrap();
-    // A's CLI still runs when A is abandoned. B cannot take the slot while it runs.
+    // A's CLI still runs when A is abandoned. B starts, but its turn waits for A's.
     abandon(&db, "x1", &a);
-    let start_b = StartAttempt { task_id: b.clone(), code_start: None };
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &start_b)), "turn_unfinished");
+    db.execute(&Caller::Runtime, &StartAttempt { task_id: b.clone() }).unwrap();
+    assert_eq!(rejection(register(&db)), "turn_unfinished");
     // The database allows one unfinished turn per role, whatever the session.
     let second = db.write(|c| {
         Ok(c.execute(
@@ -254,10 +250,10 @@ fn a_running_turn_of_an_abandoned_task_blocks_the_next_task() {
         }))
     });
     assert!(second.unwrap().is_err());
-    // Once A's turn ends and its scene is captured, B starts and runs.
+    // Once A's turn ends, B's runs.
     end(&db, &t.turn_id, Outcome::Completed);
-    start(&db, &b);
-    register(&db).unwrap();
+    let next = register(&db).unwrap();
+    assert_eq!(db.read(|c| load_turn(c, &next.turn_id)).unwrap().task_id.as_deref(), Some(b.as_str()));
 }
 
 #[test]
@@ -268,32 +264,14 @@ fn an_abnormal_turn_of_an_ended_attempt_does_not_hold_the_next_attempt() {
     db.execute(&Caller::Runtime, &SessionIdentified { turn_id: t.turn_id.clone(), native_id: "thread-1".into() })
         .unwrap();
     report(&db, &t.turn_id, ReportStatus::Done, None).unwrap();
-    // The turn reported done, then ended abnormally; its capture became the candidate.
-    let [commit] = <[String; 1]>::try_from({
-        db.execute(
-            &Caller::Runtime,
-            &EndTurn { turn_id: t.turn_id.clone(), outcome: Outcome::Interrupted, failure: None },
-        )
-        .unwrap();
-        pin_captures(&db)
-    })
-    .unwrap();
-    // Verification failed: the attempt ended with its candidate and a new one opens.
-    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
-    let check = CheckOutcome {
-        command: "cargo test".into(),
-        exit_code: Some(101),
-        timed_out: false,
-        output: json!({ "text": "1 failed" }),
-        duration_ms: 10,
-        tail: "1 failed".into(),
-    };
-    let finish =
-        FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![check], blobs: vec![] };
-    db.execute(&Caller::Runtime, &finish).unwrap();
+    // The turn reported done, then ended abnormally: the attempt ended with its candidate.
+    end(&db, &t.turn_id, Outcome::Interrupted);
+    // Sent back: a new attempt opens.
+    let send_back = SendBack { request_id: "b1".into(), task_id: task.clone(), reason: "补上测试".into() };
+    db.execute(&Caller::User, &send_back).unwrap();
     let next = register(&db).unwrap();
     assert_eq!(t_session(&db, &next.turn_id), t_session(&db, &t.turn_id), "same task, same session");
-    assert!(db.read(|c| load_turn(c, &next.turn_id)).unwrap().input.contains("cargo test"));
+    assert!(db.read(|c| load_turn(c, &next.turn_id)).unwrap().input.contains("补上测试"));
 }
 
 #[test]
@@ -316,7 +294,7 @@ fn a_completed_session_without_a_harness_id_stops_the_role() {
 fn messages_wait_while_the_task_is_outside_execution_or_paused() {
     let db = db();
     let task = started_task(&db);
-    db.write(|c| Ok(c.execute("UPDATE task SET phase = 'verifying' WHERE id = ?1", [&task])?)).unwrap();
+    db.write(|c| Ok(c.execute("UPDATE task SET phase = 'accepting' WHERE id = ?1", [&task])?)).unwrap();
     assert_eq!(rejection(register(&db)), "not_executing");
     db.write(|c| Ok(c.execute("UPDATE task SET phase = 'executing', paused = 1 WHERE id = ?1", [&task])?)).unwrap();
     assert_eq!(rejection(register(&db)), "paused");
@@ -337,7 +315,7 @@ fn startup_marks_unfinished_turns_unknown_until_reconciled() {
 }
 
 #[test]
-fn done_is_recorded_once_and_its_capture_moves_the_task_to_verification() {
+fn done_is_recorded_once_and_the_end_of_its_turn_moves_the_task_to_acceptance() {
     let db = db();
     let task = started_task(&db);
     let t = register(&db).unwrap();
@@ -347,14 +325,14 @@ fn done_is_recorded_once_and_its_capture_moves_the_task_to_verification() {
     assert_eq!(attempt.done_turn_id.as_deref(), Some(t.turn_id.as_str()));
     db.execute(&Caller::Runtime, &SessionIdentified { turn_id: t.turn_id.clone(), native_id: "thread-1".into() })
         .unwrap();
+    // The task is still executing while the done turn runs.
+    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Executing);
     db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id.clone(), outcome: Outcome::Completed, failure: None })
         .unwrap();
-    // Nothing runs in the slot before its scene is captured.
-    send(&db, "m1", "还有一件事");
-    assert_eq!(rejection(register(&db)), "capture_pending");
-    pin_captures(&db);
-    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Verifying);
+    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, lobotomy_core::task::Phase::Accepting);
     assert_eq!(db.read(|c| open_attempt(c, &task)).unwrap(), None, "the attempt ended with its candidate");
+    // Outside execution, messages to the task wait.
+    send(&db, "m1", "还有一件事");
     assert_eq!(rejection(register(&db)), "not_executing");
 }
 
@@ -381,7 +359,7 @@ fn a_reply_bound_to_the_next_turn_clears_the_question() {
     let task = started_task(&db);
     let reason = || db.read(|c| load_task(c, &task)).unwrap().blocked_reason;
     let asks_user = || {
-        let list = db.read(|c| Ok(attention(&overview(c, "lobotomy")?, &[], &[], |_| false))).unwrap();
+        let list = db.read(|c| Ok(attention(&overview(c, "lobotomy")?, &[], |_| false))).unwrap();
         list.iter().any(|a| matches!(a, Attention::TaskBlocked { .. }))
     };
     let t1 = common::register(&db);
@@ -488,8 +466,8 @@ fn a_role_keeps_a_model_and_effort_per_harness() {
 }
 
 /// What the GUI shows as a hold and what registering a turn refuses come from one rule (#16):
-/// while the scene is captured nothing holds and registering waits; after a failed turn, or a
-/// completed one without a session id, the role holds and registering is refused with that hold.
+/// after a failed turn, or a completed one without a session id, the role holds and registering is
+/// refused with that hold.
 #[test]
 fn a_hold_is_exactly_what_keeps_a_turn_from_registering() {
     let hold = |db: &Db| db.read(|c| lobotomy_core::turn::hold(c, ROLE)).unwrap();
@@ -499,9 +477,6 @@ fn a_hold_is_exactly_what_keeps_a_turn_from_registering() {
     let t = register(&db).unwrap();
     db.execute(&Caller::Runtime, &EndTurn { turn_id: t.turn_id.clone(), outcome: Outcome::Failed, failure: None })
         .unwrap();
-    assert_eq!(hold(&db), None, "the capture is the runtime's to finish");
-    assert_eq!(rejection(register(&db)), "capture_pending");
-    pin_captures(&db);
     assert!(matches!(hold(&db), Some(lobotomy_core::turn::Hold::Abnormal { .. })));
     assert_eq!(rejection(register(&db)), "held");
 
@@ -564,12 +539,12 @@ fn only_the_turns_own_role_can_report() {
     let other = Caller::Role { role: "Yesod".into(), turn_id: t.turn_id.clone() };
     let r = db.execute(
         &other,
-        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None, trial: None },
+        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None },
     );
     assert_eq!(rejection(r), "forbidden");
     let r = db.execute(
         &Caller::User,
-        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None, trial: None },
+        &OrgReport { title: "x".into(), body: "x".into(), status: ReportStatus::Done, blocked_on: None },
     );
     assert_eq!(rejection(r), "forbidden");
 }

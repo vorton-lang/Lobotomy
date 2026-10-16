@@ -15,7 +15,6 @@ const turn = (id: string, taskId: string | null): Turn => ({
   native_session_id: 'session',
   native_id: null,
   process_start: null,
-  workspace_id: 'workspace',
   task_id: taskId,
   attempt_id: null,
   input: '',
@@ -66,20 +65,10 @@ async function openMocked(page: Page, state: State) {
   const sent: Sent[] = [];
   const snapshot = (): Snapshot => ({
     seq: 1,
-    config: null,
     quota: [],
     harnesses: [],
     live: {},
-    project: {
-      id: 'project',
-      repo_path: '/project',
-      branch: 'main',
-      author_name: 'Test',
-      author_email: 'test@example.com',
-      integration: 'base0000',
-      integration_rev: 1,
-      previewed: 'base0000',
-    },
+    project: { id: 'project', repo_path: '/project' },
     ...state.snapshot,
   });
   const threadPage = (after?: number, before?: number) => ({
@@ -114,12 +103,6 @@ async function openMocked(page: Page, state: State) {
           break;
         case 'task':
           result = state.details?.[params.task_id];
-          break;
-        case 'trials':
-          result = [];
-          break;
-        case 'diff':
-          result = [];
           break;
         case 'command': {
           const call: Sent = { name: params.name, args: params.args };
@@ -263,7 +246,7 @@ test('a finished task’s panel leads to the task now in work', async ({ page })
     snapshot: {
       roles: [role('task1')],
       tasks: [first, second],
-      attention: [{ kind: 'accept', task_id: 'task1', title: first.title, verification_id: 'v-task1' }],
+      attention: [{ kind: 'accept', task_id: 'task1', title: first.title }],
     },
     details,
     command: ({ name }) => {
@@ -278,13 +261,13 @@ test('a finished task’s panel leads to the task now in work', async ({ page })
         attention: [],
       };
       details.task1 = detail({ ...first, phase: 'done' });
-      return '2222222222';
+      return null;
     },
   };
   await openMocked(page, state);
   await page
     .locator('.attention .card')
-    .filter({ hasText: '「第一个任务」通过了验证' })
+    .filter({ hasText: '「第一个任务」交出了候选成果' })
     .getByRole('button', { name: '查看并验收' })
     .click();
   const panel = page.getByRole('region', { name: '第一个任务', exact: true });
@@ -316,7 +299,7 @@ test('a message the executor never got waits for the user at acceptance', async 
     snapshot: {
       roles: [role('task1')],
       tasks: [view],
-      attention: [{ kind: 'accept', task_id: 'task1', title: view.title, verification_id: 'v-task1' }],
+      attention: [{ kind: 'accept', task_id: 'task1', title: view.title }],
     },
     details,
     command: () => {
@@ -326,7 +309,7 @@ test('a message the executor never got waits for the user at acceptance', async 
         attention: [],
       };
       details.task1 = detail({ ...view, phase: 'done' });
-      return '2222222222';
+      return null;
     },
   };
   const backend = await openMocked(page, state);
@@ -344,15 +327,13 @@ test('a message the executor never got waits for the user at acceptance', async 
     .poll(() => backend.sent.find((s) => s.name === 'accept')?.args)
     .toMatchObject({
       task_id: 'task1',
-      verification_id: 'v-task1',
       criteria_version: 1,
-      expected_integration: 'base0000',
       dropping: ['m1'],
     });
   await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
-// Delivery rendering uses the existing mock backend; M1 keeps the real create/accept/Git chain.
+// Delivery rendering uses the existing mock backend; m1.spec.ts keeps the real create/accept chain.
 test('delivery descriptions distinguish pending, older and invalidated rounds', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1400, height: 860 });
   const view = task('delivery', '查看交付内容', 'accepting');
@@ -360,7 +341,7 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
     snapshot: {
       roles: [role(view.id)],
       tasks: [view],
-      attention: [{ kind: 'accept', task_id: view.id, title: view.title, verification_id: `v-${view.id}` }],
+      attention: [{ kind: 'accept', task_id: view.id, title: view.title }],
     },
     details: { [view.id]: detail(view) },
   });
@@ -372,7 +353,7 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
   const panel = page.getByRole('region', { name: '查看交付内容', exact: true });
   await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
   const delivery = panel.getByRole('region', { name: '交付说明' });
-  const update = async (state: 'pending' | 'old' | 'new' | 'invalidated' | 'failed') =>
+  const update = async (state: 'pending' | 'old' | 'new' | 'invalidated') =>
     page.evaluate(async (state) => {
       const module = '/src/store.ts';
       const { useStore } = await import(module);
@@ -380,8 +361,7 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
       const first = detail.attempts[0];
       first.done_summary =
         '预览入口：[示例页面](https://example.com)\n\n本地文件：`dist/report.html`\n\n体验前运行 `npm run dev`，重点检查页面内容。';
-      if (state === 'pending') first.candidate_id = null;
-      else first.candidate_id = 'candidate1';
+      first.end_reason = state === 'pending' ? null : 'candidate';
       detail.attempts =
         state === 'old' || state === 'new' || state === 'invalidated'
           ? [
@@ -390,12 +370,11 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
                 ...first,
                 id: 'second',
                 seq: 2,
-                candidate_id: null,
+                end_reason: null,
                 done_summary: state === 'new' ? '第二轮成果：`output.txt`' : null,
               },
             ]
           : [first];
-      if (state === 'failed') detail.verifications.at(-1).state = 'failed';
       useStore.setState({ taskDetail: detail });
     }, state);
 
@@ -417,78 +396,4 @@ test('delivery descriptions distinguish pending, older and invalidated rounds', 
   await update('invalidated');
   await expect(delivery).not.toContainText('第二轮成果');
   await expect(delivery).toContainText('上一轮交付说明');
-  await update('failed');
-  await expect(panel.locator('.verification-details')).toHaveAttribute('open', '');
-  await expect(panel.locator('.verification-details > summary .badge')).toHaveText('未通过');
-});
-
-// #67: a lost/unsuccessful reply retries the same fixed action. A new displayed version is
-// a new action; retaining the old key would permanently reject it as idempotency_key_reused.
-test('display adoption request identity follows the fixed target and internal version', async ({ page }) => {
-  const display = {
-    state: { kind: 'changed' as const, commit: 'external-a' },
-    expected_rev: 1,
-    busy: false,
-    start_blocked: true,
-    unpreviewed: [],
-    unavailable: '等待执行者退出、采集保存及任务验收完成' as string | null,
-    error: null,
-  };
-  const state: State = {
-    snapshot: { roles: [role(null)], tasks: [], attention: [{ kind: 'display_changed', display }] },
-    commandError: '采用回复未收到',
-  };
-  const backend = await openMocked(page, state);
-  const adopt = page.getByRole('button', { name: '采用', exact: true });
-  await expect(adopt).toBeDisabled();
-  await expect(page.locator('.attention .card')).toContainText('等待执行者退出');
-  expect(backend.sent).toHaveLength(0);
-  display.unavailable = null;
-  backend.push({ type: 'resync' });
-  await expect(adopt).toBeEnabled();
-  await adopt.click();
-  await expect(adopt).toBeEnabled();
-  await adopt.click();
-  await expect(adopt).toBeEnabled();
-  expect(backend.sent[1].args.request_id).toBe(backend.sent[0].args.request_id);
-  display.state.commit = 'external-b';
-  display.expected_rev = 2;
-  backend.push({ type: 'resync' });
-  await expect(page.locator('.attention .card')).toContainText('external-b');
-  await adopt.click();
-  await expect.poll(() => backend.sent.length).toBe(3);
-  expect(backend.sent[2].args).toMatchObject({ target: 'external-b', expected_rev: 2 });
-  expect(backend.sent[2].args.request_id).not.toBe(backend.sent[0].args.request_id);
-});
-
-test('display adoption lists unpreviewed accepted work and confirms the current list', async ({ page }) => {
-  const display = {
-    state: { kind: 'changed' as const, commit: 'external' },
-    expected_rev: 3,
-    busy: false,
-    start_blocked: true,
-    unavailable: null,
-    error: null,
-    unpreviewed: [{ task_id: 'old-task', title: '尚未展示的修复', commit: 'accepted-old' }],
-  };
-  const backend = await openMocked(page, {
-    snapshot: { roles: [role(null)], tasks: [], attention: [{ kind: 'display_changed', display }] },
-  });
-  const card = page.locator('.attention .card');
-  await expect(card).toContainText('尚未展示的修复');
-  await expect(card).toContainText('accepted-old');
-  await card.getByRole('button', { name: '采用', exact: true }).click();
-  await expect(card.getByRole('button', { name: '确认采用，保留历史' })).toBeVisible();
-  expect(backend.sent).toHaveLength(0);
-  display.unpreviewed = [{ task_id: 'new-task', title: '新的未展示成果', commit: 'accepted-new' }];
-  backend.push({ type: 'resync' });
-  await expect(card).toContainText('新的未展示成果');
-  await expect(card.getByRole('button', { name: '确认采用，保留历史' })).toHaveCount(0);
-  await card.getByRole('button', { name: '采用', exact: true }).click();
-  await card.getByRole('button', { name: '取消', exact: true }).click();
-  expect(backend.sent).toHaveLength(0);
-  await card.getByRole('button', { name: '采用', exact: true }).click();
-  await card.getByRole('button', { name: '确认采用，保留历史' }).click();
-  await expect.poll(() => backend.sent.length).toBe(1);
-  expect(backend.sent[0].args).toMatchObject({ target: 'external', expected_rev: 3, acknowledged: ['accepted-new'] });
 });

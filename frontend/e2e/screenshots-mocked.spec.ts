@@ -15,7 +15,7 @@ const ago = (minutes: number) => now - minutes * 60_000;
 const exported = task('task1', '导出报表', 'accepting');
 const login = task('task2', '登录页改版', 'executing');
 const queued = { ...task('task3', '清理旧的 CI 缓存', 'queued'), queue_pos: 1 };
-const accept: Attention = { kind: 'accept', task_id: 'task1', title: exported.title, verification_id: 'v-task1' };
+const accept: Attention = { kind: 'accept', task_id: 'task1', title: exported.title };
 const blocked: Attention = {
   kind: 'task_blocked',
   task_id: 'task4',
@@ -61,11 +61,10 @@ const angelaSnapshot: Snapshot = {
   seq: 1,
   quota: [],
   harnesses: [],
-  config: null,
   project: null,
   tasks: [],
   attention: [],
-  roles: [{ ...role(null), name: 'Angela', kind: 'manager', harness: 'claude', slot: null }],
+  roles: [{ ...role(null), name: 'Angela', kind: 'manager', harness: 'claude' }],
   live: {
     turn3: {
       role: 'Angela',
@@ -97,26 +96,7 @@ const projectSnapshot = (id: string): Snapshot => ({
       items: { x: { kind: 'agent_message', started_at: ago(12), content: { text: '先看登录表单的校验……' } } },
     },
   },
-  config: {
-    version: 1,
-    config: {
-      checks: [{ command: 'npm test', timeout_secs: 600 }],
-      excluded: [],
-      force_tracked: [],
-      max_new_files: 1000,
-      max_new_bytes: 50 << 20,
-    },
-  },
-  project: {
-    id,
-    repo_path: `C:\\code\\${id}`,
-    branch: 'main',
-    author_name: 'Test',
-    author_email: 'test@example.com',
-    integration: 'base0000',
-    integration_rev: 3,
-    previewed: 'base0000',
-  },
+  project: { id, repo_path: `C:\\code\\${id}` },
   roles: [
     role('task1'),
     { ...role('task2'), name: 'Binah', harness: 'claude', unfinished: turn('p2', 'Binah', 14, null, 'task2') },
@@ -133,7 +113,6 @@ function turn(id: string, who: string, started: number, ended: number | null, ta
     native_session_id: 'session',
     native_id: null,
     process_start: null,
-    workspace_id: 'workspace',
     task_id: taskId,
     attempt_id: null,
     input: '',
@@ -229,7 +208,7 @@ const angelaThread = {
       kind: 'agent_message',
       content: {
         text:
-          '**alpha · 导出报表**：第 1 轮已通过验证，等你验收。\n\n[[att:ver_1]]\n\n**beta · 登录页**：已交给 Binah。你上周说的是：\n\n[[quote:msg_0]]\n\n' +
+          '**alpha · 导出报表**：第 1 轮已交出候选成果，等你验收。\n\n[[att:task1]]\n\n**beta · 登录页**：已交给 Binah。你上周说的是：\n\n[[quote:msg_0]]\n\n' +
           '我按这句话理解为"只换布局，不改接口"。如果理解错了直接告诉我。\n\n还有一件事要你定：导出要不要带表头？',
       },
     }),
@@ -321,20 +300,15 @@ const projectThread = {
 const refs = {
   quotes: { msg_0: { at: ago(60 * 24 * 5), body: '登录页按 Figma 第二版来，接口别动' } },
   attachments: {
-    ver_1: {
+    task1: {
       project: 'alpha',
       project_name: 'alpha',
-      kind: 'verification',
+      kind: 'task',
       task_id: 'task1',
       title: '导出报表',
-      seq: 1,
-      state: 'passed',
-      base: 'base0000aaaa',
-      config_version: 2,
-      at: ago(39),
-      superseded: false,
-      stale: false,
-      unallowed_changes: 0,
+      executor: 'Malkuth',
+      phase: 'accepting',
+      paused: false,
     },
   },
 };
@@ -411,8 +385,6 @@ async function open(page: Page, width = 1440, height = 900) {
         forwards,
         ledger,
         task: detail(exported),
-        trials: [],
-        diff: [],
         disk_usage: { raw_output: { files: 0, bytes: 0 } },
       };
       route.send(JSON.stringify({ id, result: answers[method] ?? null }));

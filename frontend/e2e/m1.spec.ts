@@ -1,9 +1,6 @@
-// The M1 chain through the GUI (roadmap.md M1): create a task, watch Malkuth work, look at the
-// candidate's diff, accept it, and find the work in the user's repository. Each test has a backend
-// of its own (fixtures.ts).
+// The task chain through the GUI: create a task, watch Malkuth work, read its delivery and accept
+// it. Each test has a backend of its own (fixtures.ts).
 
-import fs from 'node:fs';
-import path from 'node:path';
 import { createTask, expect, open, taskPanel, test } from './fixtures';
 
 // On a slow machine an older page arrives later than the next render. Scrolling up must still
@@ -40,7 +37,7 @@ test('scrolling up on a slow machine loads every older page', async ({ page, bac
   expect(reached).toBe(true);
 });
 
-test('a task goes from creation to the user repository', async ({ page, backend }) => {
+test('a task goes from creation to acceptance', async ({ page, backend }) => {
   await open(page, backend);
   // Pressing twice creates one task (#16).
   await createTask(page, '写 work.txt', 'FAKE:done', { twice: true });
@@ -55,19 +52,10 @@ test('a task goes from creation to the user repository', async ({ page, backend 
   await card.getByRole('button', { name: '查看并验收' }).click();
 
   const panel = taskPanel(page, '写 work.txt');
-  await expect(panel.locator('.badge.passed')).toHaveText('通过');
   await expect(panel.getByRole('region', { name: '交付说明' })).toContainText('写了 work.txt');
   await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
-  await expect(panel.locator('.verification-details')).not.toHaveAttribute('open');
-  await expect(panel.locator('.changes-details')).not.toHaveAttribute('open');
-  await panel.locator('.changes-details > summary').click();
-  await expect(panel.getByText('1 个文件')).toBeVisible();
   await panel.getByRole('button', { name: '验收', exact: true }).click();
   await expect(panel.locator('.phase')).toHaveText('已完成');
-
-  const file = path.join(backend.repo, 'work.txt');
-  await expect.poll(() => fs.existsSync(file), { timeout: 20_000 }).toBe(true);
-  expect(fs.readFileSync(file, 'utf8')).toBe('hi');
   await expect(page.getByText('现在没有需要你处理的事。')).toBeVisible();
 });
 
@@ -75,46 +63,18 @@ test('a task goes from creation to the user repository', async ({ page, backend 
 // "验收" button would accept (#13).
 test('an open task panel follows the candidate through a send-back', async ({ page, backend }) => {
   await open(page, backend);
-  // The test releases the check after inspecting the candidate. The file is outside the
-  // repository and verification site, so materializing another round does not move it.
-  const gate = path.join(path.dirname(backend.repo), 'check-gate');
-  fs.writeFileSync(gate, '');
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('region', { name: '设置' });
-  await settings.getByRole('button', { name: '验证与采集' }).click();
-  await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
-  await settings
-    .getByLabel('检查命令')
-    .fill(
-      'node -e "const fs=require(\'fs\');setTimeout(()=>process.exit(1),30000);setInterval(()=>{if(fs.existsSync(process.env.LOBOTOMY_TEST_CHECK_GATE))process.exit(0)},20)"',
-    );
-  await settings.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(settings.locator('.settings-save')).toContainText('第 2 版');
-  await settings.getByRole('button', { name: '返回', exact: true }).click();
-  await expect(settings).toHaveCount(0);
-
   await createTask(page, '改 work.txt', 'FAKE:done FAKE:text=first');
   const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
   await card.getByRole('button', { name: '查看并验收' }).click();
   const panel = taskPanel(page, '改 work.txt');
-  await panel.locator('.changes-details > summary').click();
-  await expect(panel.locator('.diff')).toContainText('first');
+  await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
 
-  fs.unlinkSync(gate);
   await panel.getByRole('button', { name: '退回…' }).click();
   const sendBack = page.getByRole('dialog', { name: '退回候选成果' });
   await sendBack.getByLabel(/理由/).fill('FAKE:done FAKE:text=second');
   await sendBack.getByRole('button', { name: '退回', exact: true }).click();
-  // While the new candidate is verified, its own changes show, not the last round's. The check
-  // stays blocked until these assertions finish or its 30-second deadline expires.
-  await expect(panel.locator('.now')).toHaveText('第 2 轮的候选成果正在验证。');
   await expect(panel.getByRole('heading', { name: '本轮交付（第 2 轮）' })).toBeVisible();
-  await expect(panel.locator('.diff')).toContainText('second', { timeout: 2_000 });
-  await expect(panel.locator('.diff')).not.toContainText('first');
-  fs.writeFileSync(gate, '');
-  await expect(panel.locator('.now')).toHaveText('第 2 轮的候选成果通过了验证，等你验收。');
-  await expect(panel.locator('.diff')).toContainText('second');
-  await expect(panel.locator('.diff')).not.toContainText('first');
+  await expect(panel.locator('.now')).toHaveText('第 2 轮交出了候选成果，等你验收。');
   await expect(panel.locator('.history')).toContainText('你退回了：FAKE:done FAKE:text=second');
 
   await panel.getByRole('button', { name: '验收', exact: true }).click();

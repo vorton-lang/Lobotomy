@@ -1,44 +1,20 @@
-//! What crosses a task's boundary (#14): messages the executor never got when the task closes,
-//! reports from a turn outside any task, and the changes such a turn leaves in the slot
-//! (data-model.md §4.2; harness-adapter.md §3).
+//! What crosses a task's boundary (#14): messages the executor never got when the task closes, and
+//! reports from a turn outside any task (data-model.md §4.2).
 
-use lobotomy_core::capture::{
-    CaptureResult, DiscardOutsideChanges, FinishCapture, Outside, outside_changes, pending_captures,
-};
 use lobotomy_core::report::{ReportEffect, ReportStatus};
-use lobotomy_core::task::{
-    Abandon, AdoptOutsideChanges, CodeStart, EditCriteria, StartAttempt, load_task, queued_messages,
-};
+use lobotomy_core::task::{Abandon, Accept, EditCriteria, SendBack, queued_messages};
 use lobotomy_core::turn::RegisterTurn;
-use lobotomy_core::verify::{Accept, SendBack, work_so_far};
-use lobotomy_core::workspace::{AlignIdleSlot, WorkspaceState, current_workspace};
 use lobotomy_core::{Caller, Db};
 
 mod common;
-use common::{
-    BASE, ROLE, SLOT, candidate, create, db, end_turn, idle_slot, ready_slot, register, rejection, send, start, verify,
-};
+use common::{ROLE, candidate, create, db, register, rejection, send};
 
 fn report(db: &Db, turn_id: &str, status: ReportStatus) -> ReportEffect {
     common::report(db, turn_id, status, None).unwrap()
 }
 
-/// A task waiting for acceptance, and its passed verification.
-fn accepting(db: &Db) -> (String, String) {
-    let (task, commit) = candidate(db);
-    let v = verify(db, &task, &commit, vec![], vec![]);
-    (task, v)
-}
-
-fn accept(db: &Db, request_id: &str, task: &str, v: &str, dropping: Vec<String>) -> lobotomy_core::Result<String> {
-    let accept = Accept {
-        request_id: request_id.into(),
-        task_id: task.into(),
-        verification_id: v.into(),
-        criteria_version: 1,
-        expected_integration: BASE.into(),
-        dropping,
-    };
+fn accept(db: &Db, request_id: &str, task: &str, dropping: Vec<String>) -> lobotomy_core::Result<()> {
+    let accept = Accept { request_id: request_id.into(), task_id: task.into(), criteria_version: 1, dropping };
     db.execute(&Caller::User, &accept)
 }
 
@@ -51,12 +27,12 @@ fn message_state(db: &Db, id: &str) -> String {
 #[test]
 fn accepting_lets_go_of_undelivered_messages_only_when_told() {
     let db = db();
-    let (task, v) = accepting(&db);
+    let task = candidate(&db);
     let added = send(&db, "m1", Some(&task), "异常行要能看到原始行号");
 
-    assert_eq!(rejection(accept(&db, "a1", &task, &v, vec![])), "undelivered_messages");
-    assert_eq!(rejection(accept(&db, "a2", &task, &v, vec!["msg_other".into()])), "undelivered_messages");
-    accept(&db, "a3", &task, &v, vec![added.clone()]).unwrap();
+    assert_eq!(rejection(accept(&db, "a1", &task, vec![])), "undelivered_messages");
+    assert_eq!(rejection(accept(&db, "a2", &task, vec!["msg_other".into()])), "undelivered_messages");
+    accept(&db, "a3", &task, vec![added.clone()]).unwrap();
 
     assert_eq!(message_state(&db, &added), "dropped");
     assert!(db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty(), "nothing waits for a closed task");
@@ -71,7 +47,7 @@ fn accepting_lets_go_of_undelivered_messages_only_when_told() {
 #[test]
 fn sending_back_delivers_the_undelivered_messages_in_the_task() {
     let db = db();
-    let (task, _) = accepting(&db);
+    let task = candidate(&db);
     send(&db, "m1", Some(&task), "异常行要能看到原始行号");
     db.execute(
         &Caller::User,
@@ -95,20 +71,13 @@ fn sending_back_delivers_the_undelivered_messages_in_the_task() {
 #[test]
 fn closing_a_task_drops_its_queued_messages() {
     let db = db();
-    let (task, v) = accepting(&db);
+    let task = candidate(&db);
     db.execute(
         &Caller::User,
         &EditCriteria { request_id: "e1".into(), task_id: task.clone(), expected_version: 1, text: "新条件".into() },
     )
     .unwrap();
-    let accept_v2 = Accept {
-        request_id: "a1".into(),
-        task_id: task.clone(),
-        verification_id: v,
-        criteria_version: 2,
-        expected_integration: BASE.into(),
-        dropping: vec![],
-    };
+    let accept_v2 = Accept { request_id: "a1".into(), task_id: task.clone(), criteria_version: 2, dropping: vec![] };
     db.execute(&Caller::User, &accept_v2).unwrap();
     assert!(db.read(|c| queued_messages(c, ROLE)).unwrap().is_empty());
 
@@ -124,93 +93,8 @@ fn closing_a_task_drops_its_queued_messages() {
 #[test]
 fn a_report_from_a_turn_outside_any_task_has_no_task() {
     let db = db();
-    idle_slot(&db);
     send(&db, "m1", None, "改个错字");
     let t = register(&db);
     assert_eq!(report(&db, &t.turn_id, ReportStatus::Done), ReportEffect::NoTask);
     assert_eq!(report(&db, &t.turn_id, ReportStatus::Progress), ReportEffect::Recorded);
-}
-
-/// Runs a turn outside any task that changes `paths`, and returns its capture.
-fn outside_turn(db: &Db, request_id: &str, paths: &[&str]) -> String {
-    send(db, request_id, None, "改个错字");
-    let t = register(db);
-    end_turn(db, &t.turn_id);
-    let capture = db.read(pending_captures).unwrap().pop().unwrap();
-    let changed = paths.iter().map(|p| (*p).to_owned()).collect();
-    let result = CaptureResult::Pinned { commit: format!("outside-{request_id}"), changed };
-    db.execute(&Caller::Runtime, &FinishCapture { capture_id: capture.id.clone(), result }).unwrap();
-    capture.id
-}
-
-#[test]
-fn changes_outside_any_task_keep_tasks_from_starting_until_the_user_decides() {
-    let db = db();
-    idle_slot(&db);
-    // A turn that changed nothing leaves nothing to decide.
-    outside_turn(&db, "m0", &[]);
-    assert_eq!(db.read(|c| outside_changes(c, ROLE)).unwrap(), None);
-
-    let capture = outside_turn(&db, "m1", &["README.md"]);
-    let pending = db.read(|c| outside_changes(c, ROLE)).unwrap().unwrap();
-    assert_eq!((pending.id.as_str(), pending.outside), (capture.as_str(), Some(Outside::Pending)));
-    let task = create(&db, "c1");
-    assert_eq!(
-        rejection(db.execute(&Caller::Runtime, &StartAttempt { task_id: task.clone(), code_start: None })),
-        "outside_changes"
-    );
-
-    // Discarding writes the slot over with the integration version; then the task can start.
-    db.execute(&Caller::User, &DiscardOutsideChanges { request_id: "d1".into(), capture_id: capture.clone() }).unwrap();
-    assert_eq!(db.read(|c| outside_changes(c, ROLE)).unwrap(), None);
-    let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
-    assert_eq!((ws.state, ws.target.as_str(), ws.task_id), (WorkspaceState::Materializing, BASE, None));
-    ready_slot(&db);
-    start(&db, &task);
-}
-
-/// When the integration version moves (another role's task was accepted), the idle slot follows
-/// it, but not over changes the user has not decided about (#16).
-#[test]
-fn an_idle_slot_does_not_follow_the_integration_version_over_undecided_changes() {
-    let db = db();
-    idle_slot(&db);
-    outside_turn(&db, "m1", &["README.md"]);
-    db.write(|tx| {
-        Ok(tx.execute("UPDATE project SET integration = 'moved', integration_rev = integration_rev + 1", [])?)
-    })
-    .unwrap();
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &AlignIdleSlot { role: ROLE.into() })), "outside_changes");
-    assert_eq!(db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap().target, BASE);
-}
-
-#[test]
-fn a_task_made_from_outside_changes_starts_from_them() {
-    let db = db();
-    idle_slot(&db);
-    let capture = outside_turn(&db, "m1", &["README.md"]);
-    let adopt = AdoptOutsideChanges {
-        request_id: "t1".into(),
-        capture_id: capture.clone(),
-        title: "改错字".into(),
-        body: "把刚才的改动做完".into(),
-        criteria: "-".into(),
-    };
-    let task = db.execute(&Caller::User, &adopt).unwrap().id;
-    assert_eq!(db.read(|c| load_task(c, &task)).unwrap().origin_capture.as_deref(), Some(capture.as_str()));
-    assert_eq!(db.read(|c| outside_changes(c, ROLE)).unwrap(), None);
-    // The same capture cannot be settled twice.
-    let again = DiscardOutsideChanges { request_id: "d1".into(), capture_id: capture.clone() };
-    assert_eq!(rejection(db.execute(&Caller::User, &again)), "not_pending");
-
-    // Like a reopened task, its first attempt starts from its work so far, rebased by the runtime.
-    assert_eq!(db.read(|c| work_so_far(c, &task)).unwrap().as_deref(), Some("outside-m1"));
-    let plain = StartAttempt { task_id: task.clone(), code_start: None };
-    assert_eq!(rejection(db.execute(&Caller::Runtime, &plain)), "code_start_needed");
-    let code_start = CodeStart { commit: "outside-m1-rebased".into(), base: BASE.into(), conflicts: vec![] };
-    db.execute(&Caller::Runtime, &StartAttempt { task_id: task.clone(), code_start: Some(code_start) }).unwrap();
-    let ws = db.read(|c| current_workspace(c, SLOT)).unwrap().unwrap();
-    assert_eq!((ws.target.as_str(), ws.head.as_str()), ("outside-m1-rebased", BASE));
-    let brief = db.read(|c| queued_messages(c, ROLE)).unwrap().pop().unwrap().body;
-    assert!(brief.contains("初始改动"), "{brief}");
 }

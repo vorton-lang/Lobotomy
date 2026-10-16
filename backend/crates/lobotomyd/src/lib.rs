@@ -4,19 +4,15 @@
 
 pub mod angela;
 pub mod capability;
-pub mod display;
 pub mod gui;
 pub mod host;
 pub mod instance;
 pub mod launch;
 pub mod mcp;
-pub mod onboard;
 pub mod project;
 pub mod projects;
-pub mod results;
 pub mod runner;
 pub mod scheduler;
-pub mod trial;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

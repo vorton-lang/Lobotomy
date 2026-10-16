@@ -8,16 +8,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use lobotomy_core::Error;
 use lobotomy_core::host::{ProjectEntry, ProjectState};
 use lobotomy_core::id::{new_id, now_ms};
-use lobotomy_core::project::{load_project, peek_project};
+use lobotomy_core::project::{Onboard, load_project, peek_project};
+use lobotomy_core::{Caller, Error};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::host::Host;
 use crate::project::Project;
-use crate::{gui, onboard, runner, scheduler};
+use crate::runner::db;
+use crate::{gui, runner, scheduler};
 
 /// One open project at work: its scheduler, and the watcher that tells GUIs what changed.
 pub struct Running {
@@ -39,17 +40,13 @@ impl Running {
         Ok(Self { project, scheduling, scheduler, watching, watcher })
     }
 
-    /// Normal shutdown of this project (harness-adapter.md §1.8): its trials stop, scheduling
-    /// stops, its check commands stop, and its running CLIs are interrupted and waited for until
-    /// `deadline`. The MCP service stays up meanwhile, so a CLI can still report. Other store jobs
-    /// are not waited for: one that has not finished runs again when the project opens next
-    /// (data-model.md §5). Work still running keeps the project lock until it finishes or the
+    /// Normal shutdown of this project (harness-adapter.md §1.8): scheduling stops, and its running
+    /// CLIs are interrupted and waited for until `deadline`. The MCP service stays up meanwhile, so
+    /// a CLI can still report. Work still running keeps the project lock until it finishes or the
     /// process exits.
     pub async fn stop(self, deadline: Instant) {
-        let _ = tokio::time::timeout_at(deadline.into(), self.project.trials.stop_all()).await;
         self.scheduling.cancel();
         let _ = self.scheduler.await;
-        self.project.stop_checks();
         runner::interrupt_all(&self.project, deadline).await;
         self.watching.cancel();
         // Cancellation only asks the watcher to stop; join it before releasing its project.
@@ -57,8 +54,8 @@ impl Running {
     }
 
     /// Stops this project while the backend runs on, for archiving (data-model.md §10.4): as
-    /// [`Running::stop`], then the CLIs still running end with their process trees, and the
-    /// store jobs in progress finish. Returns the instance, still open; the caller lets it go.
+    /// [`Running::stop`], then the CLIs still running end with their process trees. Returns the
+    /// instance, still open; the caller lets it go.
     async fn close(self, grace: Duration) -> anyhow::Result<Arc<Project>> {
         let project = self.project.clone();
         self.stop(Instant::now() + grace).await;
@@ -262,7 +259,7 @@ impl Projects {
 /// steps 1–3). Its data goes into `data_dir`, by default the host's directory for this project.
 /// When connecting fails, neither the data directory nor the registration stays.
 pub async fn create(host: &Arc<Host>, repo: &Path, data_dir: Option<PathBuf>) -> anyhow::Result<Arc<Project>> {
-    let repo_path = onboard::repo_path(repo)?;
+    let repo_path = repo_path(repo)?;
     let id = new_id("prj");
     let data_dir = data_dir.unwrap_or_else(|| host.projects_dir().join(&id));
     let name = repo_path.file_name().map_or_else(|| repo_path.display().to_string(), |n| n.to_string_lossy().into());
@@ -278,7 +275,9 @@ pub async fn create(host: &Arc<Host>, repo: &Path, data_dir: Option<PathBuf>) ->
     let connected = async {
         let (id, dir, h) = (entry.id.clone(), data_dir.clone(), host.clone());
         let project = Arc::new(tokio::task::spawn_blocking(move || Project::open(&id, &dir, h)).await??);
-        onboard::onboard(&project, &repo_path).await?;
+        let cmd =
+            Onboard { request_id: new_id("req"), project_id: project.id.clone(), repo_path: entry.repo_path.clone() };
+        db(&project, move |db| db.execute(&Caller::User, &cmd)).await?;
         host.db.set_project_state(&entry.id, ProjectState::Running)?;
         anyhow::Ok(project)
     }
@@ -287,6 +286,22 @@ pub async fn create(host: &Arc<Host>, repo: &Path, data_dir: Option<PathBuf>) ->
         discard(host, &entry).await;
     }
     connected
+}
+
+/// The repository's path as the project records it: canonical, so one repository has one path
+/// whichever way the user named it (data-model.md §10.3).
+pub fn repo_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let canonical = std::fs::canonicalize(path).with_context(|| format!("opening {}", path.display()))?;
+    Ok(dunce(&canonical))
+}
+
+/// `canonicalize` on Windows gives a `\\?\` path, which git does not take everywhere.
+fn dunce(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => rest.into(),
+        _ => path.to_path_buf(),
+    }
 }
 
 /// Opens a registered project and starts it. A lost data directory is not created again empty.

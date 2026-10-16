@@ -3,7 +3,7 @@
 
 export type Abandon = { request_id: string, task_id: string, reason: string, };
 
-export type Accept = { request_id: string, task_id: string, verification_id: string, criteria_version: number, expected_integration: string,
+export type Accept = { request_id: string, task_id: string, criteria_version: number,
 /**
  * The user's messages to the executor that it never got, which the user lets go with this
  * acceptance; exactly those there are (data-model.md §4.2, #14).
@@ -11,14 +11,6 @@ export type Accept = { request_id: string, task_id: string, verification_id: str
 dropping: Array<string>, };
 
 export type Action = "read_only" | "edit_docs" | "edit_code";
-
-export type AdoptDisplay = { request_id: string, target: string, expected_rev: number,
-/**
- * Unpreviewed publication commits the user confirmed will leave the integration baseline.
- */
-acknowledged: Array<string>, };
-
-export type AdoptOutsideChanges = { request_id: string, capture_id: string, title: string, body: string, criteria: string, };
 
 export type AngelaStatus = {
 /**
@@ -35,52 +27,9 @@ attention: Array<Attention>,
  */
 busy: boolean, };
 
-export type ApproveNewFiles = { request_id: string, capture_id: string, };
-
 export type Assignment = { actions: Array<Action>, stop_when: string, interpretation: string, };
 
-export type AttachmentView = { project: string, project_name: string, } & ({ "kind": "task", task_id: string, title: string, executor: string, phase: Phase, paused: boolean, } | { "kind": "candidate", task_id: string, title: string,
-/**
- * The attempt that produced it.
- */
-seq: number, commit: string | null, at: number,
-/**
- * A newer attempt's candidate replaced it.
- */
-superseded: boolean,
-/**
- * It was accepted: it is in the integration version.
- */
-accepted: boolean,
-/**
- * How many files it changed although its task allows reading only (roles-and-tasks.md §4).
- */
-unallowed_changes: number, } | { "kind": "verification", task_id: string, title: string,
-/**
- * The attempt whose candidate it verified.
- */
-seq: number, state: VerificationState,
-/**
- * The integration version the candidate was rebased onto.
- */
-base: string, config_version: number, at: number,
-/**
- * A newer candidate or a newer verification replaced it.
- */
-superseded: boolean,
-/**
- * The integration version or the checks changed since it ran (data-model.md §4.5).
- */
-stale: boolean,
-/**
- * The candidate was accepted on it. Accepting moves the integration version, so an
- * accepted verification is always stale; that is no reason to doubt it.
- */
-accepted: boolean,
-/**
- * How many files its candidate changed although the task allows reading only.
- */
-unallowed_changes: number, } | { "kind": "report", task_id: string | null, title: string | null, role: string, report_title: string, status: string, at: number,
+export type AttachmentView = { project: string, project_name: string, } & ({ "kind": "task", task_id: string, title: string, executor: string, phase: Phase, paused: boolean, } | { "kind": "report", task_id: string | null, title: string | null, role: string, report_title: string, status: string, at: number,
 /**
  * The length of its body, in characters.
  */
@@ -90,27 +39,15 @@ chars: number,
  */
 effect: ReportEffect | null, });
 
-export type Attempt = { id: string, task_id: string, seq: number, started_at: number, ended_at: number | null, end_reason: AttemptEnd | null,
+export type Attempt = { id: string, task_id: string, seq: number, started_at: number, ended_at: number | null, end_reason: AttemptEnd | null, done_turn_id: string | null,
 /**
- * Where its code starts; `None` when the slot stayed as it was (data-model.md §4.3).
+ * The title and body of that turn's done.
  */
-code_start: string | null, done_turn_id: string | null,
-/**
- * The title and body of that turn's done, for the candidate's commit message.
- */
-done_summary: string | null,
-/**
- * Optional trial from the same first accepted done; the user chooses whether to run it.
- */
-trial: TrialRecipe | null, candidate_id: string | null,
-/**
- * Files its code start left with conflict markers.
- */
-conflicts: Array<string>, };
+done_summary: string | null, };
 
 export type AttemptEnd = "candidate" | "abandoned";
 
-export type Attention = { "kind": "hold", role: string, hold: Hold, } | { "kind": "outside_changes", role: string, capture: Capture, } | { "kind": "unknown_turn", role: string, turn_id: string, } | { "kind": "task_blocked", task_id: string, title: string, reason: string, } | { "kind": "stalled", role: string, task_id: string, title: string, turn_id: string, report_error: string | null, } | { "kind": "accept", task_id: string, title: string, verification_id: string, } | { "kind": "quota", domain: Domain, } | { "kind": "job_failed", key: string, reason: string, } | { "kind": "display_changed", display: DisplayView, } | { "kind": "preview_stopped", reason: string, } | { "kind": "question", id: string, question: string, asked_at: number, };
+export type Attention = { "kind": "hold", role: string, hold: Hold, } | { "kind": "unknown_turn", role: string, turn_id: string, } | { "kind": "task_blocked", task_id: string, title: string, reason: string, } | { "kind": "stalled", role: string, task_id: string, title: string, turn_id: string, report_error: string | null, } | { "kind": "accept", task_id: string, title: string, } | { "kind": "quota", domain: Domain, } | { "kind": "question", id: string, question: string, asked_at: number, };
 
 export type BlobParams = { hash: string, };
 
@@ -118,49 +55,7 @@ export type BlobRef = { blob: string, size: number, head: string, tail: string, 
 
 export type BlobText = { text: string, };
 
-export type Capture = { id: string, turn_id: string, role: string, task_id: string | null, attempt_id: string | null, kind: CaptureKind, workspace_id: string,
-/**
- * The slot's baseline; the capture's commit has it as parent.
- */
-base: string, config_version: number, state: CaptureState, options: CaptureOptions, commit_id: string | null, detail: JsonValue | null, created_at: number,
-/**
- * Set for a capture outside any task that changed something.
- */
-outside: Outside | null, };
-
-export type CaptureKind = "turn" | "candidate" | "interrupted";
-
-export type CaptureOptions = {
-/**
- * Keep the new files although they exceed the guardrail.
- */
-ignore_guard: boolean,
-/**
- * Leave the new files out; changes to tracked files are still captured.
- */
-leave_new_files: boolean,
-/**
- * Leave out what cannot be captured: nested repositories, special files, invalid names.
- */
-leave_uncovered: boolean, };
-
-export type CaptureState = "intent" | "pinned" | "oversized" | "uncovered";
-
-export type Check = { command: string, timeout_secs: number, };
-
-export type CheckRun = { id: string, verification_id: string, seq: number, command: string, exit_code: number | null, timed_out: boolean,
-/**
- * `stdout` and `stderr`, each text or a reference to the blob store.
- */
-output: JsonValue, duration_ms: number, };
-
 export type CommandRecord = { name: string, args: JsonValue, result: JsonValue, };
-
-export type ConfigEdited = { version: number, };
-
-export type ConfigView = { version: number, config: ProjectConfig, };
-
-export type Content = { "kind": "text", text: string, } | { "kind": "binary", size: number, } | { "kind": "too_large", size: number, } | { "kind": "symlink", target: string, } | { "kind": "conflict" };
 
 export type Continue = { request_id: string, role: string, };
 
@@ -176,17 +71,7 @@ export type CriteriaEdited = { version: number, };
 
 export type Decision = { id: string, kind: string, actor: string, detail: JsonValue, created_at: number, };
 
-export type DiffParams = { from: string, to: string, };
-
-export type DiscardOutsideChanges = { request_id: string, capture_id: string, };
-
-export type DiscardUncaptured = { request_id: string, capture_id: string, };
-
 export type DiskUsage = { raw_output: RawOutput, };
-
-export type DisplayState = { "kind": "current" } | { "kind": "changed", commit: string, } | { "kind": "blocked", commit: string | null, reason: string, };
-
-export type DisplayView = { state: DisplayState, expected_rev: number, busy: boolean, start_blocked: boolean, unpreviewed: Array<UnpreviewedPublication>, unavailable: string | null, error: string | null, };
 
 export type Domain = { harness: string, account: string,
 /**
@@ -200,8 +85,6 @@ resets_at: number | null, message: string | null, };
 
 export type EditCriteria = { request_id: string, task_id: string, expected_version: number, text: string, };
 
-export type EditProjectConfig = { request_id: string, expected_version: number, config: ProjectConfig, };
-
 export type Failure = { kind: FailureKind, message: string,
 /**
  * When the quota resets, in Unix milliseconds, if the harness said so.
@@ -214,12 +97,6 @@ resets_at: number | null,
 unstarted: boolean, };
 
 export type FailureKind = "quota" | "permission" | "other";
-
-export type FileChange = { path: string,
-/**
- * `None`: the file did not exist on that side.
- */
-old: Content | null, new: Content | null, };
 
 export type Forward = { project: string, project_name: string, kind: "task" | "message", role: string, task_id: string | null, task_title: string | null, at: number, contexts: Array<ForwardedContext>, };
 
@@ -248,7 +125,7 @@ models: Array<ModelView>,
  */
 efforts: Array<string>, };
 
-export type Hold = { "kind": "abnormal", turn: Turn, } | { "kind": "capture_stopped", capture: Capture, } | { "kind": "session_unidentified", session_id: string, };
+export type Hold = { "kind": "abnormal", turn: Turn, } | { "kind": "session_unidentified", session_id: string, };
 
 export type HostSnapshot = { projects: Array<ProjectStatus>,
 /**
@@ -333,37 +210,13 @@ export type NoParams = Record<symbol, never>;
 
 export type Outcome = "completed" | "failed" | "interrupted";
 
-export type Outside = "pending" | "adopted" | "discarded";
-
 export type PermissionChanged = { harness: string, permission: "full" | "auto_review", };
 
 export type PermissionParams = { harness: string, permission: "full" | "auto_review", };
 
-export type Phase = "queued" | "executing" | "verifying" | "accepting" | "done" | "abandoned";
+export type Phase = "queued" | "executing" | "accepting" | "done" | "abandoned";
 
-export type Project = { id: string, repo_path: string, branch: string, author_name: string, author_email: string,
-/**
- * The head of the integration version.
- */
-integration: string, integration_rev: number,
-/**
- * The integration version the user's repository was last brought to.
- */
-previewed: string, };
-
-export type ProjectConfig = { checks: Array<Check>,
-/**
- * gitignore patterns never captured; materializing keeps them as caches.
- */
-excluded: Array<string>,
-/**
- * Paths captured even when an ignore rule matches them.
- */
-force_tracked: Array<string>,
-/**
- * The size guardrail on the files one capture adds (harness-adapter.md §4.1).
- */
-max_new_files: number, max_new_bytes: number, };
+export type Project = { id: string, repo_path: string, };
 
 export type ProjectEntry = {
 /**
@@ -407,12 +260,6 @@ id: string, name: string, data_dir: string,
  */
 repo_path: string, state: ProjectState, registered_at: number, };
 
-export type Publication = { rev: number, commit_id: string,
-/**
- * The integration version before it.
- */
-previous: string, created_at: number, };
-
 export type Push = { "type": "events", project: string, events: Array<LogEvent>, } | { "type": "live", project: string, live: { [key in string]: LiveTurn }, } | { "type": "host" } | { "type": "tick" } | { "type": "resync" } | { "type": "thread", project: string, role: string, seq: number, };
 
 export type Quote = {
@@ -433,11 +280,7 @@ export type RemoteError = { code: string, message: string, };
 
 export type Reopen = { request_id: string, task_id: string, };
 
-export type ReportArgs = { title: string, body: string, status: ReportStatus, blocked_on: string | null,
-/**
- * Suggested manual trial, saved only with the first accepted done. Never executed here.
- */
-trial: TrialRecipe | null, };
+export type ReportArgs = { title: string, body: string, status: ReportStatus, blocked_on: string | null, };
 
 export type ReportEffect = "recorded" | "unchanged" | "late" | "no_task";
 
@@ -445,15 +288,7 @@ export type ReportStatus = "progress" | "blocked" | "done";
 
 export type Resolved<T> = T | { error: string, };
 
-export type RetryFailed = { retried: number, };
-
-export type RetryPreview = { request_id: string, };
-
-export type RoleView = { task_id: string | null, unfinished: Turn | null, last_turn: Turn | null, hold: Hold | null, stalled: Stalled | null,
-/**
- * Changes a turn outside any task left in the slot, waiting for the user (#14).
- */
-outside: Capture | null, workspace: Workspace | null, queued_messages: number, name: string,
+export type RoleView = { task_id: string | null, unfinished: Turn | null, last_turn: Turn | null, hold: Hold | null, stalled: Stalled | null, queued_messages: number, name: string,
 /**
  * As the role table's check allows.
  */
@@ -465,7 +300,7 @@ model: string | null,
 /**
  * The reasoning effort chosen likewise.
  */
-effort: string | null, slot: string | null, };
+effort: string | null, };
 
 export type SearchMatch = { kind: MatchKind, id: string, seq: number | null, };
 
@@ -504,17 +339,13 @@ harnesses: Array<HarnessView>, live: { [key in string]: LiveTurn },
 /**
  * The last event it includes; pushed events after it apply on top.
  */
-seq: number, project: Project | null, config: ConfigView | null, roles: Array<RoleView>, tasks: Array<TaskView>, };
+seq: number, project: Project | null, roles: Array<RoleView>, tasks: Array<TaskView>, };
 
 export type Stalled = { task_id: string, turn_id: string,
 /**
  * Why a call to a Lobotomy tool in that turn recorded nothing, when one did not.
  */
 report_error: string | null, };
-
-export type StartTrial = { task_id: string, attempt_id: string, expected_candidate: string, };
-
-export type StopTrial = { trial_id: string, };
 
 export type Task = { id: string, title: string, body: string, executor: string, phase: Phase, paused: boolean,
 /**
@@ -527,20 +358,12 @@ paused_by: "user" | "manager" | null,
  */
 blocked_reason: string | null, criteria_version: number, queue_pos: number | null, revision: number, created_at: number, closed_at: number | null,
 /**
- * For a task made from changes outside any task: their capture, where its work starts (#14).
- */
-origin_capture: string | null,
-/**
  * For a task the manager assigned: what she allowed and when to stop. Its body is the user's
  * words she quoted.
  */
 assignment: Assignment | null, };
 
-export type TaskDetail = { task: Task, criteria: Array<Criteria>, attempts: Array<Attempt>, captures: Array<Capture>, verifications: Array<Verification>,
-/**
- * The checks of all its verifications, in the order they ran.
- */
-checks: Array<CheckRun>, decisions: Array<Decision>, publications: Array<Publication>,
+export type TaskDetail = { task: Task, criteria: Array<Criteria>, attempts: Array<Attempt>, decisions: Array<Decision>,
 /**
  * The user's messages to the task that its executor never got (data-model.md §4.2).
  */
@@ -548,7 +371,7 @@ undelivered_messages: Array<Message>, };
 
 export type TaskParams = { task_id: string, };
 
-export type TaskView = { attempt_seq: number | null, attempt_open: boolean, verification: Verification | null,
+export type TaskView = { attempt_seq: number | null, attempt_open: boolean,
 /**
  * The user's messages its executor never got; accepting needs the user to let them go (#14).
  */
@@ -566,10 +389,6 @@ paused_by: "user" | "manager" | null,
  * Derived from the open task question; there is no task.blocked_reason database column.
  */
 blocked_reason: string | null, criteria_version: number, queue_pos: number | null, revision: number, created_at: number, closed_at: number | null,
-/**
- * For a task made from changes outside any task: their capture, where its work starts (#14).
- */
-origin_capture: string | null,
 /**
  * For a task the manager assigned: what she allowed and when to stop. Its body is the user's
  * words she quoted.
@@ -611,19 +430,11 @@ before?: number | null,
  */
 after?: number | null, limit?: number | null, };
 
-export type TrialRecipe = { command: string, purpose: string, };
-
-export type TrialView = { id: string, task_id: string, attempt_id: string, round: number, candidate: string, directory: string, command: string, purpose: string, state: "open" | "closed", error: string | null, };
-
 export type Turn = { id: string, role: string, harness: string, native_session_id: string,
 /**
  * The harness's own session id, known after the session's first turn started.
  */
-native_id: string | null, task_id: string | null, attempt_id: string | null, input: string, state: TurnState, outcome: Outcome | null, failure: Failure | null, pid: number | null, process_start: number | null, done_at: number | null, registered_at: number, started_at: number | null, ended_at: number | null,
-/**
- * The slot generation the turn runs in (harness-adapter.md §3).
- */
-workspace_id: string | null, };
+native_id: string | null, task_id: string | null, attempt_id: string | null, input: string, state: TurnState, outcome: Outcome | null, failure: Failure | null, pid: number | null, process_start: number | null, done_at: number | null, registered_at: number, started_at: number | null, ended_at: number | null, };
 
 export type TurnParams = { turn_id: string, };
 
@@ -631,39 +442,8 @@ export type TurnRegistered = { turn_id: string, };
 
 export type TurnState = "registered" | "running" | "ended" | "unknown";
 
-export type UnpreviewedPublication = { task_id: string, title: string, commit: string, };
-
-export type Verification = { id: string, task_id: string, attempt_id: string, capture_id: string,
-/**
- * The integration version the candidate was rebased onto.
- */
-base: string, config_version: number,
-/**
- * The rebased commit: the next integration version if the user accepts it.
- */
-commit_id: string | null, conflicts: Array<string>, state: VerificationState, created_at: number, finished_at: number | null, };
-
-export type VerificationState = "running" | "passed" | "failed";
-
-export type Workspace = { id: string, name: string, generation: number,
-/**
- * The commit written into the directory.
- */
-target: string,
-/**
- * git's HEAD in the directory: the baseline.
- */
-head: string,
-/**
- * The task the slot was written for; `None` for a role without a task.
- */
-task_id: string | null, state: WorkspaceState, };
-
-export type WorkspaceState = "materializing" | "ready" | "retired";
-
 export type ReadMethods = {
   blob: { params: BlobParams; result: BlobText };
-  diff: { params: DiffParams; result: Array<FileChange> };
   disk_usage: { params: NoParams; result: DiskUsage };
   forwards: { params: ForwardsParams; result: { [key in string]: Array<Forward> } };
   host: { params: NoParams; result: HostSnapshot };
@@ -673,31 +453,22 @@ export type ReadMethods = {
   snapshot: { params: NoParams; result: Snapshot };
   task: { params: TaskParams; result: TaskDetail };
   thread: { params: ThreadQuery; result: ThreadPage };
-  trials: { params: TaskParams; result: Array<TrialView> };
 };
 
 export type Commands = {
   abandon: { params: Abandon; result: null };
-  accept: { params: Accept; result: string };
-  adopt_display: { params: AdoptDisplay; result: string };
-  adopt_outside_changes: { params: AdoptOutsideChanges; result: Created };
-  approve_new_files: { params: ApproveNewFiles; result: null };
+  accept: { params: Accept; result: null };
   archive_project: { params: ProjectParams; result: null };
   continue: { params: Continue; result: TurnRegistered };
   create_project: { params: CreateProjectParams; result: ProjectEntry };
   create_task: { params: CreateTask; result: Created };
-  discard_outside_changes: { params: DiscardOutsideChanges; result: null };
-  discard_uncaptured: { params: DiscardUncaptured; result: null };
   edit_criteria: { params: EditCriteria; result: CriteriaEdited };
-  edit_project_config: { params: EditProjectConfig; result: ConfigEdited };
   interrupt: { params: TurnParams; result: null };
   move_in_queue: { params: MoveInQueue; result: null };
   new_native_session: { params: NewNativeSession; result: null };
   quota_retry: { params: HarnessParams; result: Domain };
   reopen: { params: Reopen; result: null };
-  retry_failed: { params: NoParams; result: RetryFailed };
   retry_open: { params: ProjectParams; result: null };
-  retry_preview: { params: RetryPreview; result: null };
   send_back: { params: SendBack; result: null };
   send_message: { params: SendMessage; result: Created };
   set_paused: { params: SetPaused; result: null };
@@ -705,8 +476,6 @@ export type Commands = {
   set_role_harness: { params: SetRoleHarness; result: null };
   set_role_model: { params: SetRoleModel; result: null };
   shutdown: { params: NoParams; result: null };
-  start_trial: { params: StartTrial; result: TrialView };
-  stop_trial: { params: StopTrial; result: null };
   terminate: { params: TurnParams; result: Terminated };
   unarchive_project: { params: ProjectParams; result: null };
 };

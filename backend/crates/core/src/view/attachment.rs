@@ -8,11 +8,9 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
-use crate::capture::{load_capture, unallowed_changes};
 use crate::error::Result;
 use crate::report::{OrgReport, ReportEffect};
-use crate::task::{Phase, list_attempts, load_task};
-use crate::verify::{VerificationState, evidence_is_stale, latest_verification, load_verification};
+use crate::task::{Phase, load_task};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -24,41 +22,6 @@ pub enum Attachment {
         executor: String,
         phase: Phase,
         paused: bool,
-    },
-    /// An attempt's candidate.
-    Candidate {
-        task_id: String,
-        title: String,
-        /// The attempt that produced it.
-        seq: i64,
-        commit: Option<String>,
-        at: i64,
-        /// A newer attempt's candidate replaced it.
-        superseded: bool,
-        /// It was accepted: it is in the integration version.
-        accepted: bool,
-        /// How many files it changed although its task allows reading only (roles-and-tasks.md §4).
-        unallowed_changes: usize,
-    },
-    Verification {
-        task_id: String,
-        title: String,
-        /// The attempt whose candidate it verified.
-        seq: i64,
-        state: VerificationState,
-        /// The integration version the candidate was rebased onto.
-        base: String,
-        config_version: i64,
-        at: i64,
-        /// A newer candidate or a newer verification replaced it.
-        superseded: bool,
-        /// The integration version or the checks changed since it ran (data-model.md §4.5).
-        stale: bool,
-        /// The candidate was accepted on it. Accepting moves the integration version, so an
-        /// accepted verification is always stale; that is no reason to doubt it.
-        accepted: bool,
-        /// How many files its candidate changed although the task allows reading only.
-        unallowed_changes: usize,
     },
     /// An executor's report, with the title it wrote itself.
     Report {
@@ -81,8 +44,6 @@ pub fn attachment(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
     let prefix = id.split('_').next().unwrap_or_default();
     match prefix {
         "task" => task(conn, id),
-        "cap" => candidate(conn, id),
-        "ver" => verification(conn, id),
         "cmd" => report(conn, id),
         _ => Ok(None),
     }
@@ -103,73 +64,6 @@ fn task(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
 
 fn title(conn: &Connection, task_id: &str) -> Result<String> {
     Ok(conn.query_row("SELECT title FROM task WHERE id = ?1", [task_id], |r| r.get(0))?)
-}
-
-/// The id of the task's latest candidate.
-fn latest_candidate(conn: &Connection, task_id: &str) -> Result<Option<String>> {
-    Ok(list_attempts(conn, task_id)?.into_iter().rev().find_map(|a| a.candidate_id))
-}
-
-/// Whether the task's accept decision names `id` as its `field` (data-model.md §9.2 验收).
-fn accepted(conn: &Connection, task_id: &str, field: &str, id: &str) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM decision WHERE kind = 'accept' AND task_id = ?1
-                        AND json_extract(detail, '$.' || ?2) = ?3)",
-        [task_id, field, id],
-        |r| r.get(0),
-    )?)
-}
-
-fn unallowed(conn: &Connection, task_id: &str, capture_id: &str) -> Result<usize> {
-    Ok(unallowed_changes(&load_task(conn, task_id)?, &load_capture(conn, capture_id)?).len())
-}
-
-fn candidate(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
-    let row: Option<(String, i64, Option<String>, i64)> = conn
-        .query_row(
-            "SELECT a.task_id, a.seq, c.commit_id, c.created_at FROM attempt a JOIN capture c ON c.id = a.candidate_id
-             WHERE a.candidate_id = ?1",
-            [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
-        .optional()?;
-    let Some((task_id, seq, commit, at)) = row else {
-        return Ok(None);
-    };
-    let superseded = latest_candidate(conn, &task_id)?.as_deref() != Some(id);
-    Ok(Some(Attachment::Candidate {
-        title: title(conn, &task_id)?,
-        accepted: accepted(conn, &task_id, "capture_id", id)?,
-        unallowed_changes: unallowed(conn, &task_id, id)?,
-        task_id,
-        seq,
-        commit,
-        at,
-        superseded,
-    }))
-}
-
-fn verification(conn: &Connection, id: &str) -> Result<Option<Attachment>> {
-    let Some(v) = load_verification(conn, id).ok() else {
-        return Ok(None);
-    };
-    let seq: i64 = conn.query_row("SELECT seq FROM attempt WHERE id = ?1", [&v.attempt_id], |r| r.get(0))?;
-    let latest = latest_verification(conn, &v.task_id)?.map(|l| l.id);
-    let superseded =
-        latest.as_deref() != Some(id) || latest_candidate(conn, &v.task_id)?.as_deref() != Some(&v.capture_id);
-    Ok(Some(Attachment::Verification {
-        title: title(conn, &v.task_id)?,
-        stale: evidence_is_stale(conn, &v)?,
-        accepted: accepted(conn, &v.task_id, "verification_id", id)?,
-        unallowed_changes: unallowed(conn, &v.task_id, &v.capture_id)?,
-        task_id: v.task_id,
-        seq,
-        state: v.state,
-        base: v.base,
-        config_version: v.config_version,
-        at: v.finished_at.unwrap_or(v.created_at),
-        superseded,
-    }))
 }
 
 fn report(conn: &Connection, id: &str) -> Result<Option<Attachment>> {

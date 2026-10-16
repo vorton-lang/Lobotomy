@@ -97,7 +97,7 @@ async function client(url: string) {
 
 type Snapshot = { attention: { kind: string; turn_id?: string }[] };
 
-/** Waits until the executor's turn after `previous` has ended and been captured. */
+/** Waits until the executor's turn after `previous` has ended. */
 async function turnDone(
   call: <T>(m: string, p?: Record<string, unknown>) => Promise<T>,
   previous: string | null,

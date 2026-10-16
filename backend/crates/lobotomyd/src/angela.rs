@@ -1,7 +1,7 @@
 //! Angela, the user's global manager (data-model.md §10.6; roadmap.md M4). One per host. Her
 //! turns, her conversation and her inbox are in a database of her own in the host directory, with
-//! the projects' schema and command layer. She has no slot; her working directory is an empty
-//! directory of her own. She reads the projects through her MCP tools (`mcp::angela`).
+//! the projects' schema and command layer. Her working directory is an empty directory of her
+//! own. She reads the projects through her MCP tools (`mcp::angela`).
 //!
 //! She runs when the user writes to her, or when a project settles: nothing in it moves on
 //! without the user (manager-actions.md §6 "Manager 什么时候运行").
@@ -170,8 +170,8 @@ struct Seen {
 /// What the runtime tells her about the projects (manager-actions.md §6 "Manager 什么时候运行").
 ///
 /// A settled project wakes her when something she does not know yet happened there since her
-/// cursor: a change someone other than her caused. The runtime's own work, such as writing a slot
-/// or a preview, is no change to her, so a restart wakes nobody. Whenever she is about to run,
+/// cursor: a change someone other than her caused. The runtime's own work is no change to her, so a
+/// restart wakes nobody. Whenever she is about to run,
 /// what changed in each project goes in her input, and her cursors move past it. A project she sees
 /// for the first time starts her cursor at its present. Nothing is told while her turn runs: it
 /// comes with her next one.
@@ -219,7 +219,7 @@ async fn prepare(instance: &Instance, projects: &Projects) -> anyhow::Result<Opt
             })
         })
         .await?;
-        let attention = project_attention(&project, &overview);
+        let attention = project_attention(&overview);
         let open = overview.tasks.iter().any(|t| !t.task.phase.is_closed());
         let settled = match (still, attention.is_empty(), open) {
             (false, ..) => None,
@@ -347,8 +347,8 @@ mod tests {
         db.write(seed).unwrap();
         db.write(seed).unwrap();
         let roles = db.read(list_roles).unwrap();
-        let names: Vec<_> = roles.iter().map(|r| (r.name.as_str(), r.kind.as_str(), r.slot.is_none())).collect();
-        assert_eq!(names, [(ROLE, "manager", true)]);
+        let names: Vec<_> = roles.iter().map(|r| (r.name.as_str(), r.kind.as_str())).collect();
+        assert_eq!(names, [(ROLE, "manager")]);
     }
 
     #[tokio::test]
@@ -361,7 +361,6 @@ mod tests {
                 claude: cli.clone(),
                 codex: cli,
                 interrupt_helper: vec![],
-                terminal_helper: "unused".into(),
                 probe_timeout: Duration::from_secs(1),
             };
             let host = Arc::new(Host::open(dir.path(), harness).unwrap());

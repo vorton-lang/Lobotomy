@@ -6,14 +6,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
-use lobotomy_core::capture::{ApproveNewFiles, DiscardOutsideChanges, DiscardUncaptured};
-use lobotomy_core::project::EditProjectConfig;
 use lobotomy_core::role::SetRoleModel;
 use lobotomy_core::task::{
-    Abandon, AdoptOutsideChanges, CreateTask, EditCriteria, MoveInQueue, Reopen, SendMessage, SetPaused,
+    Abandon, Accept, CreateTask, EditCriteria, MoveInQueue, Reopen, SendBack, SendMessage, SetPaused,
 };
 use lobotomy_core::turn::{Continue, NewNativeSession, SetRoleHarness, TurnState, load_turn};
-use lobotomy_core::verify::{Accept, RetryPreview, SendBack};
 use lobotomy_core::{Caller, Command, Db, Error};
 use serde::Deserialize;
 use serde_json::Value;
@@ -22,7 +19,6 @@ use crate::host::Host;
 use crate::instance::Instance;
 use crate::project::Project;
 use crate::projects::Projects;
-use crate::results;
 use crate::runner::db;
 
 #[derive(Deserialize)]
@@ -142,12 +138,6 @@ macro_rules! project_commands {
             NewNativeSession,
             SetRoleHarness,
             SetRoleModel,
-            ApproveNewFiles,
-            DiscardUncaptured,
-            AdoptOutsideChanges,
-            DiscardOutsideChanges,
-            RetryPreview,
-            EditProjectConfig,
         );
     };
 }
@@ -159,33 +149,11 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: Comma
             $(if name == <$ty as Command>::NAME { return user::<$ty>(project, args).await; })*
         };
     }
-    if name == <lobotomy_core::display::AdoptDisplay as Command>::NAME {
-        return Ok(serde_json::to_value(crate::display::begin(project, serde_json::from_value(args)?).await?)?);
-    }
-    if name == Continue::NAME || name == NewNativeSession::NAME {
-        let _gate = project.activity.lock().await;
-        crate::display::observe(project).await?;
-        user_commands!(Continue, NewNativeSession);
-    }
     project_commands!(user_commands);
-    match name.as_str() {
-        name if name == START_TRIAL.name => {
-            START_TRIAL.encode(crate::trial::start(project, START_TRIAL.decode(args)?).await?)
-        }
-        name if name == STOP_TRIAL.name => {
-            let StopTrial { trial_id } = STOP_TRIAL.decode(args)?;
-            project.trials.stop(&trial_id).await?;
-            STOP_TRIAL.encode(())
-        }
-        name if name == RETRY_FAILED.name => {
-            RETRY_FAILED.encode(RetryFailed { retried: results::retry_failed(project) })
-        }
-        _ => turn_actions(project, &name, args).await,
-    }
+    turn_actions(project, &name, args).await
 }
 
-/// Runs a command about Angela (data-model.md §10.6): her messages and turns. She has no tasks,
-/// slot or results.
+/// Runs a command about Angela (data-model.md §10.6): her messages and turns. She has no tasks.
 pub async fn run_angela(angela: &Instance, CommandParams { name, args, .. }: CommandParams) -> anyhow::Result<Value> {
     macro_rules! user_commands {
         ($($ty:ty),* $(,)?) => {
@@ -222,24 +190,12 @@ async fn turn_actions(instance: &Instance, name: &str, args: Value) -> anyhow::R
     }
 }
 
-#[derive(Deserialize)]
-#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
-struct StopTrial {
-    trial_id: String,
-}
-
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct PermissionChanged {
     harness: String,
     #[cfg_attr(feature = "ts-rs", ts(type = "\"full\" | \"auto_review\""))]
     permission: &'static str,
-}
-
-#[derive(serde::Serialize)]
-#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
-struct RetryFailed {
-    retried: usize,
 }
 
 #[derive(serde::Serialize)]
@@ -254,7 +210,6 @@ pub(super) fn bindings(out: &mut super::bindings::Bindings) {
         ($($ty:ty),* $(,)?) => { $(out.command::<$ty>();)* };
     }
     project_commands!(export);
-    out.command::<lobotomy_core::display::AdoptDisplay>();
     runtime_bindings(out);
 }
 
@@ -267,9 +222,6 @@ super::protocol::routes! {
     QUOTA_RETRY: HarnessParams => lobotomy_core::quota::Domain = "quota_retry";
     SET_PERMISSION: PermissionParams => PermissionChanged = "set_permission";
     SHUTDOWN: super::protocol::NoParams => () = "shutdown";
-    START_TRIAL: crate::trial::StartTrial => crate::trial::TrialView = "start_trial";
-    STOP_TRIAL: StopTrial => () = "stop_trial";
-    RETRY_FAILED: super::protocol::NoParams => RetryFailed = "retry_failed";
     INTERRUPT: TurnParams => () = "interrupt";
     TERMINATE: TurnParams => Terminated = "terminate";
 }

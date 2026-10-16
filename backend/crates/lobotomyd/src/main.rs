@@ -2,7 +2,7 @@
 //! §10).
 //!
 //! `lobotomyd [--host-dir <dir>] [--port <n>] [--repo <dir>]` runs the backend. `--repo` adds the
-//! repository as a project unless it already has one (harness-adapter.md §4.3), as the GUI's new
+//! repository as a project unless it already has one (data-model.md §10.4), as the GUI's new
 //! project also does; tests and scripts use it.
 //! `lobotomyd ctrl-c <pid>` is the helper that sends Ctrl+C to a CLI's console
 //! (harness-adapter.md §1.8).
@@ -22,15 +22,6 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let [mode, title, command, control] = args.as_slice()
-        && mode == "trial-terminal"
-    {
-        std::process::exit(lobotomy_harness::process::run_terminal_helper(
-            command,
-            title,
-            std::path::Path::new(control),
-        )?);
-    }
     if let [command, pid] = args.as_slice()
         && command == "ctrl-c"
     {
@@ -77,7 +68,7 @@ async fn serve(Options { host_dir, repo, port }: Options) -> anyhow::Result<()> 
     let host = Arc::new(Host::open(&host_dir, HarnessConfig::detect()?)?);
     let backend = Backend::start(host.clone(), port).await?;
     if let Some(repo) = repo {
-        let path = lobotomyd::onboard::repo_path(&repo)?.to_string_lossy().into_owned();
+        let path = lobotomyd::projects::repo_path(&repo)?.to_string_lossy().into_owned();
         let existing =
             host.db.projects()?.into_iter().find(|p| p.repo_path == path && p.state != ProjectState::Archived);
         match existing {

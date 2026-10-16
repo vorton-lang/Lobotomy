@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/harness", "crates/lobotomyd", "crates/store"]
+members = ["crates/core", "crates/harness", "crates/lobotomyd"]
 
 # Development and test builds. Line tables keep file and line in panics and backtraces. With full
 # debug info, each test binary carried a PDB of about 350 MB, and target/ grew past 35 GB.
@@ -19,7 +19,6 @@ publish = false
 [workspace.dependencies]
 lobotomy-core = { path = "crates/core" }
 lobotomy-harness = { path = "crates/harness" }
-lobotomy-store = { path = "crates/store" }
 anyhow = "1"
 libc = "0.2"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws", "query"] }
@@ -30,7 +29,6 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-similar = "2"
 tempfile = "3"
 thiserror = "2"
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] }

@@ -1,22 +1,17 @@
 //! What the manager reads about a project (data-model.md §10.6 "读取带边界").
 //!
-//! Each read says up to which event of the project it is (`as_of`), and whether each result still
-//! holds: a candidate a newer one replaced, or a verification whose integration version or checks
-//! changed since it ran, is marked, not left out. What a read covers and finds nothing is empty:
-//! "没有". A project the read could not cover is for the caller to say: "不可用".
+//! Each read says up to which event of the project it is (`as_of`). What a read covers and finds
+//! nothing is empty: "没有". A project the read could not cover is for the caller to say: "不可用".
 
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 
 use super::{Attention, Overview, last_event};
-use crate::capture::{CaptureKind, load_capture, unallowed_changes};
-use crate::error::{Error, Result};
-use crate::project::load_project;
+use crate::error::Result;
 use crate::report::{OrgReport, ReportEffect};
-use crate::task::{Assignment, AttemptEnd, Phase, Task, Trial, list_attempts, load_task, undelivered_user_messages};
+use crate::task::{Assignment, AttemptEnd, Phase, Task, list_attempts, load_task, undelivered_user_messages};
 use crate::turn::{Hold, TurnState};
-use crate::verify::{VerificationState, evidence_is_stale, task_verifications};
 
 /// How many closed tasks a project read lists, the most recent first.
 pub const CLOSED_LISTED: usize = 10;
@@ -25,8 +20,6 @@ pub const CLOSED_LISTED: usize = 10;
 pub struct ProjectRead {
     /// The last event of the project the read includes.
     pub as_of: i64,
-    /// The integration version: what accepting has published so far.
-    pub integration: Option<String>,
     pub roles: Vec<RoleLine>,
     /// The open tasks, then the most recently closed.
     pub tasks: Vec<TaskLine>,
@@ -45,8 +38,7 @@ pub struct RoleLine {
     pub task_id: Option<String>,
     /// A turn of it is registered or running.
     pub running: bool,
-    /// Why it waits for the user, if it does: `abnormal_turn`, `capture_stopped` or
-    /// `session_unidentified`.
+    /// Why it waits for the user, if it does: `abnormal_turn` or `session_unidentified`.
     pub held: Option<&'static str>,
     pub queued_messages: usize,
 }
@@ -104,24 +96,11 @@ fn waiting_line(attention: &Attention) -> WaitingLine {
     };
     match attention {
         Attention::Hold { role, hold } => line("held", Some(role), None, held(hold).to_owned()),
-        Attention::OutsideChanges { role, .. } => line("outside_changes", Some(role), None, "任务之外的改动".into()),
         Attention::UnknownTurn { role, turn_id } => line("unknown_turn", Some(role), None, turn_id.clone()),
         Attention::TaskBlocked { task_id, reason, .. } => line("question", None, Some(task_id), reason.clone()),
         Attention::Stalled { role, task_id, .. } => line("stalled", Some(role), Some(task_id), "没有人推动".into()),
-        Attention::Accept { task_id, title, .. } => line("accept", None, Some(task_id), title.clone()),
+        Attention::Accept { task_id, title } => line("accept", None, Some(task_id), title.clone()),
         Attention::Quota { domain } => line("quota", None, None, domain.harness.clone()),
-        Attention::JobFailed { key, reason } => line("job_failed", None, None, format!("{key}：{reason}")),
-        Attention::DisplayChanged { display } => line(
-            "display_changed",
-            None,
-            None,
-            match &display.state {
-                crate::display::DisplayState::Changed { commit } => format!("展示分支的提交 {commit} 等待显式采用"),
-                crate::display::DisplayState::Blocked { reason, .. } => reason.clone(),
-                _ => "正在检查展示分支".into(),
-            },
-        ),
-        Attention::PreviewStopped { reason } => line("preview_stopped", None, None, reason.clone()),
         Attention::Question { question, .. } => line("question_to_user", None, None, question.clone()),
     }
 }
@@ -129,7 +108,6 @@ fn waiting_line(attention: &Attention) -> WaitingLine {
 fn held(hold: &Hold) -> &'static str {
     match hold {
         Hold::Abnormal { .. } => "abnormal_turn",
-        Hold::CaptureStopped { .. } => "capture_stopped",
         Hold::SessionUnidentified { .. } => "session_unidentified",
     }
 }
@@ -158,7 +136,6 @@ pub fn project_read(overview: &Overview, attention: &[Attention]) -> ProjectRead
     recent.truncate(CLOSED_LISTED);
     ProjectRead {
         as_of: overview.seq,
-        integration: overview.project.as_ref().map(|p| p.integration.clone()),
         roles,
         tasks: open.into_iter().chain(recent).map(TaskLine::of).collect(),
         closed_not_listed,
@@ -193,40 +170,6 @@ pub struct AttemptRead {
     pub end_reason: Option<AttemptEnd>,
     /// What the executor's done said.
     pub done_summary: Option<String>,
-    pub trial: Option<Trial>,
-    pub candidate: Option<CandidateRead>,
-}
-
-#[derive(Serialize)]
-pub struct CandidateRead {
-    pub capture_id: String,
-    pub commit_id: Option<String>,
-    /// A newer attempt's candidate replaced it.
-    pub superseded: bool,
-    /// The files it changed although the task allows reading only (roles-and-tasks.md §4).
-    pub unallowed_changes: Vec<String>,
-    pub verifications: Vec<VerificationRead>,
-}
-
-#[derive(Serialize)]
-pub struct VerificationRead {
-    pub id: String,
-    pub state: VerificationState,
-    /// The integration version the candidate was rebased onto.
-    pub base: String,
-    /// The integration version or the checks changed since it ran, so its result no longer
-    /// counts (data-model.md §4.5).
-    pub stale: bool,
-    pub conflicts: Vec<String>,
-    pub checks: Vec<CheckLine>,
-    pub finished_at: Option<i64>,
-}
-
-#[derive(Serialize)]
-pub struct CheckLine {
-    pub command: String,
-    pub exit_code: Option<i64>,
-    pub timed_out: bool,
 }
 
 #[derive(Serialize)]
@@ -245,47 +188,16 @@ pub struct ReportRead {
 pub fn task_read(conn: &Connection, task_id: &str) -> Result<TaskRead> {
     let task = load_task(conn, task_id)?;
     let criteria = crate::task::criteria_text(conn, task_id, task.criteria_version)?;
-    let attempts = list_attempts(conn, task_id)?;
-    let verifications = task_verifications(conn, task_id)?;
-    let has_project = load_project(conn)?.is_some();
-    let latest = attempts.iter().rev().find_map(|a| a.candidate_id.clone());
-    let mut reads = Vec::new();
-    for attempt in &attempts {
-        let candidate = match &attempt.candidate_id {
-            Some(capture_id) => {
-                let capture = load_capture(conn, capture_id)?;
-                let mut checks_of = Vec::new();
-                for v in verifications.iter().filter(|v| &v.capture_id == capture_id) {
-                    checks_of.push(VerificationRead {
-                        id: v.id.clone(),
-                        state: v.state,
-                        base: v.base.clone(),
-                        stale: has_project && evidence_is_stale(conn, v)?,
-                        conflicts: v.conflicts.clone(),
-                        checks: checks(conn, &v.id)?,
-                        finished_at: v.finished_at,
-                    });
-                }
-                Some(CandidateRead {
-                    unallowed_changes: unallowed_changes(&task, &capture),
-                    capture_id: capture.id,
-                    commit_id: capture.commit_id,
-                    superseded: latest.as_ref() != Some(capture_id),
-                    verifications: checks_of,
-                })
-            }
-            None => None,
-        };
-        reads.push(AttemptRead {
-            seq: attempt.seq,
-            started_at: attempt.started_at,
-            ended_at: attempt.ended_at,
-            end_reason: attempt.end_reason,
-            done_summary: attempt.done_summary.clone(),
-            trial: attempt.trial.clone(),
-            candidate,
-        });
-    }
+    let reads = list_attempts(conn, task_id)?
+        .into_iter()
+        .map(|a| AttemptRead {
+            seq: a.seq,
+            started_at: a.started_at,
+            ended_at: a.ended_at,
+            end_reason: a.end_reason,
+            done_summary: a.done_summary,
+        })
+        .collect();
     Ok(TaskRead {
         as_of: last_event(conn)?,
         line: TaskLine::of(&task),
@@ -296,15 +208,6 @@ pub fn task_read(conn: &Connection, task_id: &str) -> Result<TaskRead> {
         reports: reports(conn, task_id)?,
         undelivered_messages: undelivered_user_messages(conn, task_id)?.len(),
     })
-}
-
-fn checks(conn: &Connection, verification_id: &str) -> Result<Vec<CheckLine>> {
-    let mut stmt =
-        conn.prepare("SELECT command, exit_code, timed_out FROM check_run WHERE verification_id = ?1 ORDER BY seq")?;
-    let rows = stmt.query_map([verification_id], |r| {
-        Ok(CheckLine { command: r.get(0)?, exit_code: r.get(1)?, timed_out: r.get(2)? })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 fn reports(conn: &Connection, task_id: &str) -> Result<Vec<ReportRead>> {
@@ -330,24 +233,16 @@ fn reports(conn: &Connection, task_id: &str) -> Result<Vec<ReportRead>> {
 
 // ---- what wakes the manager (manager-actions.md §6 "Manager 什么时候运行") ----
 
-/// Whether nothing in the project moves on without the user: no turn registered or running, no
-/// capture, verification, slot or preview being written, and nothing the scheduler would start, a
-/// queued task or a message to deliver, for a role that does not wait for the user and whose
-/// harness is not quota-blocked (`blocked`). A role or task that waits for the user is in "等你决定"
-/// instead (manager-actions.md §6 "组织离了用户就无法推进").
+/// Whether nothing in the project moves on without the user: no turn registered or running, and
+/// nothing the scheduler would start, a queued task or a message to deliver, for a role that does
+/// not wait for the user and whose harness is not quota-blocked (`blocked`). A role or task that
+/// waits for the user is in "等你决定" instead (manager-actions.md §6 "组织离了用户就无法推进").
 pub fn settled(conn: &Connection, blocked: &[String]) -> Result<bool> {
-    let any = |sql: &str| -> Result<bool> { Ok(conn.query_row(&format!("SELECT EXISTS ({sql})"), [], |r| r.get(0))?) };
-    if any("SELECT 1 FROM turn WHERE state IN ('registered', 'running')")?
-        || any("SELECT 1 FROM capture WHERE state = 'intent'")?
-        // A paused task waits in verification for the user, unless a verification started before
-        // the pause still runs (#62).
-        || any(
-            "SELECT 1 FROM task t WHERE t.phase = 'verifying'
-               AND (t.paused = 0 OR EXISTS (SELECT 1 FROM verification v WHERE v.task_id = t.id AND v.state = 'running'))",
-        )?
-        || any("SELECT 1 FROM workspace WHERE state = 'materializing'")?
-        || any("SELECT 1 FROM outbox WHERE state = 'pending'")?
-    {
+    let running: bool =
+        conn.query_row("SELECT EXISTS (SELECT 1 FROM turn WHERE state IN ('registered', 'running'))", [], |r| {
+            r.get(0)
+        })?;
+    if running {
         return Ok(false);
     }
     for role in crate::role::list_roles(conn)? {
@@ -464,12 +359,8 @@ fn change_line(
         "task.blocked_changed" if !text("blocked_reason").is_empty() => {
             format!("任务 {} 的执行者提问：{}", task(&e.entity), text("blocked_reason"))
         }
-        "verification.finished" => {
-            let state = if text("state") == "passed" { "通过" } else { "未通过" };
-            format!("任务 {} 的验证{state}（{}）", task(&text("task_id")), e.entity)
-        }
         "task.accepting" => format!("任务 {} 等待验收", task(&e.entity)),
-        "task.done" => format!("{who}验收了任务 {}，成果已发布", task(&e.entity)),
+        "task.done" => format!("{who}验收了任务 {}", task(&e.entity)),
         "task.abandoned" => format!("{who}放弃了任务 {}：{}", task(&e.entity), text("reason")),
         "task.reopened" => format!("{who}重开了任务 {}", task(&e.entity)),
         "task.paused_changed" => {
@@ -492,7 +383,6 @@ fn change_line(
             let first: String = first.chars().take(80).collect();
             format!("用户直接给 {} 发了消息：{first}", text("role"))
         }
-        "project.config_changed" => format!("{who}修改了项目的检查设置"),
         _ => return Ok(None),
     }))
 }
@@ -577,49 +467,6 @@ pub fn events_read(conn: &Connection, after: i64, limit: usize) -> Result<Events
     Ok(EventsRead { as_of: last_event(conn)?, events })
 }
 
-/// What a diff the manager reads compares, as the task panel does (data-model.md §10.6): a
-/// candidate against the integration version it was captured on, or a verification's rebased
-/// candidate against the integration version it ran on, which accepting would publish.
-#[derive(Debug, Serialize)]
-pub struct DiffRange {
-    /// The last event of the project the read includes.
-    pub as_of: i64,
-    pub task_id: String,
-    pub from: String,
-    pub to: String,
-    /// A newer candidate, or a newer verification, replaced it.
-    pub superseded: bool,
-    /// Of a verification: the integration version or the checks changed since it ran, so its
-    /// result no longer counts (data-model.md §4.5).
-    pub stale: Option<bool>,
-}
-
-/// The diff range of a candidate (`cap_…`) or of a finished verification (`ver_…`).
-pub fn diff_range(conn: &Connection, id: &str) -> Result<DiffRange> {
-    let as_of = last_event(conn)?;
-    if id.starts_with("ver_") {
-        let v = crate::verify::load_verification(conn, id)?;
-        let Some(to) = v.commit_id.clone() else {
-            return Err(Error::rejected("verification_running", format!("verification {id} has not finished")));
-        };
-        let latest = crate::verify::latest_verification(conn, &v.task_id)?;
-        return Ok(DiffRange {
-            as_of,
-            superseded: latest.is_some_and(|l| l.id != v.id),
-            stale: Some(evidence_is_stale(conn, &v)?),
-            task_id: v.task_id,
-            from: v.base,
-            to,
-        });
-    }
-    let capture = load_capture(conn, id)?;
-    let (Some(task_id), Some(to), CaptureKind::Candidate) = (capture.task_id, capture.commit_id, capture.kind) else {
-        return Err(Error::rejected("not_a_candidate", format!("capture {id} is no task's candidate")));
-    };
-    let latest = list_attempts(conn, &task_id)?.into_iter().rev().find_map(|a| a.candidate_id);
-    Ok(DiffRange { as_of, superseded: latest.as_deref() != Some(id), stale: None, task_id, from: capture.base, to })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,27 +488,16 @@ mod tests {
                 revision: 1,
                 created_at: 0,
                 closed_at,
-                origin_capture: None,
                 assignment: None,
             },
             attempt_seq: None,
             attempt_open: false,
-            verification: None,
             undelivered_messages: 0,
             reply_queued: false,
         };
         let mut tasks = vec![task("open", Phase::Executing, None)];
         tasks.extend((0..12).map(|i| task(&format!("done{i}"), Phase::Done, Some(i))));
-        let overview = Overview {
-            seq: 7,
-            project: None,
-            config: None,
-            roles: Vec::new(),
-            tasks,
-            display: None,
-            preview_stopped: None,
-            questions: vec![],
-        };
+        let overview = Overview { seq: 7, project: None, roles: Vec::new(), tasks, questions: vec![] };
         let read = project_read(&overview, &[]);
         let ids: Vec<_> = read.tasks.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids.len(), 1 + CLOSED_LISTED);

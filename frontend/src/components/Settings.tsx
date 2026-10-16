@@ -1,12 +1,11 @@
 // The settings (frontend.md §7.8): a page of their own, in place of the window's body while open.
 // They choose their page in their own navigation, whatever project the window shows: the host's
-// permissions, Angela, and two pages per project. Following GitHub Primer's settings patterns, a
-// page either applies each choice at once (the segmented controls) or saves a form explicitly
-// (the project configuration), never both; archiving sits apart at the bottom.
+// permissions, Angela, and a page per project. Following GitHub Primer's settings patterns, a page
+// applies each choice at once (the segmented controls); archiving sits apart at the bottom.
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { ArrowLeft, X } from 'lucide-react';
-import type { Check, HarnessView, Permission, ProjectConfig, RoleView } from '../api/types';
+import { ArrowLeft } from 'lucide-react';
+import type { HarnessView, Permission, RoleView } from '../api/types';
 import { bytes, harnessName, PERMISSION_LABEL } from '../format';
 import {
   act,
@@ -16,7 +15,6 @@ import {
   runIn,
   setPermission,
   showSettingsPage,
-  toast,
   useStore,
   type SettingsPage,
 } from '../store';
@@ -56,16 +54,14 @@ export function Settings() {
         {open.map((p) => (
           <div key={p.id} className="settings-nav-group">
             <h3 title={p.repo_path}>{p.name}</h3>
-            {item({ kind: 'project', project: p.id, tab: 'general' }, '常规')}
-            {item({ kind: 'project', project: p.id, tab: 'checks' }, '验证与采集')}
+            {item({ kind: 'project', project: p.id }, '常规')}
           </div>
         ))}
       </nav>
       <div className="settings-content">
         {page.kind === 'permissions' && <Permissions harnesses={host.harnesses} />}
         {page.kind === 'angela' && <AngelaPage />}
-        {page.kind === 'project' && page.tab === 'general' && <ProjectGeneral project={page.project} />}
-        {page.kind === 'project' && page.tab === 'checks' && <ProjectChecks project={page.project} />}
+        {page.kind === 'project' && <ProjectGeneral project={page.project} />}
       </div>
     </section>
   );
@@ -359,182 +355,5 @@ function Archive({ project, name }: { project: string; name: string }) {
         )}
       </Row>
     </div>
-  );
-}
-
-const lines = (text: string) =>
-  text
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-/** The form's fields, as the configuration fills them. */
-interface Form {
-  checks: Check[];
-  excluded: string;
-  forced: string;
-  maxFiles: number;
-  maxMb: number;
-}
-
-const formOf = (config: ProjectConfig): Form => ({
-  checks: config.checks,
-  excluded: config.excluded.join('\n'),
-  forced: config.force_tracked.join('\n'),
-  maxFiles: config.max_new_files,
-  maxMb: Math.round(config.max_new_bytes / 1024 / 1024),
-});
-
-const configOf = (form: Form): ProjectConfig => ({
-  checks: form.checks.filter((c) => c.command.trim()),
-  excluded: lines(form.excluded),
-  force_tracked: lines(form.forced),
-  max_new_files: form.maxFiles,
-  max_new_bytes: form.maxMb * 1024 * 1024,
-});
-
-/**
- * The project configuration (data-model.md §9.1 project_config): each save is a new version, and
- * checks and captures name the version they used. The form saves the version it was filled from;
- * one saved meanwhile in another window makes the backend refuse, not overwrite (#16).
- */
-function ProjectChecks({ project }: { project: string }) {
-  const current = useStore((s) => s.settings?.snapshot?.config ?? null);
-  if (!current) return <Header title="验证与采集" />;
-  return <ConfigForm key={project} project={project} version={current.version} config={current.config} />;
-}
-
-function ConfigForm({ project, version, config }: { project: string; version: number; config: ProjectConfig }) {
-  const [base, setBase] = useState({ version, config });
-  const [form, setForm] = useState(() => formOf(config));
-  const [saving, setSaving] = useState(false);
-  const dirty = JSON.stringify(configOf(form)) !== JSON.stringify(configOf(formOf(base.config)));
-  // A newer version saved elsewhere replaces an untouched form; an edited one keeps its edits. The
-  // snapshot may still name an older version for a moment after this form saved.
-  const newer = version > base.version;
-  useEffect(() => {
-    if (newer && !dirty) {
-      setBase({ version, config });
-      setForm(formOf(config));
-    }
-  }, [newer, version, config, dirty]);
-  const set = (patch: Partial<Form>) => setForm({ ...form, ...patch });
-  const setCheck = (i: number, patch: Partial<Check>) =>
-    set({ checks: form.checks.map((c, j) => (i === j ? { ...c, ...patch } : c)) });
-  const reset = () => {
-    setBase({ version, config });
-    setForm(formOf(config));
-  };
-  const save = async () => {
-    setSaving(true);
-    const saved = await runIn(project, 'edit_project_config', {
-      expected_version: base.version,
-      config: configOf(form),
-    });
-    setSaving(false);
-    if (saved === undefined) return;
-    toast(`已保存为第 ${saved.version} 版`);
-    const next = configOf(form);
-    setBase({ version: saved.version, config: next });
-    setForm(formOf(next));
-  };
-
-  return (
-    <form
-      className="settings-form"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save();
-      }}
-    >
-      <Header title="验证与采集">候选成果在验证现场按顺序运行检查命令，全部退出码为 0 才算通过。</Header>
-      <h3 className="settings-section">检查命令</h3>
-      {form.checks.length === 0 && <p className="muted">没有检查命令：候选成果直接进入验收。</p>}
-      {form.checks.map((check, i) => (
-        <div key={i} className="check-row">
-          <input
-            value={check.command}
-            onChange={(e) => setCheck(i, { command: e.target.value })}
-            placeholder="例如 cargo test"
-            aria-label="检查命令"
-          />
-          <input
-            type="number"
-            min={1}
-            value={check.timeout_secs}
-            onChange={(e) => setCheck(i, { timeout_secs: Number(e.target.value) })}
-            aria-label="超时（秒）"
-          />
-          <span className="muted">秒</span>
-          <button
-            type="button"
-            className="icon"
-            onClick={() => set({ checks: form.checks.filter((_, j) => j !== i) })}
-            aria-label="删除"
-          >
-            <X {...ICON} />
-          </button>
-        </div>
-      ))}
-      <button
-        type="button"
-        className="small"
-        onClick={() => set({ checks: [...form.checks, { command: '', timeout_secs: 600 }] })}
-      >
-        + 添加检查命令
-      </button>
-
-      <h3 className="settings-section">采集范围</h3>
-      <label>
-        始终排除（gitignore 写法，每行一条）
-        <textarea
-          value={form.excluded}
-          onChange={(e) => set({ excluded: e.target.value })}
-          rows={3}
-          placeholder={'target/\nnode_modules/'}
-        />
-      </label>
-      <label>
-        强制采集（路径前缀，每行一条）
-        <textarea value={form.forced} onChange={(e) => set({ forced: e.target.value })} rows={2} />
-      </label>
-
-      <h3 className="settings-section">体积护栏</h3>
-      <Row label="一次采集新增的上限" description="超过任一上限时采集停下，等你决定。">
-        <input
-          type="number"
-          min={0}
-          value={form.maxFiles}
-          onChange={(e) => set({ maxFiles: Number(e.target.value) })}
-          aria-label="新增文件数上限"
-        />
-        <span className="muted">个文件</span>
-        <input
-          type="number"
-          min={0}
-          value={form.maxMb}
-          onChange={(e) => set({ maxMb: Number(e.target.value) })}
-          aria-label="新增大小上限"
-        />
-        <span className="muted">MB</span>
-      </Row>
-
-      <footer className="settings-save">
-        {newer ? (
-          <span className="error">另一个窗口已保存第 {version} 版。放弃修改后在新版本上改。</span>
-        ) : (
-          <span className="muted">{dirty ? '有未保存的修改' : `第 ${base.version} 版`}</span>
-        )}
-        <span className="spacer" />
-        {(dirty || newer) && (
-          <button type="button" onClick={reset}>
-            放弃修改
-          </button>
-        )}
-        <button type="submit" className="primary" disabled={saving}>
-          {saving ? '正在保存…' : '保存'}
-        </button>
-      </footer>
-    </form>
   );
 }

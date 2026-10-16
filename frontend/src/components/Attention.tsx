@@ -2,30 +2,14 @@
 // commands that resolve it. The backend decides what is listed (frontend.md §7).
 
 import { useState } from 'react';
-import type { Attention, Capture, Hold } from '../api/types';
-import {
-  jsonObject,
-  jsonArray,
-  jsonNumber,
-  captureChanges,
-  abnormalEnd,
-  bytes,
-  harnessName,
-  PERMISSION_LABEL,
-  quotaNote,
-  stoppedPaths,
-} from '../format';
+import type { Attention, Hold } from '../api/types';
+import { abnormalEnd, harnessName, PERMISSION_LABEL, quotaNote } from '../format';
 import { act, run, selectTask, setPermission, useCommand, useStore } from '../store';
-import { Modal } from './common';
-import { DiffPool, DiffView } from './DiffView';
-import { NewTask } from './NewTask';
 
 export function AttentionCard({ attention: a }: { attention: Attention }) {
   switch (a.kind) {
     case 'hold':
       return <HoldCard role={a.role} hold={a.hold} />;
-    case 'outside_changes':
-      return <OutsideChangesCard role={a.role} capture={a.capture} />;
     case 'unknown_turn':
       return (
         <div className="card warn">
@@ -42,7 +26,7 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
     case 'accept':
       return (
         <div className="card">
-          <p>「{a.title}」通过了验证，等你验收。</p>
+          <p>「{a.title}」交出了候选成果，等你验收。</p>
           <UndeliveredNote taskId={a.task_id} />
           <div className="actions">
             <button className="primary" onClick={() => selectTask(a.task_id)}>
@@ -61,16 +45,6 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
           </div>
         </div>
       );
-    case 'job_failed':
-      return (
-        <div className="card warn">
-          <p>运行时的工作出错：{a.key}</p>
-          <p className="muted">{a.reason}</p>
-          <div className="actions">
-            <button onClick={() => act('retry_failed', {})}>重试</button>
-          </div>
-        </div>
-      );
     case 'question':
       // Answered by the user's next message to her, here or in the conversation.
       return (
@@ -80,107 +54,7 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
           <Reply role="Angela" taskId={null} placeholder="回复 Angela" />
         </div>
       );
-    case 'display_changed':
-      return (
-        <DisplayCard
-          key={`${a.display.expected_rev}:${a.display.state.kind === 'changed' ? a.display.state.commit : a.display.state.kind}:${a.display.unpreviewed.map((p) => p.commit).join(',')}`}
-          display={a.display}
-        />
-      );
-    case 'preview_stopped':
-      return (
-        <div className="card warn">
-          <p>预览已停止：{a.reason}</p>
-          <p className="muted">可恢复到上次预览状态后重试，也可在内部保存点采用已提交的展示分支。</p>
-          <div className="actions">
-            <button onClick={() => run('retry_preview', {})}>重试预览</button>
-          </div>
-        </div>
-      );
   }
-}
-
-function DisplayCard({ display }: { display: Extract<Attention, { kind: 'display_changed' }>['display'] }) {
-  const { submit, busy } = useCommand('adopt_display');
-  const [confirming, setConfirming] = useState(false);
-  const state = display.state;
-  return (
-    <div className="card warn">
-      {display.busy ? (
-        <p>正在检查并采用展示分支，暂不启动新任务。</p>
-      ) : state.kind === 'changed' ? (
-        <>
-          <p>
-            展示分支有外部提交：<code>{state.commit}</code>
-          </p>
-          <p>这个提交的完整代码状态将成为后续任务的基线。旧任务与成果记录仍保留。</p>
-        </>
-      ) : state.kind === 'blocked' ? (
-        <p>{state.reason}</p>
-      ) : (
-        <p>展示分支已回到上次预览状态。</p>
-      )}
-      {display.error && <p className="muted failure">上次采用未成功：{display.error}</p>}
-      {!display.busy && display.unavailable && <p className="muted">{display.unavailable}</p>}
-      {display.start_blocked && <p className="muted">可以创建或重开排队任务；处理展示分支变化后开始执行。</p>}
-      {display.unpreviewed.length > 0 && (
-        <>
-          <p>
-            以下已验收成果尚未写入展示目录。采用后它们将退出当前集成版本，后续任务使用外部提交的完整状态。历史成果仍保留。
-          </p>
-          <ul>
-            {display.unpreviewed.map((p) => (
-              <li key={p.commit}>
-                「{p.title}」：<code>{p.commit}</code>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {state.kind === 'changed' && (
-        <div className="actions">
-          <button
-            className="primary"
-            disabled={busy || display.busy || !!display.unavailable}
-            onClick={() => {
-              if (display.unpreviewed.length && !confirming) {
-                setConfirming(true);
-                return;
-              }
-              submit({
-                target: state.commit,
-                expected_rev: display.expected_rev,
-                acknowledged: display.unpreviewed.map((p) => p.commit),
-              });
-            }}
-          >
-            {confirming ? '确认采用，保留历史' : '采用'}
-          </button>
-          {confirming && (
-            <button disabled={busy || display.busy} onClick={() => setConfirming(false)}>
-              取消
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Paths a card lists: the first dozen, then how many there are. */
-function PathList({ lines, unit }: { lines: string[]; unit: string }) {
-  return (
-    <ul className="paths">
-      {lines.slice(0, 12).map((line) => (
-        <li key={line}>{line}</li>
-      ))}
-      {lines.length > 12 && (
-        <li className="muted">
-          ……共 {lines.length} {unit}
-        </li>
-      )}
-    </ul>
-  );
 }
 
 function HoldCard({ role, hold }: { role: string; hold: Hold }) {
@@ -236,44 +110,14 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
       </div>
     );
   }
-  if (hold.kind === 'session_unidentified') {
-    return (
-      <div className="card warn">
-        <p>
-          {role} 的会话没有记下 {name} 的会话 ID，无法接着上次继续。
-        </p>
-        <div className="actions">
-          <button className="primary" onClick={newSession}>
-            新会话
-          </button>
-        </div>
-      </div>
-    );
-  }
-  const c = hold.capture;
-  const decide = (command: 'approve_new_files' | 'discard_uncaptured') => run(command, { capture_id: c.id });
-  const pending = c.kind === 'candidate' && '它报告的 done 还没有生效。';
   return (
     <div className="card warn">
-      {c.state === 'oversized' ? (
-        <p>
-          {role} 的这次采集新增了 {jsonArray(jsonObject(c.detail).files).length} 个文件，共{' '}
-          {bytes(jsonNumber(jsonObject(c.detail).total_bytes))}，超过了项目设定的上限。
-          {pending}
-        </p>
-      ) : (
-        <p>
-          {role} 的工作目录里有采集无法保存的内容。{pending}
-        </p>
-      )}
-      <PathList lines={stoppedPaths(c)} unit="项" />
+      <p>
+        {role} 的会话没有记下 {name} 的会话 ID，无法接着上次继续。
+      </p>
       <div className="actions">
-        {c.state === 'oversized' && <button onClick={() => decide('approve_new_files')}>放行</button>}
-        <button onClick={() => decide('discard_uncaptured')}>
-          {c.state === 'oversized' ? '不要这些文件' : '跳过这些内容'}
-        </button>
-        <button className="primary" onClick={proceed} title="把清单交给执行者处理">
-          继续
+        <button className="primary" onClick={newSession}>
+          新会话
         </button>
       </div>
     </div>
@@ -284,42 +128,6 @@ function UndeliveredNote({ taskId }: { taskId: string }) {
   const count = useStore((s) => s.snapshot?.tasks.find((t) => t.id === taskId)?.undelivered_messages ?? 0);
   if (count === 0) return null;
   return <p className="muted">还有 {count} 条你发的消息没交给执行者，验收前要先决定怎么处理。</p>;
-}
-
-/** A turn outside any task changed files; nothing writes over them until the user decides (#14). */
-function OutsideChangesCard({ role, capture }: { role: string; capture: Capture }) {
-  const changed = captureChanges(capture);
-  const [viewing, setViewing] = useState(false);
-  const [adopting, setAdopting] = useState(false);
-  return (
-    <div className="card warn">
-      <p>
-        {role} 在任务之外改了 {changed.length}{' '}
-        个文件。这些改动不属于任何任务，不会被验收或发布；你决定之前，不会开始下一个任务。
-      </p>
-      <PathList lines={changed} unit="个文件" />
-      <div className="actions">
-        <button onClick={() => setViewing(true)}>查看改动</button>
-        <button
-          onClick={() => run('discard_outside_changes', { capture_id: capture.id })}
-          title="工作目录回到集成版本；采集记录仍保留这些改动"
-        >
-          丢弃这些改动
-        </button>
-        <button className="primary" onClick={() => setAdopting(true)}>
-          建成任务…
-        </button>
-      </div>
-      {viewing && capture.commit_id && (
-        <Modal title="任务之外的改动" onClose={() => setViewing(false)} wide>
-          <DiffPool>
-            <DiffView from={capture.base} to={capture.commit_id} />
-          </DiffPool>
-        </Modal>
-      )}
-      {adopting && <NewTask executor={role} fromCapture={capture.id} onClose={() => setAdopting(false)} />}
-    </div>
-  );
 }
 
 function BlockedCard({ taskId, title, reason }: { taskId: string; title: string; reason: string }) {

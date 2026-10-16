@@ -10,7 +10,7 @@ import { detail, role, task } from './mocked';
 const origin = process.env.LOBOTOMY_TEST_URL ?? devOrigin;
 
 const exported = task('task1', '导出报表', 'accepting');
-const accept: Attention = { kind: 'accept', task_id: 'task1', title: exported.title, verification_id: 'v-task1' };
+const accept: Attention = { kind: 'accept', task_id: 'task1', title: exported.title };
 const quota: Attention = {
   kind: 'quota',
   domain: { harness: 'claude', account: '', blocked_at: 1, resets_at: null, message: null },
@@ -33,20 +33,7 @@ const snapshotOf = (id: string): Snapshot => ({
   quota: [],
   harnesses: [],
   live: {},
-  config: {
-    version: 1,
-    config: { checks: [], excluded: [], force_tracked: [], max_new_files: 1000, max_new_bytes: 50 << 20 },
-  },
-  project: {
-    id,
-    repo_path: `C:\\code\\${id}`,
-    branch: 'main',
-    author_name: 'Test',
-    author_email: 'test@example.com',
-    integration: 'base0000',
-    integration_rev: 1,
-    previewed: 'base0000',
-  },
+  project: { id, repo_path: `C:\\code\\${id}` },
   roles: [role(id === 'alpha' ? 'task1' : null)],
   tasks: id === 'alpha' ? [exported] : [],
   attention: id === 'alpha' ? [accept] : [],
@@ -78,7 +65,6 @@ test('internal vocabulary stays secondary while abnormal endings remain visible'
     registered_at: 1,
     started_at: 1,
     ended_at: 2,
-    workspace_id: null,
   });
   const item = (id: string, seq: number, turn_id: string, kind: 'agent_message' | 'mcp_call', content: unknown) => ({
     id,
@@ -93,7 +79,7 @@ test('internal vocabulary stays secondary while abnormal endings remain visible'
     thread: {
       items: [
         item('item_3', 1, 'normal', 'agent_message', {
-          text: '候选成果及验证：\n[[att:candidate]]\n[[att:verification]]\n[[att:accepted]]',
+          text: '任务及汇报：\n[[att:task]]\n[[att:late]]',
         }),
         item('tool', 2, 'normal', 'mcp_call', {
           server: 'lobotomy',
@@ -112,65 +98,37 @@ test('internal vocabulary stays secondary while abnormal endings remain visible'
     refs: {
       quotes: {},
       attachments: {
-        candidate: {
+        task: {
           project: 'alpha',
           project_name: 'alpha',
-          kind: 'candidate',
+          kind: 'task',
           task_id: 'task1',
           title: '导出报表',
-          seq: 1,
-          commit: 'abcdef0123456789',
-          at: 1,
-          superseded: true,
-          accepted: false,
-          unallowed_changes: 0,
+          executor: 'Malkuth',
+          phase: 'accepting',
+          paused: false,
         },
-        verification: {
+        late: {
           project: 'alpha',
           project_name: 'alpha',
-          kind: 'verification',
+          kind: 'report',
           task_id: 'task1',
           title: '导出报表',
-          seq: 1,
-          state: 'passed',
-          base: 'base0000aaaa',
-          config_version: 2,
+          role: 'Malkuth',
+          report_title: '完成',
+          status: 'done',
           at: 1,
-          superseded: false,
-          stale: true,
-          accepted: false,
-          unallowed_changes: 0,
-        },
-        // Accepting moved the integration version past it: accepted, not expired.
-        accepted: {
-          project: 'alpha',
-          project_name: 'alpha',
-          kind: 'verification',
-          task_id: 'task2',
-          title: '加行号',
-          seq: 1,
-          state: 'passed',
-          base: 'base1111bbbb',
-          config_version: 2,
-          at: 1,
-          superseded: false,
-          stale: true,
-          accepted: true,
-          unallowed_changes: 0,
+          chars: 4,
+          effect: 'late',
         },
       },
     },
   });
-  await expect(page.locator('.ref-attachment')).toHaveCount(3);
+  await expect(page.locator('.ref-attachment')).toHaveCount(2);
   await expect(page.locator('.turn-divider.interrupted')).toContainText('被中断');
-  await expect(page.locator('.badge.expired')).toHaveCount(2);
-  await expect(page.locator('.badge.expired').first()).toContainText('取代');
-  await expect(page.locator('.badge.expired').last()).toContainText('已过期');
-  await expect(page.locator('.ref-attachment').nth(2).locator('.badge')).toHaveText('已验收');
+  await expect(page.locator('.badge.expired')).toHaveCount(1);
+  await expect(page.locator('.badge.expired')).toHaveText('没有生效');
   await expect(page.locator('.turn-divider.completed')).toHaveText(/^\d{1,2}-\d{1,2} \d{2}:\d{2}$/);
-  await expect(page.locator('.ref-attachment').first()).toHaveAttribute('title', /abcdef0123456789/);
-  await expect(page.locator('.ref-attachment').nth(1)).toHaveAttribute('title', /base0000aaaa.*检查设置第 2 版/);
-  await expect(page.locator('.ref-attachment').nth(1)).not.toContainText('检查设置第 2 版');
   await expect(page.locator('summary').filter({ hasText: 'assign' })).toHaveText('调用 assign');
   await expect(page.locator('summary').filter({ hasText: 'drive.read' })).toHaveText('调用 drive.read');
   await page.locator('summary').filter({ hasText: 'assign' }).click();
@@ -184,11 +142,10 @@ const angelaSnapshot: Snapshot = {
   quota: [],
   harnesses: [],
   live: {},
-  config: null,
   project: null,
   tasks: [],
   attention: [],
-  roles: [{ ...role(null), name: 'Angela', kind: 'manager', harness: 'claude', slot: null }],
+  roles: [{ ...role(null), name: 'Angela', kind: 'manager', harness: 'claude' }],
 };
 
 /**
@@ -220,7 +177,6 @@ async function openHost(
       else if (method === 'thread')
         result = { items: [], has_more: false, turns: {}, messages: [], commands: {}, queued: [] };
       else if (method === 'task') result = detail(exported);
-      else if (method === 'trials' || method === 'diff') result = [];
       else if (method === 'disk_usage') result = { raw_output: { files: 0, bytes: 0 } };
       else if (method === 'command') result = (await onCommand?.(params.name, params.args)) ?? null;
       route.send(JSON.stringify({ id, result }));
@@ -247,7 +203,7 @@ test('「全部」 lists every project’s items and goes to one', async ({ page
   await expect(list.getByRole('button', { name: /beta/ }).getByLabel('有 turn 在运行')).toBeVisible();
   const overview = page.getByRole('region', { name: '全部项目' });
   await expect(overview.getByRole('region', { name: '本机' })).toContainText('额度不足（Claude）');
-  await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」通过了验证，等你验收');
+  await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」交出了候选成果，等你验收');
   await expect(overview.getByRole('region', { name: 'beta' })).toHaveCount(0);
   await expect(page).toHaveTitle('(2) Lobotomy');
   // No project's snapshot: 「全部」 holds Angela's.
@@ -256,11 +212,11 @@ test('「全部」 lists every project’s items and goes to one', async ({ page
   await overview.getByRole('region', { name: 'alpha' }).getByRole('button', { name: '前往' }).click();
   await expect(list.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-current', 'true');
   await expect(page.getByRole('region', { name: '导出报表', exact: true })).toBeVisible();
-  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  await expect(page.locator('.topbar')).toContainText('alpha');
 
   // Another project: its own snapshot, nothing of the first left over.
   await list.getByRole('button', { name: /beta/ }).click();
-  await expect(page.locator('.topbar')).toContainText('beta · main');
+  await expect(page.locator('.topbar')).toContainText('beta');
   await expect(page.getByRole('region', { name: '导出报表', exact: true })).toHaveCount(0);
   expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual([
     'angela',
@@ -291,7 +247,7 @@ test('「全部」 is the conversation with Angela beside every project’s item
     .toEqual([['send_message', 'Angela', null, '现在怎么样']]);
   expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['angela']);
   const overview = page.getByRole('region', { name: '全部项目' });
-  await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」通过了验证，等你验收');
+  await expect(overview.getByRole('region', { name: 'alpha' })).toContainText('「导出报表」交出了候选成果，等你验收');
 });
 
 // Angela's reply shows what the runtime renders for her references (manager-actions.md §2.1): the
@@ -304,7 +260,7 @@ test('Angela’s references show the user’s words and attachments that open th
     harnesses: [],
     angela,
   };
-  const text = '你之前说的是：\n[[quote:msg_1]]\n现在的结果：\n[[att:ver_1]]\n[[att:task_gone]]';
+  const text = '你之前说的是：\n[[quote:msg_1]]\n现在的结果：\n[[att:task1]]\n[[att:task_gone]]';
   const reply = {
     id: 'i1',
     seq: 1,
@@ -317,20 +273,15 @@ test('Angela’s references show the user’s words and attachments that open th
   const refs = {
     quotes: { msg_1: { at: 1, body: '导出要带表头' } },
     attachments: {
-      ver_1: {
+      task1: {
         project: 'alpha',
         project_name: 'alpha',
-        kind: 'verification',
+        kind: 'task',
         task_id: 'task1',
         title: '导出报表',
-        seq: 1,
-        state: 'passed',
-        base: 'base0000aaaa',
-        config_version: 2,
-        at: 1,
-        superseded: false,
-        stale: true,
-        unallowed_changes: 0,
+        executor: 'Malkuth',
+        phase: 'accepting',
+        paused: false,
       },
       task_gone: { error: '在打开的项目中找不到；读不到的项目：gamma' },
     },
@@ -340,10 +291,8 @@ test('Angela’s references show the user’s words and attachments that open th
 
   const conversation = page.getByRole('region', { name: 'Angela', exact: true });
   await expect(conversation.getByLabel('你的原话')).toContainText('导出要带表头');
-  const attachment = conversation.getByRole('button', { name: /第 1 轮的验证/ });
-  await expect(attachment).toContainText('alpha · 「导出报表」第 1 轮的验证 · 通过');
-  await expect(attachment).toHaveAttribute('title', '基于集成版本 base0000aaaa · 检查设置第 2 版');
-  await expect(attachment).toContainText('已过期');
+  const attachment = conversation.getByRole('button', { name: /任务「导出报表」/ });
+  await expect(attachment).toContainText('alpha · 任务「导出报表」 · Malkuth · 待验收');
   await expect(conversation).toContainText('附件无效：在打开的项目中找不到；读不到的项目：gamma');
   await expect(conversation.locator('.ref-error')).toHaveAttribute('title', 'task_gone');
   expect(backend.asked.filter((a) => a.method === 'refs').map((a) => a.project)).toEqual(['angela']);
@@ -540,7 +489,7 @@ test('a new project connects from the list and opens', async ({ page }) => {
     'aria-current',
     'true',
   );
-  await expect(page.locator('.topbar')).toContainText('gamma · main');
+  await expect(page.locator('.topbar')).toContainText('gamma');
 });
 
 // A project that could not be opened says why in the list and cannot be chosen; it can be opened
@@ -626,7 +575,7 @@ test('the settings are a page of their own, wherever the window is', async ({ pa
   await settings.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page.locator('.topbar')).toContainText('全部项目');
   await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
-  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  await expect(page.locator('.topbar')).toContainText('alpha');
   // From another project, the settings still show beta's page.
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(nav.locator('.settings-nav-group').filter({ hasText: 'beta' }).locator('[aria-current]')).toHaveText(
@@ -634,40 +583,6 @@ test('the settings are a page of their own, wherever the window is', async ({ pa
   );
   await expect(settings.locator('.settings-header h2')).toHaveText('beta');
   expect(errors).toEqual([]);
-});
-
-// A form saves explicitly the version it was filled from, to the project of its page.
-test('the project configuration is saved to the settings’ project', async ({ page }) => {
-  const sent: [string, Record<string, unknown>][] = [];
-  const backend = await openHost(
-    page,
-    { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela },
-    (name, args) => {
-      sent.push([name, args]);
-      return { version: 2 };
-    },
-  );
-  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
-  await page.getByRole('button', { name: '设置', exact: true }).click();
-  const settings = page.getByRole('region', { name: '设置' });
-  await settings
-    .locator('.settings-nav-group')
-    .filter({ hasText: 'beta' })
-    .getByRole('button', { name: '验证与采集' })
-    .click();
-  await settings.getByRole('button', { name: '+ 添加检查命令' }).click();
-  await settings.getByLabel('检查命令').fill('npm test');
-  await expect(settings.locator('.settings-save')).toContainText('有未保存的修改');
-  await settings.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(settings.locator('.settings-save')).toContainText('第 2 版');
-  expect(
-    sent.map(([name, args]) => [
-      name,
-      args.expected_version,
-      (args.config as { checks: { command: string }[] }).checks.map((c) => c.command),
-    ]),
-  ).toEqual([['edit_project_config', 1, ['npm test']]]);
-  expect(backend.asked.filter((a) => a.method === 'command').map((a) => a.project)).toEqual(['beta']);
 });
 
 // Archiving from the settings asks once more. A host push can announce the archive before the
@@ -699,7 +614,7 @@ test('archiving from the settings asks first and leaves them usable', async ({ p
     return null;
   });
   await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /alpha/ }).click();
-  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  await expect(page.locator('.topbar')).toContainText('alpha');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const settings = page.getByRole('region', { name: '设置' });
   await settings
@@ -721,7 +636,7 @@ test('archiving from the settings asks first and leaves them usable', async ({ p
   await settings.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page.getByRole('navigation', { name: '项目' })).toContainText('已归档 1');
   await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /beta/ }).click();
-  await expect(page.locator('.topbar')).toContainText('beta · main');
+  await expect(page.locator('.topbar')).toContainText('beta');
   expect(errors).toEqual([]);
 });
 
@@ -729,7 +644,7 @@ test('archiving from the settings asks first and leaves them usable', async ({ p
 // reload (frontend.md §2). The arrow keys move the edge too.
 test('the right column is dragged wider and keeps its width', async ({ page }) => {
   await openHost(page, { projects: [entry('alpha')], attention: [], harnesses: [], angela });
-  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  await expect(page.locator('.topbar')).toContainText('alpha');
   const sidebar = page.locator('.sidebar');
   const sash = page.getByRole('separator', { name: '右侧栏的宽度' });
   expect((await sidebar.boundingBox())!.width).toBeCloseTo(340, 0);
@@ -744,6 +659,6 @@ test('the right column is dragged wider and keeps its width', async ({ page }) =
   expect((await sidebar.boundingBox())!.width).toBeCloseTo(456, 0);
 
   await page.reload();
-  await expect(page.locator('.topbar')).toContainText('alpha · main');
+  await expect(page.locator('.topbar')).toContainText('alpha');
   expect((await page.locator('.sidebar').boundingBox())!.width).toBeCloseTo(456, 0);
 });

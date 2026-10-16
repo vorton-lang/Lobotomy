@@ -7,8 +7,6 @@ import type {
   Attempt,
   Attention,
   BlobRef,
-  Capture,
-  CheckRun,
   CommandRecord,
   Domain,
   Item,
@@ -26,14 +24,12 @@ import type {
   TaskDetail,
   TaskView,
   Turn,
-  Verification,
 } from './api/types';
 import type { ThreadState } from './store';
 
 export const PHASE_LABEL: Record<Phase, string> = {
   queued: '排队',
   executing: '执行中',
-  verifying: '验证中',
   accepting: '待验收',
   done: '已完成',
   abandoned: '已放弃',
@@ -48,7 +44,6 @@ export type Look = 'run' | 'wait' | 'fail' | 'done' | 'idle';
 export const PHASE_LOOK: Record<Phase, Look> = {
   queued: 'idle',
   executing: 'run',
-  verifying: 'run',
   accepting: 'wait',
   done: 'done',
   abandoned: 'idle',
@@ -59,8 +54,7 @@ export function roleLook(role: RoleView, task: TaskView | undefined): Look {
   const turn = role.unfinished;
   if (turn) return turn.state === 'unknown' ? 'wait' : 'run';
   if (role.hold) return role.hold.kind === 'abnormal' ? 'fail' : 'wait';
-  if (role.outside || role.stalled) return 'wait';
-  if (role.workspace?.state === 'materializing') return 'run';
+  if (role.stalled) return 'wait';
   if (task?.phase === 'executing' && task.blocked_reason) return task.reply_queued ? 'idle' : 'wait';
   return task ? PHASE_LOOK[task.phase] : 'idle';
 }
@@ -107,12 +101,6 @@ export function toolRunning(turn: LiveTurn | undefined): boolean {
   return Object.values(turn?.items ?? {}).some((item) => jsonObject(item.content).status === 'in_progress');
 }
 
-export const VERIFICATION_LABEL: Record<Verification['state'], string> = {
-  running: '进行中',
-  passed: '通过',
-  failed: '未通过',
-};
-
 export const PERMISSION_LABEL: Record<Permission, string> = { full: '完全放开', auto_review: '自动审批' };
 
 const HARNESS_LABEL: Record<string, string> = { codex: 'Codex', claude: 'Claude' };
@@ -142,10 +130,6 @@ export function bytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function shortSha(commit: string | null | undefined): string {
-  return commit ? commit.slice(0, 8) : '';
-}
-
 /** Read only the fields a display needs from dynamic JSON; these are not wire validators. */
 export function jsonObject(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -157,10 +141,6 @@ export function jsonArray(value: unknown): unknown[] {
 
 export function jsonNumber(value: unknown): number {
   return typeof value === 'number' ? value : 0;
-}
-
-export function captureChanges(capture: Capture | undefined): string[] {
-  return jsonArray(jsonObject(capture?.detail).changed).filter((value): value is string => typeof value === 'string');
 }
 
 export function isBlob(value: unknown): value is BlobRef {
@@ -315,53 +295,13 @@ export function attachmentLine(a: AttachmentView): string {
   switch (a.kind) {
     case 'task':
       return `${where}任务「${a.title}」 · ${a.executor} · ${PHASE_LABEL[a.phase]}${a.paused ? ' · 已暂停' : ''}`;
-    case 'candidate':
-      return `${where}「${a.title}」第 ${a.seq} 轮的候选成果 · ${clock(a.at)}`;
-    case 'verification':
-      return `${where}「${a.title}」第 ${a.seq} 轮的验证 · ${VERIFICATION_LABEL[a.state]} · ${clock(a.at)}`;
     case 'report':
       return `${where}${a.role} 的汇报 · ${a.report_title} · ${clock(a.at)} · ${a.chars} 字`;
   }
 }
 
-/** The full version an attachment is bound to, available on hover. */
-export function attachmentMetadata(a: AttachmentView): string | undefined {
-  if (a.kind === 'candidate') return `提交 ${a.commit}`;
-  if (a.kind === 'verification') return `基于集成版本 ${a.base} · 检查设置第 ${a.config_version} 版`;
-  return undefined;
-}
-
-/** What an attachment's candidate did beyond its task's actions, or `null` (roles-and-tasks.md §4). */
-export function attachmentWarning(a: AttachmentView): string | null {
-  if ((a.kind === 'candidate' || a.kind === 'verification') && a.unallowed_changes > 0) {
-    return `只读调查，却改了 ${a.unallowed_changes} 个文件`;
-  }
-  return null;
-}
-
-/**
- * The files the latest candidate changed although Angela assigned the task for reading only.
- * Marked, not refused: whether to accept it is the user's or Angela's decision (roles-and-tasks.md §4).
- */
-export function unallowedChanges(detail: TaskDetail): string[] {
-  const actions = detail.task.assignment?.actions;
-  if (!actions || actions.some((a) => a !== 'read_only')) return [];
-  const candidate = detail.attempts.findLast((a) => a.candidate_id)?.candidate_id;
-  return captureChanges(detail.captures.find((c) => c.id === candidate));
-}
-
-/** The attachment's candidate was accepted into the integration version. */
-export const attachmentAccepted = (a: AttachmentView): boolean =>
-  (a.kind === 'candidate' || a.kind === 'verification') && a.accepted;
-
-/**
- * Why an attachment no longer holds now, or `null` while it does. Accepting moves the
- * integration version past the verification it used: that verification is accepted, not stale.
- */
+/** Why an attachment no longer holds now, or `null` while it does. */
 export function attachmentExpired(a: AttachmentView): string | null {
-  if (a.kind === 'candidate' && a.superseded) return '已被新的候选成果取代';
-  if (a.kind === 'verification' && a.superseded) return '已被新的验证取代';
-  if (a.kind === 'verification' && a.stale && !a.accepted) return '已过期：集成版本或检查设置在它之后变了';
   if (a.kind === 'report' && a.effect && VOID_REPORT[a.effect]) return '没有生效';
   return null;
 }
@@ -393,9 +333,7 @@ export function roleActivity(role: RoleView, task: TaskView | undefined, now: nu
   if (turn?.state === 'running' && turn.started_at) return `正在跑 turn · ${elapsed(turn.started_at, now)}`;
   if (turn) return turn.state === 'unknown' ? '上一个 turn 状态未知' : '即将开始 turn';
   if (role.hold) return '停下，等你决定';
-  if (role.outside) return '任务之外有改动，等你决定';
   if (role.stalled) return 'turn 已结束，任务还没完成，等你发消息';
-  if (role.workspace?.state === 'materializing') return '正在准备工作目录';
   // The question stands until a reply from the user or Angela is bound to the next turn (#17).
   if (task?.phase === 'executing' && task.blocked_reason) {
     return task.reply_queued ? '回复在排队，下一个 turn 交给它' : '提出了问题，等你回答';
@@ -412,23 +350,18 @@ export function roleActivity(role: RoleView, task: TaskView | undefined, now: nu
 export function composerHint(role: string, task: TaskView | undefined): string {
   if (!task) return `发给 ${role}（不属于任何任务）`;
   if (task.phase === 'executing') return `发给 ${role} · 任务「${task.title}」`;
-  if (task.phase === 'verifying') {
-    return `任务「${task.title}」正在验证。消息先排队，任务回到执行时交给 ${role}；验收前要你决定退回还是不再投递`;
-  }
   return `任务「${task.title}」等你验收。消息先排队，退回后交给 ${role}；直接验收则不再投递`;
 }
 
 /** Where the task stands, in one line: which round, and what it waits for. */
-export function taskNow(phase: Phase, round: number | undefined, verification: Verification['state'] | null): string {
+export function taskNow(phase: Phase, round: number | undefined): string {
   switch (phase) {
     case 'queued':
       return round ? `排队中，轮到时开始第 ${round + 1} 轮执行。` : '排队中，还没有开始执行。';
     case 'executing':
       return `第 ${round} 轮执行中，还没有交出候选成果。`;
-    case 'verifying':
-      return verification === 'running' ? `第 ${round} 轮的候选成果正在验证。` : `第 ${round} 轮的候选成果等待验证。`;
     case 'accepting':
-      return `第 ${round} 轮的候选成果通过了验证，等你验收。`;
+      return `第 ${round} 轮交出了候选成果，等你验收。`;
     case 'done':
       return `已完成，验收的是第 ${round} 轮的候选成果。`;
     case 'abandoned':
@@ -436,30 +369,10 @@ export function taskNow(phase: Phase, round: number | undefined, verification: V
   }
 }
 
-export function checkPassed(check: CheckRun): boolean {
-  return !check.timed_out && check.exit_code === 0;
-}
-
-/** A check's result in one line: its exit code or the timeout, and how long it ran. */
-export function checkSummary(check: CheckRun): string {
-  return `${check.timed_out ? '超时' : `退出码 ${check.exit_code}`} · ${(check.duration_ms / 1000).toFixed(1)} 秒`;
-}
-
 /** A blocked quota domain, in one line (data-model.md §8.7). */
 export function quotaNote(domain: Domain): string {
   const reset = domain.resets_at ? ` · ${clock(domain.resets_at)} 重置` : ' · 重置时间未知';
   return `额度不足（${harnessName(domain.harness)}）${reset} · 等待手动重试`;
-}
-
-/** What a capture the runtime stopped holds back, one line per path. */
-export function stoppedPaths(capture: Capture): string[] {
-  if (capture.state === 'oversized')
-    return jsonArray(jsonObject(capture.detail).files)
-      .map(jsonObject)
-      .map((f) => `${textOf(f.path)}（${bytes(jsonNumber(f.size))}）`);
-  return jsonArray(jsonObject(capture.detail).paths)
-    .map(jsonObject)
-    .map((p) => `${textOf(p.path)}（${textOf(p.kind)}）`);
 }
 
 export const REPORT_LABEL: Record<ReportArgs['status'], string> = {
@@ -471,8 +384,7 @@ export const REPORT_LABEL: Record<ReportArgs['status'], string> = {
 /** Why a report the backend recorded changed nothing (#14). */
 const VOID_REPORT: Partial<Record<ReportEffect, string>> = {
   late: '这次报告没有生效：它所属的执行轮已经结束，报告没有推进任务。',
-  no_task:
-    '这次报告没有生效：这个 turn 不属于任何任务，报告没有推进任务。它做的改动不会被验收或发布，要保留就建成任务。',
+  no_task: '这次报告没有生效：这个 turn 不属于任何任务，报告没有推进任务。',
 };
 
 /** The report a Lobotomy tool call recorded, if it was one. */
@@ -494,12 +406,7 @@ export function attentionSummary(a: Attention): string {
   switch (a.kind) {
     case 'hold':
       if (a.hold.kind === 'abnormal') return `${a.role} 的上一个 turn ${abnormalEnd(a.hold.turn)}，停下等你决定`;
-      if (a.hold.kind === 'session_unidentified') return `${a.role} 的会话没有记下会话 ID，要开新会话`;
-      return a.hold.capture.state === 'oversized'
-        ? `${a.role} 的这次采集超过了体积上限，等你决定`
-        : `${a.role} 的工作目录里有采集无法保存的内容，等你决定`;
-    case 'outside_changes':
-      return `${a.role} 在任务之外改了 ${captureChanges(a.capture).length} 个文件，等你决定`;
+      return `${a.role} 的会话没有记下会话 ID，要开新会话`;
     case 'unknown_turn':
       return `后端重启前启动的 ${a.role} 的 CLI 仍在运行`;
     case 'task_blocked':
@@ -507,15 +414,9 @@ export function attentionSummary(a: Attention): string {
     case 'stalled':
       return `「${a.title}」没有完成，${a.role} 的 turn 已经结束，等你发消息`;
     case 'accept':
-      return `「${a.title}」通过了验证，等你验收`;
+      return `「${a.title}」交出了候选成果，等你验收`;
     case 'quota':
       return quotaNote(a.domain);
-    case 'job_failed':
-      return `运行时的工作出错：${a.key}`;
-    case 'display_changed':
-      return a.display.busy ? '正在采用展示分支' : '展示分支变化待处理';
-    case 'preview_stopped':
-      return `预览已停止：${a.reason}`;
     case 'question':
       return `Angela 问你：${a.question}`;
   }
@@ -530,8 +431,6 @@ export function attentionKey(a: Attention): string {
   switch (a.kind) {
     case 'hold':
       return `hold:${a.role}:${a.hold.kind}`;
-    case 'outside_changes':
-      return `outside:${a.capture.id}`;
     case 'unknown_turn':
       return `unknown:${a.turn_id}`;
     case 'task_blocked':
@@ -539,15 +438,9 @@ export function attentionKey(a: Attention): string {
     case 'stalled':
       return `stalled:${a.turn_id}`;
     case 'accept':
-      return `accept:${a.verification_id}`;
+      return `accept:${a.task_id}`;
     case 'quota':
       return `quota:${a.domain.harness}`;
-    case 'job_failed':
-      return `job:${a.key}`;
-    case 'display_changed':
-      return 'display';
-    case 'preview_stopped':
-      return 'preview';
     case 'question':
       return `question:${a.id}`;
   }
@@ -641,9 +534,6 @@ const DECISION_LABEL: Record<string, string> = {
   send_back: '你退回了',
   abandon: '放弃了任务',
   reopen: '你重开了任务',
-  approve_new_files: '你放行了新增文件',
-  discard_uncaptured: '你丢弃了未能采集的内容',
-  adopt_outside_changes: '你用任务之外的改动建立了这个任务',
 };
 
 /** A decision in the task's history, said of who made it: the user or Angela. */
@@ -668,14 +558,12 @@ export interface TimelineEntry {
 }
 
 /**
- * A task's history in time order: execution rounds, verifications, decisions, publications and
- * criteria changes (#13). What one command did shares a timestamp; the rank puts its cause first,
+ * A task's history in time order: execution rounds, decisions and criteria changes (#13). What one command did shares a timestamp; the rank puts its cause first,
  * e.g. a send-back before the round it opens.
  */
 export function timeline(detail: TaskDetail): TimelineEntry[] {
   const entries: (TimelineEntry & { rank: number })[] = [];
   const add = (at: number | null, rank: number, text: string) => at && entries.push({ at, rank, text });
-  const round = (attemptId: string) => detail.attempts.find((a) => a.id === attemptId)?.seq;
   add(detail.task.created_at, 0, detail.task.assignment ? 'Angela 派出任务' : '建立任务');
   for (const c of detail.criteria) if (c.version > 1) add(c.created_at, 0, `完成条件改为第 ${c.version} 版`);
   for (const d of detail.decisions) {
@@ -683,68 +571,15 @@ export function timeline(detail: TaskDetail): TimelineEntry[] {
     const reason = body ? `：${body}` : '';
     add(d.created_at, 0, `${decisionLabel(d.kind, d.actor)}${reason}${droppedNote(d.detail)}`);
   }
-  for (const v of detail.verifications) {
-    add(v.created_at, 0, `第 ${round(v.attempt_id)} 轮的候选成果开始验证，基于集成版本 ${shortSha(v.base)}`);
-    if (v.state !== 'running') {
-      const result = v.state === 'passed' ? '通过' : v.conflicts.length ? '未通过：有冲突' : '未通过';
-      add(v.finished_at, 0, `第 ${round(v.attempt_id)} 轮的验证${result}`);
-    }
-  }
   for (const a of detail.attempts) {
     add(a.started_at, 2, `第 ${a.seq} 轮执行开始`);
     add(a.ended_at, 1, a.end_reason === 'candidate' ? `第 ${a.seq} 轮交出候选成果` : `第 ${a.seq} 轮结束`);
   }
-  for (const p of detail.publications) add(p.created_at, 3, `发布为集成版本 ${shortSha(p.commit_id)}`);
   return entries.sort((a, b) => a.at - b.at || a.rank - b.rank).map(({ at, text }) => ({ at, text }));
 }
 
-export interface WorkRange {
-  from: string;
-  to: string;
-  label: string;
-  /** The range belongs to an earlier round than the latest one. */
-  earlier: boolean;
-}
-
-/**
- * The changes to show for a task: the latest round's verified candidate, its candidate, or its
- * latest capture; failing all of these, an earlier round's verified candidate, marked as such
- * (#13).
- */
-export function workRange(detail: TaskDetail): WorkRange | null {
-  const latest = detail.attempts.at(-1);
-  const verification = detail.verifications.at(-1);
-  const done = verification?.commit_id && verification.state !== 'running' ? verification : null;
-  if (latest && done?.attempt_id === latest.id) {
-    return {
-      from: done.base,
-      to: done.commit_id!,
-      label: `第 ${latest.seq} 轮的候选成果，已合到集成版本 ${shortSha(done.base)} 上`,
-      earlier: false,
-    };
-  }
-  const captures = detail.captures.filter((c) => c.commit_id && latest && c.attempt_id === latest.id);
-  const candidate = captures.filter((c) => c.kind === 'candidate').at(-1);
-  if (latest && candidate)
-    return { from: candidate.base, to: candidate.commit_id!, label: `第 ${latest.seq} 轮的候选成果`, earlier: false };
-  const last = captures.at(-1);
-  if (latest && last) {
-    return {
-      from: last.base,
-      to: last.commit_id!,
-      label: `第 ${latest.seq} 轮目前的工作（${clock(last.created_at)} 采集），还不是候选成果`,
-      earlier: false,
-    };
-  }
-  if (done) {
-    const seq = detail.attempts.find((a) => a.id === done.attempt_id)?.seq;
-    return { from: done.base, to: done.commit_id!, label: `上一轮（第 ${seq} 轮）的候选成果`, earlier: true };
-  }
-  return null;
-}
-
-// A done report arrives before candidate capture. Keep that distinction visible, and never
-// present a previous round's report as the current delivery. Invalidated reports are cleared.
+// A done report arrives before its turn ends and the attempt hands in its candidate. Keep that
+// distinction visible, and never present a previous round's report as the current delivery.
 export function deliveryReport(attempts: Attempt[]) {
   const report = attempts.findLast((attempt) => !!attempt.done_summary?.trim());
   if (!report) return null;
@@ -752,22 +587,6 @@ export function deliveryReport(attempts: Attempt[]) {
     text: report.done_summary!,
     round: report.seq,
     earlier: report.id !== attempts.at(-1)?.id,
-    pending: !report.candidate_id,
+    pending: report.end_reason !== 'candidate',
   };
-}
-
-/** Only the current round's explicitly pinned candidate can be launched. */
-export function trialCandidate(detail: TaskDetail): string | null {
-  const latest = detail.attempts.at(-1);
-  if (!latest?.candidate_id) return null;
-  return (
-    detail.captures.find(
-      (capture) =>
-        capture.id === latest.candidate_id &&
-        capture.task_id === detail.task.id &&
-        capture.attempt_id === latest.id &&
-        capture.kind === 'candidate' &&
-        capture.state === 'pinned',
-    )?.commit_id ?? null
-  );
 }

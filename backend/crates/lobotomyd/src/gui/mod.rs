@@ -375,7 +375,6 @@ mod shutdown_tests {
                         claude: cli.clone(),
                         codex: cli,
                         interrupt_helper: vec![],
-                        terminal_helper: "unused".into(),
                         probe_timeout: Duration::from_secs(1),
                     },
                 )

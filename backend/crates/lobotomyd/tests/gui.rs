@@ -100,10 +100,10 @@ impl Client {
 #[test]
 fn waiting_for_an_event_keeps_the_later_events_of_its_push() {
     let mut events = Events::default();
-    let kinds = ["turn.registered", "turn.ended", "capture.intent", "capture.finished"];
+    let kinds = ["turn.registered", "turn.ended", "task.accepting", "task.done"];
     events.add(json!({ "type": "events", "events": kinds.map(|kind| json!({ "kind": kind })) }));
     assert!(events.take("turn.ended").is_some());
-    assert!(events.take("capture.finished").is_some());
+    assert!(events.take("task.done").is_some());
     // What came before the awaited events was consumed with them.
     assert!(events.take("turn.registered").is_none());
 }
@@ -222,7 +222,6 @@ async fn a_turn_without_a_report_leaves_the_task_to_the_user() {
     let args = json!({ "request_id": "r1", "title": "没有报告", "body": "FAKE:refused", "criteria": "-", "executor": "Malkuth" });
     let task = gui.command("create_task", args).await.unwrap()["id"].as_str().unwrap().to_owned();
     gui.event("turn.ended").await;
-    gui.event("capture.finished").await;
     let snapshot = gui.call("snapshot", json!({})).await.unwrap();
     let attention = snapshot["attention"].as_array().unwrap();
     assert_eq!(attention.len(), 1, "{attention:?}");
@@ -544,34 +543,5 @@ async fn angelas_references_show_the_records_they_name() {
     assert_eq!((&attached["kind"], &attached["title"]), (&json!("task"), &json!("查启动")));
     assert_eq!(attached["project"], project.id.as_str());
     assert_eq!(refs["attachments"]["task_none"]["error"], "找不到这个引用");
-    backend.shutdown(Duration::from_secs(5)).await;
-}
-
-#[tokio::test]
-async fn project_interrupt_and_terminate_do_not_wait_for_the_start_gate() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend = start(dir.path()).await;
-    let p = &backend.project;
-    p.running.lock().unwrap().insert(
-        "ending".into(),
-        lobotomyd::instance::RunningTurn {
-            pid: None,
-            interrupt_requested: false,
-            stop: tokio_util::sync::CancellationToken::new(),
-            task: None,
-        },
-    );
-    let mut gui = Client::connect(&backend).await;
-    let gate = p.activity.lock().await;
-    for (name, expected) in [("interrupt", "not_started"), ("terminate", "not_found")] {
-        let error = tokio::time::timeout(Duration::from_secs(1), gui.command(name, json!({ "turn_id": "ending" })))
-            .await
-            .expect("stop commands must remain responsive while starts are serialized")
-            .unwrap_err();
-        assert_eq!(error["code"], expected);
-    }
-    assert!(p.running.lock().unwrap()["ending"].interrupt_requested);
-    p.running.lock().unwrap().clear();
-    drop(gate);
     backend.shutdown(Duration::from_secs(5)).await;
 }

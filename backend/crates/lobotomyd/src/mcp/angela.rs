@@ -21,12 +21,12 @@ use lobotomy_core::ledger::{AddLedgerEntry, CitedEntry, LedgerEntry, LedgerKind,
 use lobotomy_core::manager::AskUser;
 use lobotomy_core::quota::Domain;
 use lobotomy_core::task::{
-    Abandon, Action, Assign, ContextEntry, Quote, Replied, SendToRole, SetPaused, local_minute, replied,
+    Abandon, Accept, Action, Assign, ContextEntry, Quote, Replied, SendBack, SendToRole, SetPaused, local_minute,
+    replied,
 };
 use lobotomy_core::turn::{TurnState, turn_by_token};
-use lobotomy_core::verify::{Accept, SendBack, task_verifications};
 use lobotomy_core::view::attachment::{Attachment, attachment};
-use lobotomy_core::view::manager::{diff_range, events_read, project_read, task_read};
+use lobotomy_core::view::manager::{events_read, project_read, task_read};
 use lobotomy_core::view::{last_event, overview};
 use lobotomy_harness::{Harness, MCP_SERVER};
 use rmcp::{
@@ -118,16 +118,6 @@ const EVENTS_DEFAULT: usize = 100;
 const EVENTS_MAX: usize = 500;
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct DiffArgs {
-    /// 项目 ID，来自 list_projects
-    pub project_id: String,
-    /// 候选成果的 capture_id（cap_…）或验证的 ID（ver_…），来自 read_task
-    pub id: String,
-    /// 只读这些文件的改动，路径与结果中 files 的 path 相同；不填时读全部
-    pub paths: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionArg {
     /// 只读调查：不改文件
@@ -159,7 +149,7 @@ pub struct AssignArgs {
     /// 要原样转给执行者的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。运行时按时间顺序插入原文。没有可引用的原话时留空
     #[serde(default)]
     pub quote: Vec<String>,
-    /// 用户当时在回复的对象，原样附上：你的回复（item_…，见 recent_replies），或这个项目中的任务、候选成果、验证、汇报。用户自己指定过回复对象的消息，运行时自动附上，你不用再写
+    /// 用户当时在回复的对象，原样附上：你的回复（item_…，见 recent_replies），或这个项目中的任务、汇报。用户自己指定过回复对象的消息，运行时自动附上，你不用再写
     #[serde(default)]
     pub context: Vec<String>,
     /// 要原样转给执行者的记录条目的 ID（led_…），例如相关的决定和约束。推测不能转给下层
@@ -186,7 +176,7 @@ pub struct SendToRoleArgs {
     /// 要原样转给它的用户消息的 ID，即输入中【来自 用户 · msg_…】里的 ID。没有时留空
     #[serde(default)]
     pub quote: Vec<String>,
-    /// 用户当时在回复的对象，原样附上：你的回复（item_…，见 recent_replies），或这个项目中的任务、候选成果、验证、汇报。用户自己指定过回复对象的消息，运行时自动附上，你不用再写
+    /// 用户当时在回复的对象，原样附上：你的回复（item_…，见 recent_replies），或这个项目中的任务、汇报。用户自己指定过回复对象的消息，运行时自动附上，你不用再写
     #[serde(default)]
     pub context: Vec<String>,
     /// 要原样转给它的记录条目的 ID（led_…）。推测不能转给下层
@@ -202,8 +192,6 @@ pub struct AcceptArgs {
     pub project_id: String,
     /// 任务 ID
     pub task_id: String,
-    /// 你看过的验证的 ID，来自 read_task；必须是这个任务当前通过的验证
-    pub verification_id: String,
     /// 你对照的完成条件版本，来自 read_task 的 criteria_version
     pub criteria_version: i64,
 }
@@ -314,16 +302,14 @@ impl AngelaTools {
                 Ok(project) => project,
                 Err(unavailable) => return Ok(unavailable),
             };
-            let attention_of = project.clone();
             let overview = db(&project, |db| db.read(|c| overview(c, MCP_SERVER))).await?;
-            let attention = project_attention(&attention_of, &overview);
+            let attention = project_attention(&overview);
             Ok(json!({ "project": args.project_id, "read": project_read(&overview, &attention) }))
         })
         .await
     }
 
-    #[tool(description = "读一个任务：用户原话、当前完成条件、每一轮执行的候选成果与验证（标明是否已被取代、\
-                       验证是否已过期）、执行者的汇报，以及截至的事件序号。")]
+    #[tool(description = "读一个任务：用户原话、当前完成条件、每一轮执行怎样结束、执行者的汇报，以及截至的事件序号。")]
     async fn read_task(
         &self,
         Parameters(args): Parameters<TaskArgs>,
@@ -362,30 +348,6 @@ impl AngelaTools {
             let (after, limit) = (args.after.unwrap_or(0), args.limit.unwrap_or(EVENTS_DEFAULT).min(EVENTS_MAX));
             let read = db(&project, move |db| db.read(|c| events_read(c, after, limit))).await?;
             Ok(json!({ "project": args.project_id, "read": read }))
-        })
-        .await
-    }
-
-    #[tool(description = "读候选成果或验证的改动，与任务面板显示的相同。候选成果（cap_…）对比它采集时的集成版本；\
-                       验证（ver_…）对比它运行时的集成版本，就是验收后会发布的改动。结果先按文件列出增删行数，\
-                       再给出 unified diff，写明是否已被取代、验证是否已过期。放不下的文件列在 not_shown 中，\
-                       用 paths 单独读。")]
-    async fn read_diff(
-        &self,
-        Parameters(args): Parameters<DiffArgs>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        answer(&context, |reach| async move {
-            let project = match find(&reach, &args.project_id)? {
-                Ok(project) => project,
-                Err(unavailable) => return Ok(unavailable),
-            };
-            let id = args.id.clone();
-            let range = db(&project, move |db| db.read(|c| diff_range(c, &id))).await?;
-            let (store, from, to) = (project.store.clone(), range.from.clone(), range.to.clone());
-            let changes = tokio::task::spawn_blocking(move || store.diff(&from, &to)).await??;
-            let text = super::diff::render(&changes, &args.paths.unwrap_or_default());
-            Ok(json!({ "project": args.project_id, "id": args.id, "read": range, "changes": text }))
         })
         .await
     }
@@ -445,34 +407,22 @@ impl AngelaTools {
         .await
     }
 
-    #[tool(description = "验收一个等待验收的任务：成果发布进集成版本，任务完成。写明你看过的验证和完成条件版本；\
-                       它们之后有变化时验收被拒绝，先重新读任务。")]
+    #[tool(description = "验收一个等待验收的任务，任务完成。写明你对照的完成条件版本；它之后有变化时验收被拒绝，\
+                       先重新读任务。")]
     async fn accept(
         &self,
         Parameters(args): Parameters<AcceptArgs>,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |_, project, caller| async move {
-            let commit = db(&project, move |db| {
-                // The integration version is the one the verification ran on: that is what she
-                // judged. The command still checks it is the current one.
-                let task_id = args.task_id.clone();
-                let base = db
-                    .read(|c| task_verifications(c, &task_id))?
-                    .into_iter()
-                    .find_map(|v| (v.id == args.verification_id).then_some(v.base));
-                let cmd = Accept {
-                    request_id: new_id("req"),
-                    task_id: args.task_id,
-                    verification_id: args.verification_id,
-                    criteria_version: args.criteria_version,
-                    expected_integration: base.unwrap_or_default(),
-                    dropping: Vec::new(),
-                };
-                db.execute(&caller, &cmd)
-            })
-            .await?;
-            Ok(format!("已验收，成果发布为集成版本 {commit}。"))
+            let cmd = Accept {
+                request_id: new_id("req"),
+                task_id: args.task_id,
+                criteria_version: args.criteria_version,
+                dropping: Vec::new(),
+            };
+            db(&project, move |db| db.execute(&caller, &cmd)).await?;
+            Ok("已验收，任务完成。".to_owned())
         })
         .await
     }
@@ -729,7 +679,7 @@ fn why(e: &anyhow::Error) -> String {
         Some("undelivered_messages") => "执行者还没收到用户发给这个任务的消息，只有用户能放弃它们。\
                                           可以退回任务，让执行者收到这些消息；或者问用户。"
             .into(),
-        Some("stale_verification" | "stale_criteria" | "integration_moved") => {
+        Some("stale_criteria") => {
             format!("你看到的已经不是当前状态（{e:#}）。先重新读取这个任务。")
         }
         _ => format!("{e:#}"),
@@ -784,8 +734,8 @@ pub async fn ledgers(
 
 /// What the user was replying to, for the user's words she forwards (manager-actions.md §1.1):
 /// first what the user chose for each quoted message, which she cannot leave out, then what she
-/// adds. Her replies and her conversation's messages come from her database; tasks, candidates,
-/// verifications and reports from the project's.
+/// adds. Her replies and her conversation's messages come from her database; tasks and reports
+/// from the project's.
 async fn replied_to(
     angela: &Instance,
     project: &Project,
@@ -817,9 +767,7 @@ async fn replied_to(
             Some(target) => db(angela, move |db| db.read(|c| reply_context(c, target, false))).await?,
             None => match db(project, move |db| db.read(|c| record_context(c, &theirs))).await? {
                 Some(entry) => entry,
-                None => anyhow::bail!(
-                    "没有 {id}：上下文可以是你的回复（recent_replies），或这个项目中的任务、候选成果、验证、汇报"
-                ),
+                None => anyhow::bail!("没有 {id}：上下文可以是你的回复（recent_replies），或这个项目中的任务、汇报"),
             },
         };
         out.push(entry);
@@ -837,10 +785,6 @@ fn record_context(c: &rusqlite::Connection, id: &str) -> lobotomy_core::Result<O
     let Some(record) = attachment(c, id)? else { return Ok(None) };
     let (header, body) = match record {
         Attachment::Task { title, .. } => (format!("任务「{title}」"), String::new()),
-        Attachment::Candidate { title, seq, .. } => (format!("「{title}」第 {seq} 轮的候选成果"), String::new()),
-        Attachment::Verification { title, seq, state, .. } => {
-            (format!("「{title}」第 {seq} 轮的验证，{}", state.as_str()), String::new())
-        }
         Attachment::Report { role, report_title, .. } => {
             let args: String = c.query_row("SELECT args FROM command_record WHERE id = ?1", [id], |r| r.get(0))?;
             let report: serde_json::Value = serde_json::from_str(&args)?;
@@ -963,11 +907,10 @@ async fn list_projects(reach: &Reach) -> anyhow::Result<Value> {
         };
         match reach.projects.get(&entry.id) {
             Some(project) => {
-                let attention_of = project.clone();
                 let overview = db(&project, |db| db.read(|c| overview(c, MCP_SERVER))).await?;
                 read.as_of = Some(overview.seq);
                 read.open_tasks = Some(overview.tasks.iter().filter(|t| !t.task.phase.is_closed()).count());
-                read.waiting = Some(project_attention(&attention_of, &overview).len());
+                read.waiting = Some(project_attention(&overview).len());
             }
             None => read.unavailable = Some(unavailable(&reach.projects, &entry.id, Some(entry.state))),
         }

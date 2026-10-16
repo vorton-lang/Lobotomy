@@ -1,40 +1,25 @@
-// A new task for a role. Made from changes outside any task, it starts from them (#14).
+// A new task for a role.
 
 import { useState } from 'react';
-import { selectTask, toast, useCommand, useStore } from '../store';
+import { selectTask, toast, useCommand } from '../store';
 import { Modal } from './common';
 
-export function NewTask({
-  executor,
-  fromCapture,
-  onClose,
-}: {
-  executor: string;
-  fromCapture?: string;
-  onClose: () => void;
-}) {
-  const display = useStore((s) => s.snapshot?.attention.find((a) => a.kind === 'display_changed')?.display);
-  const waiting = !!display?.start_blocked;
+export function NewTask({ executor, onClose }: { executor: string; onClose: () => void }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [criteria, setCriteria] = useState('');
-  const { submit, busy } = useCommand(fromCapture ? 'adopt_outside_changes' : 'create_task');
+  const { submit, busy } = useCommand('create_task');
   const create = async () => {
-    // A task made from changes goes to the role whose slot holds them.
-    const created = await submit(
-      fromCapture ? { capture_id: fromCapture, title, body, criteria } : { title, body, criteria, executor },
-    );
+    const created = await submit({ title, body, criteria, executor });
     if (!created) return;
     onClose();
     // An open task panel would cover the thread where the new task's work shows (#13); the
     // earlier task stays a click away in the Workboard.
     selectTask(null);
-    toast(waiting ? `「${title}」已排队，处理展示分支变化后开始` : `「${title}」已交给 ${executor}`);
+    toast(`「${title}」已交给 ${executor}`);
   };
   return (
-    <Modal title={fromCapture ? '用这些改动建任务' : '新任务'} onClose={onClose}>
-      {fromCapture && <p className="muted">任务从这些改动开始：执行者在它们的基础上继续，做完后照常验证、验收。</p>}
-      {waiting && <p className="muted">已排队的任务会在处理展示分支变化后开始。</p>}
+    <Modal title="新任务" onClose={onClose}>
       <label>
         标题
         <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />

@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use lobotomy_core::task::{CreateTask, Phase, StartAttempt, load_task};
 use lobotomy_core::turn::{Turn, TurnState, last_turn};
-use lobotomy_core::workspace::{AlignIdleSlot, materializing};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::host::{Cli, HarnessConfig, Host};
 use lobotomyd::project::Project;
@@ -28,7 +27,6 @@ pub fn fake_codex_with(flags: &[&str]) -> HarnessConfig {
         claude: fake("fake-claude.mjs", &[]),
         codex: fake("fake-codex.mjs", flags),
         interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
-        terminal_helper: env!("CARGO_BIN_EXE_lobotomyd").into(),
         probe_timeout: Duration::from_secs(60),
     }
 }
@@ -49,7 +47,6 @@ pub fn real_clis() -> HarnessConfig {
             reasoning_effort: Some("low".into()),
         },
         interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
-        terminal_helper: env!("CARGO_BIN_EXE_lobotomyd").into(),
         probe_timeout: Duration::from_secs(120),
     }
 }
@@ -89,14 +86,10 @@ pub async fn open_project(dir: &Path, harness: HarnessConfig) -> Arc<Project> {
     }
 }
 
-/// The project of [`open_project`] with its idle slot written, so a backend started on it has
-/// nothing to do. Returns its host and id; the instance is closed.
+/// The project of [`open_project`], so a backend started on it has nothing to do. Returns its host
+/// and id; the instance is closed.
 pub async fn idle_project(dir: &Path, harness: HarnessConfig) -> (Arc<Host>, String) {
     let project = open_project(dir, harness).await;
-    project.db.execute(&Caller::Runtime, &AlignIdleSlot { role: "Malkuth".into() }).unwrap();
-    for ws in project.db.read(materializing).unwrap() {
-        lobotomyd::results::materialize(project.clone(), ws).await.unwrap();
-    }
     (project.host.clone(), project.id.clone())
 }
 
@@ -160,13 +153,10 @@ pub fn create_task(project: &Project, body: &str) -> String {
     task
 }
 
-/// What the scheduler does when the role is free: starts the attempt and writes the slot. For
-/// setting up "the last run" without a running backend.
+/// What the scheduler does when the role is free: starts the attempt. For setting up "the last
+/// run" without a running backend.
 pub async fn start_attempt(project: &Arc<Project>, task: &str) {
-    project.db.execute(&Caller::Runtime, &StartAttempt { task_id: task.into(), code_start: None }).unwrap();
-    for ws in project.db.read(materializing).unwrap() {
-        lobotomyd::results::materialize(project.clone(), ws).await.unwrap();
-    }
+    project.db.execute(&Caller::Runtime, &StartAttempt { task_id: task.into() }).unwrap();
 }
 
 pub fn last(db: &Db) -> Option<Turn> {
@@ -197,18 +187,13 @@ async fn wait_for_diagnostic<T>(
 }
 
 /// Capture persisted progress and in-memory owners before the temporary project is dropped.
-/// Check runs are recorded together at FinishVerification; no rows alone do not prove that
-/// no check started. Tokens and raw CLI arguments are deliberately excluded.
+/// Tokens and raw CLI arguments are deliberately excluded.
 pub fn backend_diagnostic(project: &Project) -> String {
     let persisted = project.db.read(|c| {
         let mut snapshot = serde_json::Map::new();
         for (name, sql) in [
             ("tasks", "SELECT id, phase FROM task"),
             ("turns", "SELECT id, task_id, attempt_id, state, outcome, failure, pid, process_start, done_at, registered_at, started_at, ended_at FROM turn ORDER BY registered_at, id"),
-            ("captures", "SELECT id, turn_id, state, kind, detail, created_at, finished_at FROM capture"),
-            ("verifications", "SELECT id, task_id, state, created_at, finished_at FROM verification"),
-            ("check_runs", "SELECT verification_id, seq, exit_code, timed_out, duration_ms, output FROM check_run ORDER BY verification_id, seq"),
-            ("workspaces", "SELECT name, state, target, head FROM workspace"),
             ("events", "SELECT seq, kind, entity, created_at FROM event ORDER BY seq DESC LIMIT 30"),
         ] {
             let mut stmt = c.prepare(sql)?;
@@ -231,12 +216,9 @@ pub fn backend_diagnostic(project: &Project) -> String {
         }
         Ok(serde_json::Value::Object(snapshot))
     });
-    let mut jobs: Vec<_> = project.jobs.lock().unwrap().keys().cloned().collect();
-    jobs.sort();
     let running = format!("{:?}", project.running.lock().unwrap());
-    let failed = lobotomyd::results::failures(project);
     format!(
-        "project={}\njobs={jobs:?}\nrunning={running}\nfailed={failed:?}\n{}",
+        "project={}\nrunning={running}\n{}",
         project.data_dir.display(),
         match persisted {
             Ok(value) => serde_json::to_string_pretty(&value).unwrap(),
@@ -260,11 +242,12 @@ pub async fn phase(db: &Db, task: &str, phase: Phase) {
     .await
 }
 
-pub fn slot(dir: &Path) -> PathBuf {
-    dir.join("project").join("slots").join("worker")
+/// Malkuth's working directory in the project of [`open_project`].
+pub fn work(dir: &Path) -> PathBuf {
+    dir.join("project").join("work").join("Malkuth")
 }
 
-/// Where the fake CLI leaves its diagnostics: inside `.git` in a slot, so captures skip them.
+/// Where the fake CLI leaves its diagnostics: inside `.git` when there is one, else in dir.
 pub fn diag(dir: &Path) -> PathBuf {
     if dir.join(".git").exists() { dir.join(".git") } else { dir.to_path_buf() }
 }

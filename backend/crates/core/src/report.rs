@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::command::{Caller, Command, Cx};
 use crate::error::{Error, Result};
 use crate::question;
-use crate::task::{Phase, Task, Trial, load_task, open_attempt};
+use crate::task::{Phase, Task, load_task, open_attempt};
 use crate::turn::{Turn, TurnState, load_turn};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,14 +28,11 @@ pub struct OrgReport {
     pub body: String,
     pub status: ReportStatus,
     pub blocked_on: Option<String>,
-    /// Suggested manual trial, saved only with the first accepted done. Never executed here.
-    #[serde(default)]
-    pub trial: Option<Trial>,
 }
 
 impl OrgReport {
     /// The title and the body, an empty one left out; `None` when both are empty. A done keeps it
-    /// with its attempt for the candidate's commit message (harness-adapter.md §4.3).
+    /// with its attempt.
     fn summary(&self) -> Option<String> {
         let parts: Vec<&str> = [self.title.trim(), self.body.trim()].into_iter().filter(|s| !s.is_empty()).collect();
         (!parts.is_empty()).then(|| parts.join("\n\n"))
@@ -54,8 +51,7 @@ pub enum ReportEffect {
     /// The turn has ended, or belongs to an attempt that is no longer open. A late call never
     /// advances state (data-model.md §3.1).
     Late,
-    /// The turn belongs to no task: there is nothing for `done` or a question to advance. What
-    /// the turn changed waits for the user (harness-adapter.md §3, #14).
+    /// The turn belongs to no task: there is nothing for `done` or a question to advance.
     NoTask,
 }
 
@@ -106,18 +102,12 @@ impl Command for OrgReport {
                 if turn.done_at.is_some() {
                     ReportEffect::Unchanged
                 } else {
-                    // The CLI may still be running. Capture waits for it to exit; the role stays
-                    // occupied meanwhile (harness-adapter.md §4.1).
+                    // The CLI may still be running. The task moves to acceptance when the turn
+                    // ends; the role stays occupied meanwhile.
                     cx.tx.execute("UPDATE turn SET done_at = ?2 WHERE id = ?1", params![turn.id, cx.now])?;
                     cx.tx.execute(
-                        "UPDATE attempt SET done_turn_id = ?2, done_summary = ?3, trial = ?4
-                         WHERE id = ?1 AND done_turn_id IS NULL",
-                        params![
-                            turn.attempt_id,
-                            turn.id,
-                            self.summary(),
-                            self.trial.as_ref().map(serde_json::to_string).transpose()?
-                        ],
+                        "UPDATE attempt SET done_turn_id = ?2, done_summary = ?3 WHERE id = ?1 AND done_turn_id IS NULL",
+                        params![turn.attempt_id, turn.id, self.summary()],
                     )?;
                     question::withdraw_task(cx, &task.id)?;
                     ReportEffect::Recorded

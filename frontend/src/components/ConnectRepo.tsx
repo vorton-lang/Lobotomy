@@ -1,6 +1,5 @@
-// Connecting a repository as a new project (harness-adapter.md §4.3 "接入"; data-model.md §10.4),
-// while the backend runs. The repository must be clean and on a branch; the backend lists what is
-// wrong otherwise. The window then shows the new project.
+// Connecting a repository as a new project (data-model.md §10.4), while the backend runs. The
+// window then shows the new project.
 
 import { useState } from 'react';
 import { RequestFailed } from '../api/connection';
@@ -36,10 +35,7 @@ export function ConnectRepo({ connected = true, onDone }: { connected?: boolean;
 
   return (
     <div className="connect-repo">
-      <p>
-        选择一个本地 git 仓库。它需要检出在某个分支上，工作区干净。接入后，这个仓库成为集成版本的只读预览，Lobotomy
-        只会快进它的分支。
-      </p>
+      <p>选择一个本地仓库。Lobotomy 只记下它的路径，不改动它。</p>
       {inElectron() ? (
         <button className="primary" onClick={choose} disabled={busy || !connected}>
           {path ? '重新选择仓库' : '选择仓库文件夹'}

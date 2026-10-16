@@ -1,6 +1,6 @@
 //! The GUI's reads (frontend.md §7). The models and their queries are `lobotomy_core::view`;
 //! here they meet what only the running backend knows: live items, the host's quota domains and
-//! permission modes, failed store jobs, and whether an unknown turn's process still runs.
+//! permission modes, and whether an unknown turn's process still runs.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -19,16 +19,11 @@ use crate::host::Host;
 use crate::instance::{Instance, LiveTurn};
 use crate::project::Project;
 use crate::projects::Projects;
-use crate::results;
 use crate::runner::db;
 
 /// Answers a read method about a project.
 pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Result<Value> {
     Ok(match method {
-        name if name == TRIALS.name => {
-            let TaskParams { task_id } = TRIALS.decode(params)?;
-            TRIALS.encode(project.trials.list(&task_id))?
-        }
         name if name == SNAPSHOT.name => SNAPSHOT.encode(snapshot(project).await?)?,
         name if name == TASK.name => {
             let TaskParams { task_id } = TASK.decode(params)?;
@@ -39,11 +34,6 @@ pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyh
             let turns = project.data_dir.join("turns");
             let (files, bytes) = tokio::task::spawn_blocking(move || directory_size(&turns)).await?;
             DISK_USAGE.encode(DiskUsage { raw_output: RawOutput { files, bytes } })?
-        }
-        name if name == DIFF.name => {
-            let DiffParams { from, to } = DIFF.decode(params)?;
-            let store = project.store.clone();
-            DIFF.encode(tokio::task::spawn_blocking(move || store.diff(&from, &to)).await??)?
         }
         _ => return transcript(project, method, params).await,
     })
@@ -254,13 +244,6 @@ struct TaskParams {
 
 #[derive(Deserialize)]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
-struct DiffParams {
-    from: String,
-    to: String,
-}
-
-#[derive(Deserialize)]
-#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 struct BlobParams {
     hash: String,
 }
@@ -319,14 +302,14 @@ impl HarnessView {
 pub async fn snapshot(project: &Arc<Project>) -> anyhow::Result<Snapshot> {
     let overview = db(project, |db| db.read(|c| view::overview(c, MCP_SERVER))).await?;
     let quota = quota(&project.host, &overview)?;
-    let attention = attention(&overview, &quota, &results::failures(project));
+    let attention = attention(&overview, &quota);
     instance_snapshot(project, overview, attention, quota)
 }
 
 async fn angela_snapshot(angela: &Instance) -> anyhow::Result<Snapshot> {
     let overview = db(angela, |db| db.read(|c| view::overview(c, MCP_SERVER))).await?;
     let quota = quota(&angela.host, &overview)?;
-    let attention = attention(&overview, &quota, &[]);
+    let attention = attention(&overview, &quota);
     instance_snapshot(angela, overview, attention, quota)
 }
 
@@ -347,8 +330,8 @@ fn quota(host: &Host, overview: &Overview) -> anyhow::Result<Vec<Domain>> {
     Ok(used.into_iter().map(|harness| host.db.domain(harness)).collect::<Result<Vec<_>, _>>()?)
 }
 
-fn attention(overview: &Overview, quota: &[Domain], failed: &[(String, String)]) -> Vec<Attention> {
-    view::attention(overview, quota, failed, |turn| {
+fn attention(overview: &Overview, quota: &[Domain]) -> Vec<Attention> {
+    view::attention(overview, quota, |turn| {
         matches!((turn.pid, turn.process_start), (Some(pid), Some(start))
             if lobotomy_harness::process::is_running(pid as u32, start))
     })
@@ -356,8 +339,8 @@ fn attention(overview: &Overview, quota: &[Domain], failed: &[(String, String)])
 
 /// What waits for the user in a project, without the quota domains the host lists once
 /// (data-model.md §10.5).
-pub fn project_attention(project: &Project, overview: &Overview) -> Vec<Attention> {
-    attention(overview, &[], &results::failures(project))
+pub fn project_attention(overview: &Overview) -> Vec<Attention> {
+    attention(overview, &[])
 }
 
 fn harnesses(host: &Arc<Host>) -> anyhow::Result<Vec<HarnessView>> {
@@ -416,7 +399,7 @@ pub async fn host_snapshot(
         if let Some(project) = projects.get(&entry.id) {
             // One project's broken database does not hide the others.
             match db(&project, |db| db.read(|c| view::overview(c, MCP_SERVER))).await {
-                Ok(overview) => attention = project_attention(&project, &overview),
+                Ok(overview) => attention = project_attention(&overview),
                 Err(e) => error = Some(format!("{e:#}")),
             }
             busy = !project.running.lock().unwrap().is_empty();
@@ -427,7 +410,7 @@ pub async fn host_snapshot(
         Ok(angela) => match db(angela, |db| db.read(|c| view::overview(c, MCP_SERVER))).await {
             Ok(overview) => AngelaStatus {
                 error: None,
-                attention: attention(&overview, &[], &[]),
+                attention: attention(&overview, &[]),
                 busy: !angela.running.lock().unwrap().is_empty(),
             },
             Err(e) => AngelaStatus { error: Some(format!("{e:#}")), attention: Vec::new(), busy: false },
@@ -479,9 +462,7 @@ super::protocol::routes! {
     pub(super) HOST: super::protocol::NoParams => HostSnapshot = "host";
     SNAPSHOT: super::protocol::NoParams => Snapshot = "snapshot";
     TASK: TaskParams => view::TaskDetail = "task";
-    TRIALS: TaskParams => Vec<crate::trial::TrialView> = "trials";
     DISK_USAGE: super::protocol::NoParams => DiskUsage = "disk_usage";
-    DIFF: DiffParams => Vec<lobotomy_store::FileChange> = "diff";
     THREAD: ThreadQuery => view::ThreadPage = "thread";
     SEARCH: SearchQuery => view::Found = "search";
     BLOB: BlobParams => BlobText = "blob";
@@ -493,16 +474,7 @@ super::protocol::routes! {
 /// Representative private/flattened read models for the cross-language contract check.
 #[cfg(feature = "ts-rs")]
 pub(super) fn binding_fixtures() -> Value {
-    let overview = Overview {
-        seq: 1,
-        project: None,
-        config: None,
-        roles: vec![],
-        tasks: vec![],
-        display: None,
-        preview_stopped: Some("not a wire field".into()),
-        questions: vec![],
-    };
+    let overview = Overview { seq: 1, project: None, roles: vec![], tasks: vec![], questions: vec![] };
     let snapshot = Snapshot {
         overview,
         attention: vec![],

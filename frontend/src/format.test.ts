@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type {
   Attempt,
   Attention,
-  Capture,
-  CheckRun,
   CommandRecord,
   Failure,
   Item,
@@ -13,20 +11,16 @@ import type {
   TaskDetail,
   TaskView,
   Turn,
-  Verification,
 } from './api/types';
 import {
   abnormalEnd,
   asReport,
-  attachmentAccepted,
   attachmentExpired,
   attachmentLine,
-  attachmentWarning,
   attentionKey,
   attentionSummary,
   attentionTask,
   buildRows,
-  checkSummary,
   commandSummary,
   composerHint,
   continueNote,
@@ -43,15 +37,11 @@ import {
   toolRunning,
   turnLook,
   splitReply,
-  stoppedPaths,
   textOf,
   timeline,
-  trialCandidate,
   toolSubject,
   turnOutcome,
-  unallowedChanges,
   voidReport,
-  workRange,
 } from './format';
 import { mergePage, type ThreadState } from './store';
 
@@ -62,7 +52,6 @@ const turn = (id: string, input = '【来自 你】\n做点事'): Turn => ({
   native_session_id: 'session',
   native_id: null,
   process_start: null,
-  workspace_id: null,
   task_id: null,
   attempt_id: null,
   input,
@@ -201,26 +190,8 @@ const attempt = (seq: number, started: number, ended: number | null): Attempt =>
   started_at: started,
   ended_at: ended,
   end_reason: ended ? 'candidate' : null,
-  code_start: null,
   done_turn_id: null,
   done_summary: null,
-  trial: null,
-  candidate_id: null,
-  conflicts: [],
-});
-
-const verification = (seq: number, at: number, state: Verification['state']): Verification => ({
-  id: `ver${seq}`,
-  task_id: 't',
-  attempt_id: `att${seq}`,
-  capture_id: `cap${seq}`,
-  base: 'base0000',
-  config_version: 1,
-  commit_id: `cand${seq}`,
-  conflicts: [],
-  state,
-  created_at: at,
-  finished_at: state === 'running' ? null : at + 1,
 });
 
 const detail = (patch: Partial<TaskDetail>): TaskDetail => ({
@@ -238,25 +209,19 @@ const detail = (patch: Partial<TaskDetail>): TaskDetail => ({
     revision: 1,
     created_at: 1,
     closed_at: null,
-    origin_capture: null,
     assignment: null,
   },
   criteria: [{ version: 1, text: '', created_by: 'user', created_at: 1 }],
   attempts: [],
-  captures: [],
-  verifications: [],
-  checks: [],
   decisions: [],
-  publications: [],
   undelivered_messages: [],
   ...patch,
 });
 
 describe('timeline', () => {
-  it('puts rounds, verifications and decisions in time order, causes first', () => {
+  it('puts rounds and decisions in time order, causes first', () => {
     const d = detail({
       attempts: [attempt(1, 10, 20), attempt(2, 40, null)],
-      verifications: [verification(1, 25, 'passed')],
       // The send-back and the round it opens share a timestamp.
       decisions: [{ id: 'd1', kind: 'send_back', actor: 'user', detail: { reason: '再改改' }, created_at: 40 }],
     });
@@ -264,8 +229,6 @@ describe('timeline', () => {
       '建立任务',
       '第 1 轮执行开始',
       '第 1 轮交出候选成果',
-      '第 1 轮的候选成果开始验证，基于集成版本 base0000',
-      '第 1 轮的验证通过',
       '你退回了：再改改',
       '第 2 轮执行开始',
     ]);
@@ -309,99 +272,23 @@ describe("Angela's reply", () => {
     expect(previewLine('长'.repeat(70))).toBe(`${'长'.repeat(60)}…`);
   });
 
-  it('writes the version an attachment is bound to and whether it still holds', () => {
-    const v = {
+  it('writes what an attachment is and whether it still holds', () => {
+    const r = {
       project: 'p1',
       project_name: 'alpha',
-      kind: 'verification' as const,
+      kind: 'report' as const,
       task_id: 't',
       title: '加行号',
-      seq: 2,
-      state: 'passed' as const,
-      base: 'abcdef0123',
-      config_version: 3,
-      at: 0,
-      superseded: false,
-      stale: false,
-      accepted: false,
-      unallowed_changes: 0,
-    };
-    expect(attachmentLine(v)).toContain('alpha · 「加行号」第 2 轮的验证 · 通过');
-    expect(attachmentExpired(v)).toBeNull();
-    expect(attachmentExpired({ ...v, stale: true })).toMatch(/^已过期/);
-    expect(attachmentExpired({ ...v, superseded: true })).toBe('已被新的验证取代');
-    // Accepting moved the integration version past it: accepted, not stale.
-    expect(attachmentExpired({ ...v, stale: true, accepted: true })).toBeNull();
-    expect(attachmentAccepted({ ...v, stale: true, accepted: true })).toBe(true);
-    expect(attachmentWarning(v)).toBeNull();
-    expect(attachmentWarning({ ...v, unallowed_changes: 2 })).toBe('只读调查，却改了 2 个文件');
-  });
-});
-
-describe('a task Angela assigned for reading only', () => {
-  it('lists what its candidate changed, and nothing for a task that may change files', () => {
-    const d = detail({ attempts: [attempt(1, 10, 20)] });
-    d.attempts[0].candidate_id = 'cap1';
-    d.captures = [
-      {
-        id: 'cap1',
-        turn_id: 't',
-        role: 'Malkuth',
-        task_id: 't',
-        attempt_id: d.attempts[0].id,
-        kind: 'candidate',
-        base: 'b',
-        workspace_id: 'ws',
-        config_version: 1,
-        options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
-        state: 'pinned',
-        commit_id: 'c',
-        detail: { changed: ['src/main.rs'] },
-        created_at: 20,
-        outside: null,
-      },
-    ];
-    expect(unallowedChanges(d)).toEqual([]);
-    d.task.assignment = { actions: ['read_only'], stop_when: '找到原因就停', interpretation: '先定位' };
-    expect(unallowedChanges(d)).toEqual(['src/main.rs']);
-    d.task.assignment = { ...d.task.assignment, actions: ['read_only', 'edit_code'] };
-    expect(unallowedChanges(d)).toEqual([]);
-  });
-});
-
-describe('workRange', () => {
-  it('marks the last round’s candidate as earlier while the next round has nothing yet', () => {
-    const d = detail({
-      attempts: [attempt(1, 10, 20), attempt(2, 40, null)],
-      verifications: [verification(1, 25, 'passed')],
-    });
-    expect(workRange(d)).toMatchObject({ to: 'cand1', earlier: true, label: '上一轮（第 1 轮）的候选成果' });
-  });
-
-  it('shows the latest round’s own work once there is some', () => {
-    const capture: Capture = {
-      id: 'c2',
-      turn_id: 'turn2',
       role: 'Malkuth',
-      task_id: 't',
-      attempt_id: 'att2',
-      kind: 'turn',
-      workspace_id: 'ws',
-      config_version: 1,
-      options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
-      base: 'base0000',
-      state: 'pinned',
-      commit_id: 'work2',
-      detail: null,
-      created_at: 50,
-      outside: null,
+      report_title: '完成了',
+      status: 'done',
+      at: 0,
+      chars: 12,
+      effect: 'recorded' as const,
     };
-    const d = detail({
-      attempts: [attempt(1, 10, 20), attempt(2, 40, null)],
-      verifications: [verification(1, 25, 'passed')],
-      captures: [capture],
-    });
-    expect(workRange(d)).toMatchObject({ to: 'work2', earlier: false });
+    expect(attachmentLine(r)).toContain('alpha · Malkuth 的汇报 · 完成了');
+    expect(attachmentExpired(r)).toBeNull();
+    expect(attachmentExpired({ ...r, effect: 'late' })).toBe('没有生效');
   });
 });
 
@@ -444,14 +331,11 @@ const role = (patch: Partial<RoleView>): RoleView => ({
   harness: 'codex',
   model: null,
   effort: null,
-  slot: 'worker',
   task_id: null,
   unfinished: null,
   last_turn: null,
   hold: null,
   stalled: null,
-  outside: null,
-  workspace: null,
   queued_messages: 0,
   ...patch,
 });
@@ -462,7 +346,6 @@ const taskView = (phase: TaskView['phase']): TaskView => ({
   phase,
   attempt_seq: 1,
   attempt_open: phase === 'executing',
-  verification: null,
   undelivered_messages: 0,
   reply_queued: false,
 });
@@ -478,7 +361,7 @@ describe('roleActivity', () => {
     expect(
       roleActivity(role({ hold, stalled: { task_id: 't', turn_id: 't', report_error: null } }), undefined, 0),
     ).toBe('停下，等你决定');
-    expect(roleActivity(role({}), taskView('verifying'), 0)).toBe('验证中');
+    expect(roleActivity(role({}), taskView('accepting'), 0)).toBe('待验收');
     expect(roleActivity(role({}), undefined, 0)).toBe('空闲');
   });
 
@@ -502,7 +385,7 @@ describe('roleActivity', () => {
     expect(roleLook(role({}), asked)).toBe('wait');
     expect(roleLook(role({}), { ...asked, reply_queued: true })).toBe('idle');
     expect(roleLook(role({}), taskView('accepting'))).toBe('wait');
-    expect(roleLook(role({}), taskView('verifying'))).toBe('run');
+    expect(roleLook(role({}), taskView('executing'))).toBe('run');
     expect(roleLook(role({}), undefined)).toBe('idle');
     expect(turnLook(ended)).toBe('fail');
     expect(turnLook({ ...ended, outcome: 'completed' })).toBe('idle');
@@ -570,24 +453,6 @@ describe('composerHint', () => {
   });
 });
 
-describe('checkSummary', () => {
-  const check = (patch: Partial<CheckRun>): CheckRun => ({
-    id: 'c',
-    verification_id: 'v',
-    seq: 0,
-    command: 'cargo test',
-    exit_code: 0,
-    timed_out: false,
-    output: {},
-    duration_ms: 1500,
-    ...patch,
-  });
-  it('gives the exit code or the timeout, and the time', () => {
-    expect(checkSummary(check({}))).toBe('退出码 0 · 1.5 秒');
-    expect(checkSummary(check({ exit_code: null, timed_out: true }))).toBe('超时 · 1.5 秒');
-  });
-});
-
 describe('reports', () => {
   const record = (result: string): CommandRecord => ({
     name: 'org_report',
@@ -598,35 +463,6 @@ describe('reports', () => {
     expect(voidReport(asReport(record('recorded'))!)).toBeNull();
     expect(voidReport(asReport(record('no_task'))!)).toContain('不属于任何任务');
     expect(asReport({ name: 'other_tool', args: {}, result: null })).toBeNull();
-  });
-});
-
-describe('stoppedPaths', () => {
-  it('lists the new files over the guardrail with their size, or what cannot be captured', () => {
-    const capture: Capture = {
-      id: 'c',
-      turn_id: 't',
-      role: 'Malkuth',
-      task_id: null,
-      attempt_id: null,
-      kind: 'turn',
-      base: 'b',
-      workspace_id: 'ws',
-      config_version: 1,
-      options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
-      state: 'oversized',
-      commit_id: null,
-      detail: { files: [{ path: 'big.bin', size: 2048 }], total_bytes: 2048 },
-      created_at: 1,
-      outside: null,
-    };
-    expect(stoppedPaths(capture)).toEqual(['big.bin（2.0 KB）']);
-    const uncovered = {
-      ...capture,
-      state: 'uncovered' as const,
-      detail: { paths: [{ path: 'vendor/x', kind: 'nested_repo' }] },
-    };
-    expect(stoppedPaths(uncovered)).toEqual(['vendor/x（nested_repo）']);
   });
 });
 
@@ -662,15 +498,15 @@ describe('attentionKey', () => {
     });
     expect(attentionKey(blocked('a'))).toBe(attentionKey(blocked('a', '换了个问法')));
     expect(attentionKey(blocked('a'))).not.toBe(attentionKey(blocked('b')));
-    const accept: Attention = { kind: 'accept', task_id: 'a', title: 't', verification_id: 'v' };
+    const accept: Attention = { kind: 'accept', task_id: 'a', title: 't' };
     expect(attentionKey(accept)).not.toBe(attentionKey(blocked('a')));
   });
 });
 
 describe('attentionSummary', () => {
   it('says in one line what waits, and names the task going there opens', () => {
-    const accept: Attention = { kind: 'accept', task_id: 'a', title: '导出', verification_id: 'v' };
-    expect(attentionSummary(accept)).toBe('「导出」通过了验证，等你验收');
+    const accept: Attention = { kind: 'accept', task_id: 'a', title: '导出' };
+    expect(attentionSummary(accept)).toBe('「导出」交出了候选成果，等你验收');
     expect(attentionTask(accept)).toBe('a');
     const failed: Attention = {
       kind: 'hold',
@@ -683,17 +519,17 @@ describe('attentionSummary', () => {
 });
 
 describe('deliveryReport', () => {
-  const first = { ...attempt(1, 10, 20), done_summary: 'First delivery', candidate_id: 'candidate1' };
+  const first = { ...attempt(1, 10, 20), done_summary: 'First delivery' };
   const second = { ...attempt(2, 30, null), done_summary: 'Second delivery' };
 
-  it('shows the newest report without calling an unpinned candidate ready', () => {
+  it('shows the newest report without calling it handed in before its turn ends', () => {
     expect(deliveryReport([first, second])).toEqual({
       text: 'Second delivery',
       round: 2,
       earlier: false,
       pending: true,
     });
-    expect(deliveryReport([first, { ...second, candidate_id: 'candidate2' }])?.pending).toBe(false);
+    expect(deliveryReport([first, { ...second, end_reason: 'candidate' as const }])?.pending).toBe(false);
   });
 
   it('labels a previous report as old while the latest round has none', () => {
@@ -715,49 +551,5 @@ describe('deliveryReport', () => {
     expect(deliveryReport([second])?.text).toBe('Second delivery');
     expect(deliveryReport([{ ...second, done_summary: null }])).toBeNull();
     expect(deliveryReport([first, { ...second, done_summary: null }])?.earlier).toBe(true);
-  });
-});
-
-describe('trialCandidate', () => {
-  const first = { ...attempt(1, 10, 20), candidate_id: 'capture1' };
-  const capture: Capture = {
-    id: 'capture1',
-    turn_id: 'turn1',
-    role: 'Malkuth',
-    task_id: 't',
-    attempt_id: first.id,
-    kind: 'candidate',
-    base: 'base0000',
-    workspace_id: 'ws',
-    config_version: 1,
-    options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
-    state: 'pinned',
-    commit_id: 'candidate-commit',
-    detail: null,
-    created_at: 20,
-    outside: null,
-  };
-
-  it('uses the named candidate commit, never its rebased verification commit', () => {
-    expect(
-      trialCandidate(
-        detail({ attempts: [first], captures: [capture], verifications: [verification(1, 25, 'passed')] }),
-      ),
-    ).toBe('candidate-commit');
-  });
-
-  it('does not use an earlier candidate or an unpinned/current work capture', () => {
-    expect(trialCandidate(detail({ attempts: [first, attempt(2, 30, null)], captures: [capture] }))).toBeNull();
-    for (const patch of [
-      { state: 'intent' as const },
-      { commit_id: null },
-      { kind: 'turn' as const },
-      { attempt_id: 'att2' },
-      { task_id: 'another-task' },
-      { id: 'another-capture' },
-    ]) {
-      expect(trialCandidate(detail({ attempts: [first], captures: [{ ...capture, ...patch }] }))).toBeNull();
-    }
-    expect(trialCandidate(detail({}))).toBeNull();
   });
 });

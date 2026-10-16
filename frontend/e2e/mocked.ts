@@ -29,14 +29,11 @@ export const role = (taskId: string | null): RoleView => ({
   harness: 'codex',
   model: null,
   effort: null,
-  slot: 'worker',
   task_id: taskId,
   unfinished: null,
   last_turn: null,
   hold: null,
   stalled: null,
-  outside: null,
-  workspace: null,
   queued_messages: 0,
 });
 
@@ -54,21 +51,18 @@ export const task = (id: string, title: string, phase: TaskView['phase'], undeli
   revision: 1,
   created_at: 1,
   closed_at: phase === 'done' ? 9 : null,
-  origin_capture: null,
   assignment: null,
   attempt_seq: phase === 'queued' ? null : 1,
   attempt_open: phase === 'executing',
-  verification: null,
   undelivered_messages: undelivered,
   reply_queued: undelivered > 0,
 });
 
-/** A task whose first round's candidate passed verification. */
+/** A task whose first round handed in its candidate. */
 export const detail = (view: TaskView, undelivered: TaskDetail['undelivered_messages'] = []): TaskDetail => {
   const {
     attempt_seq: _seq,
     attempt_open: _open,
-    verification: _verification,
     undelivered_messages: _undelivered,
     reply_queued: _reply,
     ...task
@@ -84,51 +78,11 @@ export const detail = (view: TaskView, undelivered: TaskDetail['undelivered_mess
         started_at: 1,
         ended_at: 2,
         end_reason: 'candidate',
-        code_start: null,
         done_turn_id: `t-${view.id}`,
         done_summary: '完成\n\n写了 work.txt',
-        trial: null,
-        candidate_id: `c-${view.id}`,
-        conflicts: [],
       },
     ],
-    captures: [
-      {
-        id: `c-${view.id}`,
-        turn_id: `t-${view.id}`,
-        role: 'Malkuth',
-        task_id: view.id,
-        attempt_id: `a-${view.id}`,
-        kind: 'candidate',
-        base: 'base0000',
-        state: 'pinned',
-        commit_id: '1111111111',
-        detail: null,
-        created_at: 2,
-        outside: null,
-        workspace_id: 'workspace',
-        config_version: 1,
-        options: { ignore_guard: false, leave_new_files: false, leave_uncovered: false },
-      },
-    ],
-    verifications: [
-      {
-        id: `v-${view.id}`,
-        task_id: view.id,
-        attempt_id: `a-${view.id}`,
-        capture_id: `c-${view.id}`,
-        base: 'base0000',
-        config_version: 1,
-        commit_id: '2222222222',
-        conflicts: [],
-        state: 'passed',
-        created_at: 3,
-        finished_at: 4,
-      },
-    ],
-    checks: [],
     decisions: [],
-    publications: [],
     undelivered_messages: undelivered,
   };
 };

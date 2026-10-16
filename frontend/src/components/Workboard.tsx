@@ -16,7 +16,7 @@ export function Workboard() {
   const executor = useMainRole();
   const [creating, setCreating] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
-  const active = tasks.filter((t) => ['executing', 'verifying', 'accepting'].includes(t.phase));
+  const active = tasks.filter((t) => ['executing', 'accepting'].includes(t.phase));
   const queued = tasks.filter((t) => t.phase === 'queued').sort((a, b) => (a.queue_pos ?? 0) - (b.queue_pos ?? 0));
   const closed = tasks.filter((t) => t.phase === 'done' || t.phase === 'abandoned').reverse();
   return (

@@ -29,8 +29,7 @@ pub struct Instance {
     pub host: Arc<Host>,
     /// Turns this backend runs right now, with the pids to interrupt them.
     pub running: Mutex<HashMap<String, RunningTurn>>,
-    /// The turn runners, and a project's store jobs: closing the instance waits for them
-    /// (data-model.md §10.4).
+    /// The turn runners: closing the instance waits for them (data-model.md §10.4).
     pub tasks: TaskTracker,
     /// Items of running turns that have started and not completed, for live display. Kept in
     /// memory only; a backend crash loses them (frontend.md §3).
@@ -154,11 +153,6 @@ impl Instance {
     pub fn update_live(&self, change: impl FnOnce(&mut HashMap<String, LiveTurn>)) {
         change(&mut self.live.lock().unwrap());
         self.live_version.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A slot's directory: fixed per slot, outside the user's repository (harness-adapter.md §3).
-    pub fn slot_dir(&self, slot: &str) -> PathBuf {
-        self.data_dir.join("slots").join(slot)
     }
 
     /// Raw CLI output of a turn, kept only when the turn did not end cleanly (data-model.md §7.4).

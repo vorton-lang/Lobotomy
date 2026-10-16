@@ -9,7 +9,6 @@ use lobotomy_core::Caller;
 use lobotomy_core::manager::{AskUser, Cursor, ScheduleManagerTurn, cursors, open_questions};
 use lobotomy_core::report::{FlagMismatch, ReportStatus};
 use lobotomy_core::task::{SendMessage, SetPaused, queued_messages};
-use lobotomy_core::verify::{FinishVerification, StartVerification};
 use lobotomy_core::view::manager::{changes_since, settled};
 use lobotomy_core::view::{Attention, attention, last_event, overview};
 
@@ -31,8 +30,6 @@ fn a_project_settles_when_nothing_moves_on_without_the_user() {
     assert!(!is_settled(&db, &[]), "a turn runs");
     report(&db, &t.turn_id, ReportStatus::Blocked, Some("用哪个端口？")).unwrap();
     end_turn(&db, &t.turn_id);
-    assert!(!is_settled(&db, &[]), "the turn's capture is pending");
-    pin_captures(&db);
     assert!(is_settled(&db, &[]), "the executor waits for the user's answer");
     send(&db, "m1", Some(&task), "用 8080");
     assert!(!is_settled(&db, &[]), "the answer goes in the next turn");
@@ -40,28 +37,10 @@ fn a_project_settles_when_nothing_moves_on_without_the_user() {
     assert!(is_settled(&db, &[]), "a paused task's messages wait");
 }
 
-/// #62: a paused task waits in verification for the user; only checks already running move on.
-#[test]
-fn a_paused_task_waiting_in_verification_settles_once_its_checks_end() {
-    let db = db();
-    let (task, commit) = candidate(&db);
-    assert!(!is_settled(&db, &[]), "the candidate is verified");
-    let v = db.execute(&Caller::Runtime, &StartVerification { task_id: task.clone() }).unwrap();
-    let pause = |key: &str, paused| SetPaused { request_id: key.into(), task_id: task.clone(), paused };
-    db.execute(&Caller::User, &pause("p1", true)).unwrap();
-    assert!(!is_settled(&db, &[]), "the checks still run");
-    let finish = FinishVerification { verification_id: v, commit, conflicts: vec![], checks: vec![], blobs: vec![] };
-    db.execute(&Caller::Runtime, &finish).unwrap();
-    assert!(is_settled(&db, &[]), "the paused task waits for the user");
-    db.execute(&Caller::User, &pause("p2", false)).unwrap();
-    assert!(!is_settled(&db, &[]), "the resumed task is verified again");
-}
-
 #[test]
 fn what_changed_comes_in_a_line_each_with_the_ids_to_attach() {
     let db = db();
-    let (task, commit) = candidate(&db);
-    let v = verify(&db, &task, &commit, vec![], vec![]);
+    let task = candidate(&db);
     send(&db, "m1", Some(&task), "导出要带表头\n第二行不进摘要");
     let read = db.read(|c| changes_since(c, 0)).unwrap();
     assert_eq!((read.after, read.as_of, read.not_listed), (0, db.read(last_event).unwrap(), 0));
@@ -71,7 +50,6 @@ fn what_changed_comes_in_a_line_each_with_the_ids_to_attach() {
         format!("用户建了任务 「加一个 new.txt」（{task}），执行者 Malkuth"),
         "Malkuth 汇报（完成）：完成了，任务".to_owned(),
         "；汇报 cmd_".to_owned(),
-        format!("的验证通过（{v}）"),
         "等待验收".to_owned(),
         "用户直接给 Malkuth 发了消息：导出要带表头".to_owned(),
     ] {
@@ -95,7 +73,6 @@ fn what_changed_comes_in_a_line_each_with_the_ids_to_attach() {
 #[test]
 fn her_question_waits_for_a_message_sent_after_it() {
     let db = db();
-    idle_slot(&db);
     send(&db, "m1", None, "看看现状");
     let t1 = register(&db);
     send(&db, "m2", None, "顺便问一下进度");
@@ -105,16 +82,14 @@ fn her_question_waits_for_a_message_sent_after_it() {
     let open = || db.read(open_questions).unwrap();
     assert_eq!(open()[0].id, id);
     let overview = db.read(|c| overview(c, "lobotomy")).unwrap();
-    let asked = attention(&overview, &[], &[], |_| false);
+    let asked = attention(&overview, &[], |_| false);
     assert!(asked.iter().any(|a| matches!(a, Attention::Question { question, .. } if question.starts_with("导出"))));
     end_turn(&db, &t1.turn_id);
-    pin_captures(&db);
     assert_eq!(common::rejection(db.execute(&asker, &ask)), "turn_ended");
 
     let t2 = register(&db);
     assert_eq!(open().len(), 1, "m2 was sent before the question");
     end_turn(&db, &t2.turn_id);
-    pin_captures(&db);
     send(&db, "m3", None, "先做 CSV");
     register(&db);
     assert!(open().is_empty(), "the answer closes it");
@@ -143,7 +118,6 @@ fn a_mismatch_is_told_apart_from_the_changes() {
 #[test]
 fn a_reply_says_what_it_replies_to() {
     let db = db();
-    idle_slot(&db);
     let earlier = send(&db, "m1", None, "导出要不要带表头？\n第二行");
     let reply = |request_id: &str, reply_to: &str| SendMessage {
         request_id: request_id.into(),
@@ -176,7 +150,6 @@ fn prepared(db: &lobotomy_core::Db) -> ScheduleManagerTurn {
 #[test]
 fn scheduling_commits_notices_cursors_and_turn_once() {
     let db = db();
-    idle_slot(&db);
     let said = send(&db, "m1", None, "user message");
     let command = prepared(&db);
     assert_eq!(rejection(db.execute(&Caller::User, &command)), "forbidden");
@@ -200,7 +173,6 @@ fn scheduling_commits_notices_cursors_and_turn_once() {
 fn a_new_session_or_message_invalidates_preparation_without_consuming_it() {
     for session_changed in [false, true] {
         let db = db();
-        idle_slot(&db);
         send(&db, "m1", None, "waiting");
         let command = prepared(&db);
         if session_changed {
@@ -226,7 +198,6 @@ fn a_new_session_or_message_invalidates_preparation_without_consuming_it() {
 #[test]
 fn a_registration_refusal_rolls_back_notices_and_cursors() {
     let db = db();
-    idle_slot(&db);
     send(&db, "m1", None, "already running");
     register(&db);
     let command = prepared(&db);

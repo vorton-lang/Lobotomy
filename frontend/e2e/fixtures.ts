@@ -46,7 +46,6 @@ async function startBackend(): Promise<Backend & { stop: (keepLog?: string) => P
   const child = spawn(exe, ['--host-dir', host, '--repo', repo], {
     env: {
       ...process.env,
-      LOBOTOMY_TEST_CHECK_GATE: path.join(root, 'check-gate'),
       LOBOTOMY_CODEX: JSON.stringify(['node', fakeCodex]),
       LOBOTOMY_CLAUDE: JSON.stringify(['node', fakeClaude]),
     },

@@ -29,7 +29,7 @@ async fn harness_processes_do_not_see_gh_tokens() {
     // A role turn.
     create_task(&backend.project, "anything");
     ended_turn(&backend.project.db).await;
-    let env = seen_env(&slot(dir.path()));
+    let env = seen_env(&work(dir.path()));
     for name in GH_CREDENTIAL_VARS {
         assert_eq!(env[name], Value::Null, "{name} reached the turn");
     }

@@ -15,7 +15,6 @@ sql_enum! {
     pub enum Phase {
         Queued = "queued",
         Executing = "executing",
-        Verifying = "verifying",
         Accepting = "accepting",
         Done = "done",
         Abandoned = "abandoned",
@@ -48,8 +47,6 @@ pub struct Task {
     pub revision: i64,
     pub created_at: i64,
     pub closed_at: Option<i64>,
-    /// For a task made from changes outside any task: their capture, where its work starts (#14).
-    pub origin_capture: Option<String>,
     /// For a task the manager assigned: what she allowed and when to stop. Its body is the user's
     /// words she quoted.
     pub assignment: Option<Assignment>,
@@ -109,10 +106,10 @@ pub struct Quote {
 
 const TASK_COLUMNS: &str = "id, title, body, executor, phase, paused, \
     (SELECT body FROM question WHERE task_id = task.id AND closed_at IS NULL) AS blocked_reason, criteria_version, \
-                            queue_pos, revision, created_at, closed_at, origin_capture, paused_by, assignment";
+                            queue_pos, revision, created_at, closed_at, paused_by, assignment";
 
 fn task_from_row(r: &Row<'_>) -> rusqlite::Result<Task> {
-    let assignment: Option<String> = r.get(14)?;
+    let assignment: Option<String> = r.get(13)?;
     Ok(Task {
         id: r.get(0)?,
         title: r.get(1)?,
@@ -120,19 +117,18 @@ fn task_from_row(r: &Row<'_>) -> rusqlite::Result<Task> {
         executor: r.get(3)?,
         phase: r.get(4)?,
         paused: r.get::<_, i64>(5)? != 0,
-        paused_by: r.get(13)?,
+        paused_by: r.get(12)?,
         blocked_reason: r.get(6)?,
         criteria_version: r.get(7)?,
         queue_pos: r.get(8)?,
         revision: r.get(9)?,
         created_at: r.get(10)?,
         closed_at: r.get(11)?,
-        origin_capture: r.get(12)?,
         assignment: assignment
             .as_deref()
             .map(serde_json::from_str)
             .transpose()
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(14, rusqlite::types::Type::Text, Box::new(e)))?,
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(13, rusqlite::types::Type::Text, Box::new(e)))?,
     })
 }
 
@@ -171,19 +167,10 @@ pub fn occupant(conn: &Connection, role: &str) -> Result<Option<String>> {
 sql_enum! {
     /// How an attempt ended.
     pub enum AttemptEnd {
-        /// Its executor's done was captured as the candidate.
+        /// Its executor's done is the candidate.
         Candidate = "candidate",
         Abandoned = "abandoned",
     }
-}
-
-/// An executor's suggested way to try a candidate. Recording it never runs the command.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-rs", ts(rename = "TrialRecipe"))]
-pub struct Trial {
-    pub command: String,
-    pub purpose: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -195,26 +182,17 @@ pub struct Attempt {
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub end_reason: Option<AttemptEnd>,
-    /// Where its code starts; `None` when the slot stayed as it was (data-model.md §4.3).
-    pub code_start: Option<String>,
     pub done_turn_id: Option<String>,
-    /// The title and body of that turn's done, for the candidate's commit message.
+    /// The title and body of that turn's done.
     pub done_summary: Option<String>,
-    /// Optional trial from the same first accepted done; the user chooses whether to run it.
-    pub trial: Option<Trial>,
-    pub candidate_id: Option<String>,
-    /// Files its code start left with conflict markers.
-    pub conflicts: Vec<String>,
 }
 
 fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attempt>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, task_id, seq, started_at, ended_at, end_reason, code_start, done_turn_id, candidate_id, conflicts,
-                done_summary, trial
+        "SELECT id, task_id, seq, started_at, ended_at, end_reason, done_turn_id, done_summary
          FROM attempt WHERE task_id = ?1 {filter}"
     ))?;
     let rows = stmt.query_and_then([task_id], |r| {
-        let conflicts: Option<String> = r.get(9)?;
         Ok(Attempt {
             id: r.get(0)?,
             task_id: r.get(1)?,
@@ -222,12 +200,8 @@ fn attempts(conn: &Connection, filter: &str, task_id: &str) -> Result<Vec<Attemp
             started_at: r.get(3)?,
             ended_at: r.get(4)?,
             end_reason: r.get(5)?,
-            code_start: r.get(6)?,
-            done_turn_id: r.get(7)?,
-            done_summary: r.get(10)?,
-            trial: r.get::<_, Option<String>>(11)?.as_deref().map(serde_json::from_str).transpose()?,
-            candidate_id: r.get(8)?,
-            conflicts: conflicts.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default(),
+            done_turn_id: r.get(6)?,
+            done_summary: r.get(7)?,
         })
     })?;
     rows.collect()
@@ -257,8 +231,9 @@ pub fn criteria_text(conn: &Connection, task_id: &str, version: i64) -> Result<S
 }
 
 /// The task as the executor first sees it: the user's words and the current criteria. Sent when
-/// an attempt starts and when the role starts a new native session mid-attempt. The first line
-/// doubles as its summary in the GUI; the task id is in the message header (`compose_input`).
+/// an attempt starts and again when a new native session takes the attempt over (data-model.md
+/// §4.1). The first line doubles as its summary in the GUI; the task id is in the message header
+/// (`compose_input`).
 pub fn brief(conn: &Connection, task: &Task, attempt_seq: i64) -> Result<String> {
     let criteria = criteria_text(conn, &task.id, task.criteria_version)?;
     let (title, version) = (&task.title, task.criteria_version);
@@ -326,23 +301,6 @@ fn store_quotes(cx: &Cx<'_>, quotes: &[Quote], task_id: Option<&str>, message_id
         )?;
     }
     Ok(())
-}
-
-/// What the executor is told when an attempt starts, and again when a new native session takes
-/// the attempt over (data-model.md §4.1): the brief, then what is special about where its code
-/// starts. A new session used to get the brief alone and never heard of conflict markers in its
-/// slot (#16).
-pub fn attempt_brief(conn: &Connection, task: &Task, seq: i64, conflicts: &[String]) -> Result<String> {
-    let mut text = brief(conn, task, seq)?;
-    if task.origin_capture.is_some() && seq == 1 {
-        text.push_str("\n\n");
-        text.push_str(prompts::STARTS_FROM_OUTSIDE_CHANGES);
-    }
-    if !conflicts.is_empty() {
-        text.push_str("\n\n");
-        text.push_str(&prompts::conflicts_at_start(conflicts));
-    }
-    Ok(text)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -437,34 +395,52 @@ fn bump_revision(cx: &Cx<'_>, task_id: &str) -> Result<()> {
 }
 
 /// Puts the task into execution with a new attempt (data-model.md §4.1). Every way into
-/// execution goes through here: a start, a reopen, a failed verification, a send-back. A
-/// question the executor asked in an earlier attempt no longer stands (#16). The caller emits
-/// `attempt.started` once the attempt's slot and message are in place.
-pub(crate) fn enter_execution(
-    cx: &mut Cx<'_>,
-    task: &Task,
-    code_start: Option<&str>,
-    conflicts: &[String],
-) -> Result<AttemptStarted> {
+/// execution goes through here: a start, a reopen, a send-back. A question the executor asked in
+/// an earlier attempt no longer stands (#16). The caller emits `attempt.started` once the
+/// attempt's message is in place.
+pub(crate) fn enter_execution(cx: &mut Cx<'_>, task: &Task) -> Result<AttemptStarted> {
     crate::question::retire_task(cx, &task.id)?;
     let seq: i64 =
         cx.tx
             .query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM attempt WHERE task_id = ?1", [&task.id], |r| r.get(0))?;
     let attempt_id = new_id("att");
-    let conflicts = (!conflicts.is_empty()).then(|| serde_json::to_string(conflicts)).transpose()?;
     cx.tx.execute(
-        "INSERT INTO attempt (id, task_id, seq, started_at, code_start, conflicts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![attempt_id, task.id, seq, cx.now, code_start, conflicts],
+        "INSERT INTO attempt (id, task_id, seq, started_at) VALUES (?1, ?2, ?3, ?4)",
+        params![attempt_id, task.id, seq, cx.now],
     )?;
     cx.tx.execute("UPDATE task SET phase = 'executing', queue_pos = NULL WHERE id = ?1", [&task.id])?;
     bump_revision(cx, &task.id)?;
     Ok(AttemptStarted { attempt_id, seq })
 }
 
+/// The turn that reported `done` has ended: its attempt ends with that done as the candidate, and
+/// the task waits for acceptance (data-model.md §4.1). The done of an attempt that is no longer
+/// open changes nothing (data-model.md §3.1).
+pub(crate) fn done_turn_ended(cx: &mut Cx<'_>, turn: &crate::turn::Turn) -> Result<()> {
+    let (Some(task_id), Some(attempt_id)) = (&turn.task_id, &turn.attempt_id) else {
+        return Ok(());
+    };
+    let task = load_task(cx.tx, task_id)?;
+    let current = task.phase == Phase::Executing
+        && open_attempt(cx.tx, task_id)?
+            .is_some_and(|a| &a.id == attempt_id && a.done_turn_id.as_deref() == Some(turn.id.as_str()));
+    if !current {
+        return Ok(());
+    }
+    cx.tx.execute(
+        "UPDATE attempt SET ended_at = ?2, end_reason = 'candidate' WHERE id = ?1",
+        params![attempt_id, cx.now],
+    )?;
+    cx.tx.execute("UPDATE task SET phase = 'accepting' WHERE id = ?1", [&task.id])?;
+    bump_revision(cx, &task.id)?;
+    cx.emit("task.accepting", &task.id, json!({ "attempt_id": attempt_id, "turn_id": turn.id }))?;
+    Ok(())
+}
+
 /// Closes the task, accepted (`Done`) or abandoned (data-model.md §4.2, §9.2). Every way out goes
 /// through here: the executor is freed, the task's sessions end (#11) and the messages still
 /// queued for it are dropped (#14). An abandoned task's open attempt ends with it; an accepted
-/// task's attempt ended when its candidate was captured.
+/// task's attempt ended when its done turn ended.
 pub(crate) fn close_task(cx: &mut Cx<'_>, task: &Task, phase: Phase) -> Result<()> {
     debug_assert!(phase.is_closed(), "close_task with {}", phase.as_str());
     if phase == Phase::Abandoned {
@@ -584,38 +560,6 @@ fn create_task(
     )?;
     cx.emit("task.created", &id, json!({ "executor": executor }))?;
     Ok(id)
-}
-
-/// "建成任务": a task made from the changes a turn outside any task left in its executor's slot.
-/// Its first attempt starts from them, as a reopened task starts from its last candidate
-/// (data-model.md §4.6, #14).
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
-pub struct AdoptOutsideChanges {
-    pub request_id: String,
-    pub capture_id: String,
-    pub title: String,
-    pub body: String,
-    pub criteria: String,
-}
-
-impl Command for AdoptOutsideChanges {
-    const NAME: &'static str = "adopt_outside_changes";
-    type Output = Created;
-
-    fn idem_key(&self) -> Option<&str> {
-        Some(&self.request_id)
-    }
-
-    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<Created> {
-        caller.require_user()?;
-        let capture = crate::capture::settle_outside(cx, &self.capture_id, crate::capture::Outside::Adopted)?;
-        // The changes are in this role's slot; its executor carries on with them.
-        let id = create_task(cx, caller, &self.title, &self.body, &self.criteria, &capture.role)?;
-        cx.tx.execute("UPDATE task SET origin_capture = ?2 WHERE id = ?1", params![id, capture.id])?;
-        record_decision(cx, "adopt_outside_changes", Some(&id), caller, json!({ "capture_id": capture.id }))?;
-        Ok(Created { id })
-    }
 }
 
 /// Edits the completion criteria. Each edit is a new version; existing evidence stays bound to
@@ -945,8 +889,7 @@ impl Command for MoveInQueue {
     }
 }
 
-/// Stops all further work on the task and keeps its evidence. Unaccepted work never reached the
-/// integration version, so nothing needs reverting (roles-and-tasks.md §2.2).
+/// Stops all further work on the task and keeps its evidence (roles-and-tasks.md §2.2).
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Abandon {
@@ -976,8 +919,7 @@ impl Command for Abandon {
     }
 }
 
-/// Reopens a closed task. The next attempt starts from the latest candidate rebased onto the
-/// integration version (data-model.md §4.6); that is resolved when the attempt starts.
+/// Reopens a closed task: it queues again for its executor (data-model.md §4.6).
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Reopen {
@@ -1011,27 +953,115 @@ impl Command for Reopen {
     }
 }
 
+/// Accepting closes the task as done (data-model.md §9.2 "验收"). The request names the criteria
+/// version the caller saw; it must still be current.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+pub struct Accept {
+    pub request_id: String,
+    pub task_id: String,
+    pub criteria_version: i64,
+    /// The user's messages to the executor that it never got, which the user lets go with this
+    /// acceptance; exactly those there are (data-model.md §4.2, #14).
+    #[serde(default)]
+    pub dropping: Vec<String>,
+}
+
+impl Command for Accept {
+    const NAME: &'static str = "accept";
+    type Output = ();
+
+    fn idem_key(&self) -> Option<&str> {
+        Some(&self.request_id)
+    }
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
+        caller.require_user_or_manager()?;
+        let task = load_task(cx.tx, &self.task_id)?;
+        if task.phase != Phase::Accepting {
+            return Err(Error::rejected("not_accepting", format!("task {} is {}", task.id, task.phase.as_str())));
+        }
+        if task.criteria_version != self.criteria_version {
+            return Err(Error::rejected(
+                "stale_criteria",
+                format!("criteria are at version {}, not {}", task.criteria_version, self.criteria_version),
+            ));
+        }
+        // A message the user sent that the executor never got must not slip away unseen: the
+        // user lets go of exactly those there are, or sends the task back with them.
+        let undelivered = undelivered_user_messages(cx.tx, &task.id)?;
+        // Only the user lets the user's words go; the manager sends the task back with them, or
+        // asks.
+        if !undelivered.is_empty() && !matches!(caller, Caller::User) {
+            return Err(Error::rejected(
+                "undelivered_messages",
+                format!(
+                    "the executor never got {} message(s) of the user; only the user lets them go",
+                    undelivered.len()
+                ),
+            ));
+        }
+        let mut pending: Vec<&str> = undelivered.iter().map(|m| m.id.as_str()).collect();
+        let mut letting_go: Vec<&str> = self.dropping.iter().map(String::as_str).collect();
+        pending.sort_unstable();
+        letting_go.sort_unstable();
+        if pending != letting_go {
+            return Err(Error::rejected(
+                "undelivered_messages",
+                format!("the executor never got {} message(s): {}", pending.len(), pending.join(", ")),
+            ));
+        }
+        let detail = json!({
+            "criteria_version": self.criteria_version,
+            "dropped_messages": dropped_detail(&undelivered),
+        });
+        let decision = record_decision(cx, "accept", Some(&task.id), caller, detail)?;
+        close_task(cx, &task, Phase::Done)?;
+        cx.emit("task.done", &task.id, json!({ "decision_id": decision }))?;
+        Ok(())
+    }
+}
+
+/// Sends the candidate back with the user's or the manager's reason; the next attempt starts
+/// (data-model.md §9.2 "退回"). The native session carries on; the executor has seen the brief.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+pub struct SendBack {
+    pub request_id: String,
+    pub task_id: String,
+    pub reason: String,
+}
+
+impl Command for SendBack {
+    const NAME: &'static str = "send_back";
+    type Output = ();
+
+    fn idem_key(&self) -> Option<&str> {
+        Some(&self.request_id)
+    }
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
+        caller.require_user_or_manager()?;
+        let task = load_task(cx.tx, &self.task_id)?;
+        if task.phase != Phase::Accepting {
+            return Err(Error::rejected("not_accepting", format!("task {} is {}", task.id, task.phase.as_str())));
+        }
+        record_decision(cx, "send_back", Some(&task.id), caller, json!({ "reason": self.reason }))?;
+        let by = prompts::sender(&caller.scope()).to_owned();
+        let started = enter_execution(cx, &task)?;
+        queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), &prompts::sent_back(&by, &self.reason))?;
+        cx.emit("attempt.started", &task.id, json!({ "attempt_id": started.attempt_id, "seq": started.seq }))?;
+        Ok(())
+    }
+}
+
 // ---- runtime commands ----
 
-/// Starts a new attempt: occupies the executor, moves the task into execution, plans the slot at
-/// the attempt's code start and puts the brief in the executor's inbox (data-model.md §2, §4.1,
-/// §4.6; roles-and-tasks.md §2.2). The slot goes to this work only once its current content is
-/// captured (harness-adapter.md §3).
+/// Starts a new attempt: occupies the executor, moves the task into execution and puts the brief
+/// in the executor's inbox (data-model.md §2, §4.1; roles-and-tasks.md §2.2).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StartAttempt {
     pub task_id: String,
-    /// For a reopened task with an earlier candidate: that candidate rebased onto the
-    /// integration version, which the runtime prepares in the store first (data-model.md §4.6).
-    /// Every other attempt starts from the integration version.
-    pub code_start: Option<CodeStart>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CodeStart {
-    pub commit: String,
-    /// The integration version it was rebased onto.
-    pub base: String,
-    pub conflicts: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -1046,7 +1076,6 @@ impl Command for StartAttempt {
 
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<AttemptStarted> {
         caller.require_runtime()?;
-        crate::display::require_current(cx.tx)?;
         let task = load_task(cx.tx, &self.task_id)?;
         if task.phase != Phase::Queued {
             return Err(Error::rejected("not_queued", format!("task {} is {}", task.id, task.phase.as_str())));
@@ -1057,34 +1086,14 @@ impl Command for StartAttempt {
         if let Some(other) = occupant(cx.tx, &task.executor)? {
             return Err(Error::rejected("role_busy", format!("{} is occupied by {other}", task.executor)));
         }
-        // The slot is about to be rewritten.
-        crate::workspace::require_slot_free(cx.tx, &task.executor, None)?;
-        let project = crate::project::require_project(cx.tx)?;
-        let earlier = crate::verify::work_so_far(cx.tx, &task.id)?;
-        let start = match (&earlier, &self.code_start) {
-            (Some(_), Some(start)) if start.base == project.integration => start.clone(),
-            (Some(_), _) => {
-                return Err(Error::rejected(
-                    "code_start_needed",
-                    "rebase the task's work so far onto the integration version",
-                ));
-            }
-            (None, _) => {
-                CodeStart { commit: project.integration.clone(), base: project.integration.clone(), conflicts: vec![] }
-            }
-        };
-
-        let started = enter_execution(cx, &task, Some(&start.commit), &start.conflicts)?;
+        let started = enter_execution(cx, &task)?;
         let seq = started.seq;
         cx.tx.execute(
             "INSERT INTO occupancy (role, task_id, since) VALUES (?1, ?2, ?3)",
             params![task.executor, task.id, cx.now],
         )?;
-        if let Some(slot) = crate::workspace::role_slot(cx.tx, &task.executor)? {
-            crate::workspace::plan(cx, &slot, &start.commit, &start.base, Some(&task.id))?;
-        }
-        let brief = attempt_brief(cx.tx, &task, seq, &start.conflicts)?;
-        queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), &brief)?;
+        let text = brief(cx.tx, &task, seq)?;
+        queue_message(cx, &task.executor, &Caller::Runtime, Some(&task.id), &text)?;
         cx.emit("attempt.started", &task.id, json!({ "attempt_id": started.attempt_id, "seq": seq }))?;
         Ok(started)
     }
