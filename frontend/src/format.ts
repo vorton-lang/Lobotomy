@@ -59,12 +59,6 @@ export function roleLook(role: RoleView, task: TaskView | undefined): Look {
   return task ? PHASE_LOOK[task.phase] : 'idle';
 }
 
-export function turnLook(turn: Turn): Look {
-  if (turn.state === 'registered' || turn.state === 'running') return 'run';
-  if (turn.state === 'unknown') return 'wait';
-  return turn.outcome === 'completed' ? 'idle' : 'fail';
-}
-
 /** Roles with a color of their own; any other role gets one by its name. Six colors in all. */
 const ROLE_HUE: Record<string, number> = { Angela: 0, Malkuth: 1, Binah: 2, Yesod: 3 };
 

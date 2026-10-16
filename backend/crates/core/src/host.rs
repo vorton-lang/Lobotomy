@@ -70,10 +70,6 @@ impl HostDb {
         Self::init(conn)
     }
 
-    pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
-    }
-
     fn init(mut conn: Connection) -> Result<Self> {
         conn.busy_timeout(Duration::from_secs(5))?;
         crate::db::migrate(&mut conn, MIGRATIONS)?;
