@@ -37,28 +37,6 @@ test('scrolling up on a slow machine loads every older page', async ({ page, bac
   expect(reached).toBe(true);
 });
 
-test('a task goes from creation to acceptance', async ({ page, backend }) => {
-  await open(page, backend);
-  // Pressing twice creates one task (#16).
-  await createTask(page, '写 work.txt', 'FAKE:done', { twice: true });
-  await expect(page.locator('.task-line', { hasText: '写 work.txt' })).toHaveCount(1);
-
-  // Malkuth's report shows in the thread; the turn's end shows too; the candidate waits for
-  // acceptance.
-  await expect(page.locator('.report.done')).toContainText('写了 work.txt');
-  await expect(page.locator('.turn-divider.completed').first()).toHaveAttribute('title', /turn 正常结束/);
-  const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
-  await expect(card).toBeVisible();
-  await card.getByRole('button', { name: '查看并验收' }).click();
-
-  const panel = taskPanel(page, '写 work.txt');
-  await expect(panel.getByRole('region', { name: '交付说明' })).toContainText('写了 work.txt');
-  await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
-  await panel.getByRole('button', { name: '验收', exact: true }).click();
-  await expect(panel.locator('.phase')).toHaveText('已完成');
-  await expect(page.getByText('现在没有需要你处理的事。')).toBeVisible();
-});
-
 // The panel stays open from one candidate to the next: what it shows is always the candidate the
 // "验收" button would accept (#13).
 test('an open task panel follows the candidate through a send-back', async ({ page, backend }) => {
@@ -132,26 +110,4 @@ test('a long command stays short until opened', async ({ page, backend }) => {
   await expect.poll(clipboard).not.toBe('');
   whole(await clipboard());
   await viewer.getByRole('button', { name: '关闭' }).click();
-});
-
-// Ctrl+F finds what the virtualized thread has not loaded, loads it and scrolls there
-// (frontend.md §4.1 "搜索").
-test('search goes to a match pages back', async ({ page, backend }) => {
-  await open(page, backend);
-  await createTask(page, '搜索目标任务', 'FAKE:many=250');
-  // The turn is over: its brief is now more than a page above the newest item.
-  await expect(page.locator('.attention .card').filter({ hasText: '还没有完成' })).toBeVisible();
-  const brief = page.locator('.thread .row', { hasText: '任务：搜索目标任务（第 1 轮执行）' });
-  await expect(brief).toHaveCount(0);
-
-  await page.keyboard.press('Control+f');
-  const bar = page.getByRole('search');
-  await bar.getByLabel('搜索对话').fill('搜索目标任务');
-  await expect(bar.locator('.search-count')).toHaveText('1 / 1');
-  await expect(brief).toBeVisible();
-  await expect.poll(() => page.evaluate(() => CSS.highlights.get('search-current')?.size ?? 0)).toBeGreaterThan(0);
-
-  await bar.getByLabel('搜索对话').press('Escape');
-  await expect(bar).toBeHidden();
-  expect(await page.evaluate(() => CSS.highlights.has('search-current'))).toBe(false);
 });

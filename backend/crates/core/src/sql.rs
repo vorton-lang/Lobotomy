@@ -48,22 +48,3 @@ macro_rules! sql_enum {
 }
 
 pub(crate) use sql_enum;
-
-#[cfg(test)]
-mod tests {
-    use crate::task::Phase;
-
-    #[test]
-    fn one_name_serves_the_database_serde_and_parse() {
-        for phase in [Phase::Queued, Phase::Executing, Phase::Abandoned] {
-            assert_eq!(Phase::parse(phase.as_str()).unwrap(), phase);
-            assert_eq!(serde_json::to_value(phase).unwrap(), phase.as_str());
-        }
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        let read: Phase = conn.query_row("SELECT ?1", [Phase::Accepting], |r| r.get(0)).unwrap();
-        assert_eq!(read, Phase::Accepting);
-        assert!(matches!(Phase::parse("reviewing"), Err(crate::Error::Invariant(_))));
-        let unknown: rusqlite::Result<Phase> = conn.query_row("SELECT 'reviewing'", [], |r| r.get(0));
-        assert!(unknown.is_err(), "a name the code does not know fails the read");
-    }
-}

@@ -333,23 +333,11 @@ fn bullets(lines: &[String]) -> String {
 mod tests {
     use crate::host::{Cli, HarnessConfig};
     use lobotomy_core::Caller;
-    use lobotomy_core::Db;
     use lobotomy_core::ledger::{AddLedgerEntry, LedgerKind};
-    use lobotomy_core::role::list_roles;
     use lobotomy_core::task::SendMessage;
     use lobotomy_core::turn::{EndTurn, NewNativeSession, Outcome, RegisterTurn, SessionIdentified, load_turn};
 
     use super::*;
-
-    #[test]
-    fn her_database_holds_only_her_role() {
-        let db = Db::open_in_memory().unwrap();
-        db.write(seed).unwrap();
-        db.write(seed).unwrap();
-        let roles = db.read(list_roles).unwrap();
-        let names: Vec<_> = roles.iter().map(|r| (r.name.as_str(), r.kind.as_str())).collect();
-        assert_eq!(names, [(ROLE, "manager")]);
-    }
 
     #[tokio::test]
     async fn a_late_session_or_message_cannot_skip_the_first_turns_ledger() {

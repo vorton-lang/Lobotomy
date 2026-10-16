@@ -73,6 +73,7 @@ spikes/                  实测用的探针脚本
   - 端到端测试：Windows 上用本机 Edge，Ubuntu 上用 Playwright 自带的 Chromium，Electron 在 Xvfb 下运行。
   - 推送到 main 时另外运行性能基线，只记录，不设门槛（perf-baseline.md）。
 - 后端按 `backend/rustfmt.toml` 统一格式（行宽 120）。
-- 后端测试用假 CLI 驱动真实的后端，覆盖运行时的各条路径。真实 CLI 的测试消耗订阅额度，默认不运行（harness-adapter.md §2）。
+- **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：只保留回归测试，没有拦住过问题的测试已经退役（AGENTS.md"测试的目的"）。
+- 后端测试用假 CLI 驱动真实的后端。真实 CLI 的测试已随测试退役删除，留下的实测结果见 harness-adapter.md §2。
 - 前端的单元测试与端到端测试见 frontend.md §7.13。
 - 把后端的几个测试入口合并为一个二进制，试过两次，运行时间没有明显缩短，构建反而更慢，已撤回（[#24](https://github.com/vorton-lang/Lobotomy/pull/24)）。

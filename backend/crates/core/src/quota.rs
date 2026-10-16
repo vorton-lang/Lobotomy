@@ -111,29 +111,3 @@ fn load(conn: &Connection, harness: &str) -> Result<Domain> {
         .optional()?;
     Ok(row.unwrap_or_else(|| Domain::open(harness)))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_rejection_blocks_only_its_domain_once() {
-        let host = HostDb::open_in_memory().unwrap();
-        assert!(host.block("claude", Some(100), "limit", 10).unwrap());
-        let d = host.domain("claude").unwrap();
-        assert_eq!((d.is_blocked(), d.resets_at), (true, Some(100)));
-        // A second rejection while blocked is not a new block.
-        assert!(!host.block("claude", Some(200), "limit", 11).unwrap());
-        assert_eq!(host.domain("claude").unwrap().blocked_at, Some(10));
-        assert!(!host.domain("codex").unwrap().is_blocked(), "the other domain stays open");
-    }
-
-    #[test]
-    fn only_a_passed_check_opens_the_domain() {
-        let host = HostDb::open_in_memory().unwrap();
-        host.block("claude", Some(100), "limit", 0).unwrap();
-        let d = host.record_check("claude", &CheckOutcome::Rejected { resets_at: Some(200) }).unwrap();
-        assert_eq!((d.is_blocked(), d.resets_at), (true, Some(200)));
-        assert!(!host.record_check("claude", &CheckOutcome::Passed).unwrap().is_blocked());
-    }
-}

@@ -237,48 +237,6 @@ test('back to the latest after reading back', async ({ page }) => {
   await expect(report).toContainText('写了 work.txt');
 });
 
-// Once the next task starts, the open panel of the accepted one says so and leads to it (#18).
-test('a finished task’s panel leads to the task now in work', async ({ page }) => {
-  const first = task('task1', '第一个任务', 'accepting');
-  const second = task('task2', '第二个任务', 'queued');
-  const details: Record<string, TaskDetail> = { task1: detail(first), task2: detail(second) };
-  const state: State = {
-    snapshot: {
-      roles: [role('task1')],
-      tasks: [first, second],
-      attention: [{ kind: 'accept', task_id: 'task1', title: first.title }],
-    },
-    details,
-    command: ({ name }) => {
-      if (name !== 'accept') throw new Error(name);
-      // What the backend does on acceptance: the task closes and the executor takes the next one.
-      state.snapshot = {
-        roles: [role('task2')],
-        tasks: [
-          { ...first, phase: 'done' },
-          { ...second, phase: 'executing' },
-        ],
-        attention: [],
-      };
-      details.task1 = detail({ ...first, phase: 'done' });
-      return null;
-    },
-  };
-  await openMocked(page, state);
-  await page
-    .locator('.attention .card')
-    .filter({ hasText: '「第一个任务」交出了候选成果' })
-    .getByRole('button', { name: '查看并验收' })
-    .click();
-  const panel = page.getByRole('region', { name: '第一个任务', exact: true });
-  await expect(panel.locator('.now-running')).toHaveCount(0);
-  await panel.getByRole('button', { name: '验收', exact: true }).click();
-  await expect(panel.locator('.phase')).toHaveText('已完成');
-  await expect(panel.locator('.now-running')).toContainText('「第二个任务」');
-  await panel.getByRole('button', { name: '查看当前任务' }).click();
-  await expect(page.getByRole('region', { name: '第二个任务', exact: true })).toBeVisible();
-});
-
 // A message the executor never got does not slip away at acceptance: the user lets it go
 // explicitly, and acceptance names it (#14).
 test('a message the executor never got waits for the user at acceptance', async ({ page }) => {

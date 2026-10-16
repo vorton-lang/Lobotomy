@@ -34,7 +34,6 @@ thiserror = "2"
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "io-util", "time", "sync", "fs", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ulid = "3"

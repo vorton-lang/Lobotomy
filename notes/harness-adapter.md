@@ -149,7 +149,7 @@ Codex（消息经 stdin，位置参数为 -）
 
 adapter 按平台自动探测两家 CLI，并允许手动配置。`CLAUDE_BIN`、`CODEX_BIN` 指定二进制；`LOBOTOMY_CLAUDE`、`LOBOTOMY_CODEX`（程序与参数的 JSON 数组）整个替换启动命令，GUI 的端到端测试用它们换上假 CLI。
 
-每次启动记录 CLI 的版本：未实现，列入 roadmap 待排。现在只有 MCP 契约测试（§2）调用 `--version`。
+每次启动记录 CLI 的版本：未实现，列入 roadmap 待排。原来只有 MCP 契约测试（§2）调用 `--version`，它已于 2026-10-17 随测试退役删除（#86）。
 
 Windows 实测：Claude 经 scoop shim 位于 PATH；Codex 不在 PATH 上，位于 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，hash 目录随 desktop app 更新变化，版本可能在运行期间升级。
 
@@ -245,9 +245,9 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 **测试**：
 
-- [backend/crates/harness/tests/process.rs](../backend/crates/harness/tests/process.rs)（Windows）：挂起、存活检查、关闭 Job 结束孙进程。
 - [backend/crates/harness/tests/process_tree.rs](../backend/crates/harness/tests/process_tree.rs)：在两个平台上，确认结束时 CLI 与它的子进程都已退出；丢弃进程的所有者时也结束整个进程树。
-- [backend/crates/lobotomyd/tests/backend.rs](../backend/crates/lobotomyd/tests/backend.rs)：经辅助进程中断。
+- [backend/crates/lobotomyd/tests/backend.rs](../backend/crates/lobotomyd/tests/backend.rs)：归档时经辅助进程中断，不响应中断的 CLI 在宽限期后连同进程树结束。
+- 原来 `harness/tests/process.rs`（Windows）测挂起、存活检查和关闭 Job 时结束孙进程，backend.rs 另测经辅助进程中断一个 turn。它们于 2026-10-17 随测试退役删除（#86）。
 
 ### 1.9 权限模式
 
@@ -296,18 +296,14 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 - `Host` 只接受 loopback 名称，防止 DNS 重绑定。
 - 两家 CLI 协商的协议版本不同（§1.4）：Claude 已使用 2026-07-28 的无状态协议，Codex 仍使用 2025-06-18 的 `initialize` 握手。stateless 模式对两者逐个请求应答，两者都能工作。
 
-**契约测试**：[backend/crates/lobotomyd/tests/mcp_contract.rs](../backend/crates/lobotomyd/tests/mcp_contract.rs)。用真实 CLI 跑一个 turn，确认三点：CLI 调用了工具，处理函数从 URL 取到了 token；所有 HTTP 交换都成功；工具结果到达了模型。测试打印协商的协议版本和每个 HTTP 交换。它消耗订阅额度，默认不运行。CLI 或 rmcp 升级后重跑：
+**契约测试**：原来在 `backend/crates/lobotomyd/tests/mcp_contract.rs`。它用真实 CLI 跑一个 turn，确认三点：CLI 调用了工具，处理函数从 URL 取到了 token；所有 HTTP 交换都成功；工具结果到达了模型。测试打印协商的协议版本和每个 HTTP 交换。它消耗订阅额度，默认不运行。**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：它随测试退役删除。怎样对照真实 CLI 检查 adapter，随 worker 层的替换再定。
 
-```text
-cargo test -p lobotomyd --test mcp_contract -- --ignored --nocapture --test-threads 1
-```
-
-结果：
+留下的结果：
 
 - 2026-10-04：Claude Code 2.1.283 与 Codex CLI 0.159.2 都通过。
 - 2026-10-10：Claude 的契约测试用适配器拼出的参数（MCP 配置文件、权限、能力裁剪），通过，协商的协议版本为 2026-07-28。
 
-真实 CLI 的后端测试（默认不运行，消耗订阅额度）：
+真实 CLI 的后端测试（默认不运行，消耗订阅额度）。它们也于 2026-10-17 随测试退役删除（#86），下面是留下的结果：
 
 - `a_real_codex_turn_reports_done`、`a_real_claude_turn_reports_done`、`a_real_claude_turn_is_interrupted_and_continued`。2026-10-10 都通过：真实 Claude 走完建任务、done、采集、验证到等待验收；输出中没有解析器不认识的事件。
 - `a_real_quota_check_passes`：真实 Codex 的额度检查调用。

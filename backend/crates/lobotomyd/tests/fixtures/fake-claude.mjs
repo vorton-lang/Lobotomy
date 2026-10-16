@@ -5,12 +5,10 @@
 // The input decides what happens:
 //   FAKE:done     writes work.txt and reads it back, reports done, completes the turn;
 //                 FAKE:text=<word> puts that word in the file instead of "hi"
-//   FAKE:blocked  asks the user "空值怎么处理？" through org_report, then completes the turn
 //   FAKE:wait=<ms>  waits that long before anything else
 //   FAKE:fail     ends the turn with an error
 //   FAKE:quota    the session limit: a refused rate_limit_event, Claude Code's made-up error
 //                 message, and a result with status 429 (data-model.md §8.3)
-//   FAKE:sleep    starts a command and waits; Ctrl+C ends it with an error result, as Claude does
 //   FAKE:textstream=<s>  a reply that streams for s seconds, a line every 20 ms; each line carries
 //                 the time it was written, so the GUI's lag can be measured (perf-baseline.md)
 //   FAKE:marker=<w>  the turn's last reply is "bench <w>"
@@ -102,21 +100,6 @@ if (input.includes('FAKE:quota')) {
   emit({ type: 'assistant', message: { id: 'msg_synthetic', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: limit }] }, parent_tool_use_id: null, error: 'rate_limit' });
   emit({ type: 'result', subtype: 'success', is_error: true, api_error_status: 429, result: limit });
   process.exit(1);
-}
-
-if (input.includes('FAKE:sleep')) {
-  // Claude Code 2.1.283 ends an interrupted turn with an error result (2026-10-10).
-  process.on('SIGINT', () => {
-    emit({ type: 'result', subtype: 'error_during_execution', is_error: true, stop_reason: 'tool_use' });
-    process.exit(130);
-  });
-  message({ type: 'tool_use', id: 'toolu_sleep', name: 'PowerShell', input: { command: 'sleep' } });
-  await new Promise(r => setTimeout(r, 120_000));
-  process.exit(0);
-}
-
-if (input.includes('FAKE:blocked')) {
-  await report({ title: '需要你决定', body: '有两种做法。', status: 'blocked', blocked_on: '空值怎么处理？' });
 }
 
 if (input.includes('FAKE:done')) {

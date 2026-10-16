@@ -17,14 +17,3 @@ pub fn new_id(prefix: &str) -> String {
 pub fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ids_sort_in_the_order_they_were_made() {
-        let ids: Vec<String> = (0..1000).map(|_| new_id("cap")).collect();
-        assert!(ids.windows(2).all(|w| w[0] < w[1]));
-    }
-}

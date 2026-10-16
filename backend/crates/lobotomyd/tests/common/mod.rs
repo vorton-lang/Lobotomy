@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lobotomy_core::task::{CreateTask, Phase, StartAttempt, load_task};
+use lobotomy_core::task::CreateTask;
 use lobotomy_core::turn::{Turn, TurnState, last_turn};
 use lobotomy_core::{Caller, Db};
 use lobotomyd::host::{Cli, HarnessConfig, Host};
@@ -33,22 +33,6 @@ pub fn fake_codex_with(flags: &[&str]) -> HarnessConfig {
 
 pub fn fake_codex() -> HarnessConfig {
     fake_codex_with(&[])
-}
-
-/// The real CLIs, for the ignored tests.
-pub fn real_clis() -> HarnessConfig {
-    HarnessConfig {
-        claude: Cli {
-            command: vec![lobotomy_harness::claude::locate().to_string_lossy().into_owned()],
-            reasoning_effort: Some("low".into()),
-        },
-        codex: Cli {
-            command: vec![lobotomy_harness::codex::locate().to_string_lossy().into_owned()],
-            reasoning_effort: Some("low".into()),
-        },
-        interrupt_helper: vec![env!("CARGO_BIN_EXE_lobotomyd").into(), "ctrl-c".into()],
-        probe_timeout: Duration::from_secs(120),
-    }
 }
 
 pub fn git(dir: &Path, args: &[&str]) -> String {
@@ -153,12 +137,6 @@ pub fn create_task(project: &Project, body: &str) -> String {
     task
 }
 
-/// What the scheduler does when the role is free: starts the attempt. For setting up "the last
-/// run" without a running backend.
-pub async fn start_attempt(project: &Arc<Project>, task: &str) {
-    project.db.execute(&Caller::Runtime, &StartAttempt { task_id: task.into() }).unwrap();
-}
-
 pub fn last(db: &Db) -> Option<Turn> {
     db.read(|c| last_turn(c, "Malkuth")).unwrap()
 }
@@ -233,13 +211,6 @@ pub async fn wait_for_backend<T>(project: &Project, what: &str, check: impl FnMu
 
 pub async fn ended_turn(db: &Db) -> Turn {
     wait_for("the turn to end", || last(db).filter(|t| t.state == TurnState::Ended)).await
-}
-
-pub async fn phase(db: &Db, task: &str, phase: Phase) {
-    wait_for(&format!("task {task} to be {}", phase.as_str()), || {
-        (db.read(|c| load_task(c, task)).unwrap().phase == phase).then_some(())
-    })
-    .await
 }
 
 /// Malkuth's working directory in the project of [`open_project`].

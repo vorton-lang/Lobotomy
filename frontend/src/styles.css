@@ -1,6 +1,6 @@
 /* Design tokens (notes/ui-ux-plan.md §3). Colors are steps of Radix Colors 3.0 (MIT): sand for
    the neutrals, indigo for the accent, blue, amber, red and grass for the states. Rules below use
-   these names only; a literal color outside the two :root blocks fails src/styles.test.ts. */
+   these names only, never a literal color outside the two :root blocks (notes/frontend.md §7.15). */
 :root {
   --bg: #fdfdfc; /* sand 1: the conversation, the page */
   --bg-rail: #f9f9f8; /* sand 2: the side columns */

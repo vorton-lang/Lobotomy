@@ -33,15 +33,6 @@ async function render(text: string, streaming: boolean): Promise<string> {
 }
 
 describe('Markdown worker', () => {
-  it.each([
-    ['**world', '<strong>world</strong>', '**world'],
-    ['*world', '<em>world</em>', '*world'],
-    ['Use `const x', 'Use <code>const x</code>', 'Use `const x'],
-  ])('repairs %s only while streaming', async (text, live, complete) => {
-    expect(await render(text, true)).toBe(`<p>${live}</p>\n`);
-    expect(await render(text, false)).toBe(`<p>${complete}</p>\n`);
-  });
-
   it('says whether live text needed a repair', async () => {
     expect((await respond('**open', true)).repaired).toBe(true);
     expect((await respond('done **ok**', true)).repaired).toBe(false);
@@ -61,30 +52,6 @@ describe('Markdown worker', () => {
     expect(await render('*a\n\n**b', true)).toBe('<p>*a</p>\n<p><strong>b</strong></p>\n');
   });
 
-  it('hides an unfinished link destination only while streaming', async () => {
-    const text = '[docs](https://example.com';
-    expect(await render(text, true)).toBe('<p>docs</p>\n');
-    const completed = await render(text, false);
-    expect(completed).toContain('[docs](');
-    expect(completed).toContain('<a href="https://example.com/"');
-    expect(completed).toContain('>https://example.com</a>');
-  });
-
-  it.each([true, false])('preserves complete links with streaming=%s', async (streaming) => {
-    expect(await render('[docs](https://example.com)', streaming)).toBe(
-      '<p><a href="https://example.com/" target="_blank" rel="noreferrer">docs</a></p>\n',
-    );
-  });
-
-  it.each([true, false])('does not activate unsafe links with streaming=%s', async (streaming) => {
-    const html = await render(
-      '[script](javascript:alert%281%29) [relative](notes/a.md) [data](data:text/html,x)',
-      streaming,
-    );
-    expect(html).toBe('<p>script relative data</p>\n');
-    expect(html).not.toContain('<a');
-  });
-
   // The desktop app opens these without running programs (frontend.md §7.2).
   it('links local files by their absolute path', async () => {
     const link = async (target: string) => /href="([^"]*)"/.exec(await render(`[对照](${target})`, false))?.[1];
@@ -93,35 +60,5 @@ describe('Markdown worker', () => {
     expect(await link('file:///C:/a%20b/x.png')).toBe('file:///C:/a%20b/x.png');
     expect(await link('/home/u/report.pdf')).toBe('file:///home/u/report.pdf');
     expect(await render('[对照](</C:/x/index.html>)', false)).toContain('title="/C:/x/index.html"');
-  });
-
-  it.each([true, false])('escapes HTML and omits images with streaming=%s', async (streaming) => {
-    const html = await render('<script>alert(1)</script>\n\n![avatar](https://example.com/avatar.png)', streaming);
-    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
-    expect(html).toContain('<p>avatar</p>');
-    expect(html).not.toContain('<script');
-    expect(html).not.toContain('<img');
-    expect(html).not.toContain('src=');
-  });
-
-  it.each([true, false])('uses escaped fallback for an unknown code language with streaming=%s', async (streaming) => {
-    expect(await render('```not-a-real-language\n<script> & text\n```', streaming)).toBe(
-      '<pre class="code"><code>&lt;script&gt; &amp; text</code></pre>',
-    );
-  });
-
-  it('uses escaped fallback for code longer than the highlight limit', async () => {
-    const code = `${'x'.repeat(50_000)}<&`;
-    expect(await render(`\`\`\`javascript\n${code}\n\`\`\``, true)).toBe(
-      `<pre class="code"><code>${'x'.repeat(50_000)}&lt;&amp;</code></pre>`,
-    );
-  });
-
-  it.each([true, false])('currently highlights both open and closed fences with streaming=%s', async (streaming) => {
-    const open = await render('```javascript\nconst answer = 42;', streaming);
-    const closed = await render('```javascript\nconst answer = 42;\n```', streaming);
-    expect(open).toContain('class="shiki');
-    expect(open).toContain('answer');
-    expect(open).toBe(closed);
   });
 });

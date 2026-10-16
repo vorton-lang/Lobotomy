@@ -29,10 +29,12 @@
 - 要尽早拦住的：暴露设计缺口的问题。例如有一类情况没考虑到，修好它要长出一大截结构。
 - 可以放过的：只在某些情况下行为不对、修起来只是局部改动的 bug。由 CI 发现，之后再修。
 
+**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，技术方案 §8，用户确认，2026-10-17）：现有测试只保留回归测试，没有拦住过问题的测试已经退役。回归测试指两类：修 bug 的提交新增或实质改过的测试；在 CI 上失败过、随后由不只改测试的提交修好的测试。新代码写什么测试，长期方案待定。
+
 写测试时：
 
 - 优先写快速的契约测试：命令的前置条件、状态迁移、不变量。lobotomy-core 的测试一个只要零点几秒，最能提示设计问题。
-- e2e 只测前后端连起来才能看到的流程。界面行为用模拟的 WebSocket 测，参照 `e2e/markdown.spec.ts`；不要为了检查一张卡片跑完整条流水线。
+- e2e 只测前后端连起来才能看到的流程。界面行为用模拟的 WebSocket 测，参照 `e2e/ui.spec.ts`；不要为了检查一张卡片跑完整条流水线。
 - 后端或 core 已经覆盖的逻辑，不再用 e2e 重测。
 
 ### 流程
@@ -66,5 +68,4 @@ agent 负责验收并合并这些修复 PR：看改动是否只修了失败的�
 - e2e 使用 debug 版后端。改了后端之后，先运行 `cargo build -p lobotomyd`，再运行 e2e。
 - 改了 Rust 代码后，提交前运行 `cargo fmt`，以及受影响 crate 的 `cargo clippy -p <crate> --all-targets -- -D warnings`。
 - 改了 `frontend/` 中的代码后，提交前在 `frontend/` 运行 `npm run format`。它不改 `src/api/generated.ts`；这个文件只由 `npm run api:generate` 生成。
-- 默认忽略的真实 CLI 测试会消耗订阅额度。只在改了 adapter 的参数、事件解析或 MCP 接口时运行，例如 `cargo test -p lobotomyd --test backend a_real_claude -- --ignored`。MCP 契约测试在 `--test mcp_contract` 中，也默认忽略。
 - 性能基线（`npm run bench`）每次推送到 main 时由 CI 运行，只记录，不设门槛。本地不运行；改了渲染或流式更新时，看 CI 的 bench 摘要。

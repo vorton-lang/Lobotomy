@@ -103,20 +103,13 @@ export async function open(page: Page, backend: Backend) {
 }
 
 /** Creates a task for Malkuth, the executor of the test project, through the "+ 新任务" dialog. */
-export async function createTask(
-  page: Page,
-  title: string,
-  body: string,
-  { twice = false, criteria = 'work.txt 存在' } = {},
-) {
+export async function createTask(page: Page, title: string, body: string, { criteria = 'work.txt 存在' } = {}) {
   await page.getByRole('button', { name: '+ 新任务' }).click();
   const dialog = page.getByRole('dialog', { name: '新任务' });
   await dialog.getByLabel('标题').fill(title);
   await dialog.getByLabel('你的原话').fill(body);
   await dialog.getByLabel('完成条件').fill(criteria);
-  const submit = dialog.getByRole('button', { name: '交给 Malkuth' });
-  if (twice) await submit.dblclick();
-  else await submit.click();
+  await dialog.getByRole('button', { name: '交给 Malkuth' }).click();
 }
 
 /** The task panel shows a task over the thread; it is a region named by the task's title. */
