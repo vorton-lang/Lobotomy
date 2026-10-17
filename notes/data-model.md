@@ -125,6 +125,7 @@ CLI 自行退出时记为 failed，不记为 interrupted（#13）。依据：受
 
 - 提问事务保存问题 ID、role、task（Angela 的问题为空）、提问 turn，以及当时数据库中最大的 `message.seq`，作为 `after_message_seq`。消息入队和提问在同一个数据库的写事务中串行提交。关联使用 `message.seq > after_message_seq`，不比较时间戳；同毫秒、时钟回拨、投递乱序与后端重启都不改变边界。
 - 后续消息还必须发给提问的 role。任务问题接受用户或 Angela 的消息，消息指向该任务或未指定任务；Angela 的问题只接受用户发给她的消息。其他任务、其他 role 与运行时的消息均不算回复。Angela 转达消息时，以该消息进入项目收件箱的事务为边界，不用引用原话的时间跨库比较。
+- 用户在 Angela 问题的卡片上作答时（点选项，或在卡片的输入框里写），消息写明它回答的问题（`message.question_id`），只关联这一个问题。问题已经关闭时，写入被拒绝。
 - 有关联的回复排队时，问题暂时不列入"等你决定"，问题记录仍保持开放，DTO 的 `blocked_reason` 仍由它派生。绑定到 turn 时，运行时在同一事务中关闭这些问题，并记录交付 turn 与消息 ID；对应的 `blocked_reason` 随后读出为空。展示、绑定及输入构造使用同一关联规则。
 - 关联只表示时序与来源、接收范围合格的候选回复已交付，不表示运行时判断了内容是否真正解决问题。无关的新消息也可能符合这些条件并关闭问题；role 仍需回答时再次提问。关联不授予动作权限。
 - 旧消息仍按入队顺序交付。输入列出当前问题，并逐条标明消息关联的问题；没有关联的消息仅作上下文。新问题仍未收到回复时，输入明确说明不能把本 turn 的旧消息当成其回复或授权。
@@ -379,8 +380,8 @@ Codex 被拒时的形式未知，暂不处理。
 | occupancy | role | 占用它的 task | 每个 role 最多被一个任务占用 |
 | native_session | session_id（运行时生成） | role、harness、所属任务（可空）、harness 原生 ID（可后补）、开始与结束时间 | 每个 role 每个任务最多一个当前 session（§4.1） |
 | turn | turn_id | role、native session、task 与 attempt（可空）、MCP token、输入、状态与结果、失败原因、pid 与进程启动时间。原始输出文件按 turn_id 命名（§7.4） | 每个 role 最多一个未结束的 turn；token 唯一 |
-| message | message_id | 目标 role、来源、所属任务（可空）、正文、到达顺序 `seq`、状态（排队、已绑定、未投递）、绑定的 turn、投递时间、用户选定的回复对象（可空，manager-actions.md §1.1）；发给 worker 任务的消息回答的问题和续接的停下（可空，写入时定下，worker-interface.md §3） | `seq` 唯一，按到达顺序递增（§3.5）；同一任务的同一次停下只有一条消息续接 |
-| question | question_id | role、task（Angela 的问题为空）、正文、提问 turn、`after_message_seq`、关闭时间与交付 turn（§3.5） | 每个任务最多一个开放问题 |
+| message | message_id | 目标 role、来源、所属任务（可空）、正文、到达顺序 `seq`、状态（排队、已绑定、未投递）、绑定的 turn、投递时间、用户选定的回复对象（可空，manager-actions.md §1.1）；回答的问题（可空，写入时定下：发给 worker 任务的消息取 worker 的开放问题，在卡片上回答 Angela 的取那个问题，§3.5）；续接的停下（可空，worker-interface.md §3） | `seq` 唯一，按到达顺序递增（§3.5）；同一任务的同一次停下只有一条消息续接 |
+| question | question_id | role、task（Angela 的问题为空）、正文、类别（确认、选择、回答）与选项（tech-plan.md §5"要你卡"）、提问 turn、`after_message_seq`、关闭时间与交付 turn（§3.5） | 每个任务最多一个开放问题 |
 | decision | decision_id | 种类（验收、退回、放弃、重开）、操作者、依据（完成条件版本、放下的未投递消息）、理由 | 只追加 |
 | notification_intent（未实现，见 manager-actions.md §6） | 状态键 | 内容引用、是否已显示 | 每个状态键一条 |
 | thread | thread_id | role | 每个 role 一个 |

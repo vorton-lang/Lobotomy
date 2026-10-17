@@ -138,6 +138,7 @@ fn a_second_reply_to_a_stop_is_refused_saying_who_replied() {
         body: "继续".into(),
         reply_to: None,
         stop_id: Some("turn_1".into()),
+        question_id: None,
     };
     db.execute(&Caller::User, &user).unwrap();
     let angela = SendToRole {

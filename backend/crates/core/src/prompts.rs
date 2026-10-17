@@ -24,7 +24,9 @@ pub(crate) fn open_questions(questions: &[crate::question::Question], messages: 
 
 pub(crate) fn question_reply(message: &crate::task::Message, questions: &[crate::question::Question]) -> String {
     let replies: Vec<&str> = questions.iter().filter(|q| q.accepts(message)).map(|q| q.id.as_str()).collect();
-    if replies.is_empty() {
+    if let (Some(q), [_]) = (&message.question_id, replies.as_slice()) {
+        format!("\n（消息 {}：用户在 {q} 的卡片上作答）", message.id)
+    } else if replies.is_empty() {
         format!("\n（消息 {}：仅作上下文，未关联当前问题）", message.id)
     } else {
         format!("\n（消息 {}：提问之后的回复，关联 {}）", message.id, replies.join("、"))

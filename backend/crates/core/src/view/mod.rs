@@ -198,10 +198,13 @@ pub enum Attention {
         domain: Domain,
     },
     /// The manager asked the user something only the user decides (manager-actions.md §6
-    /// `ask_user`). The user's next message to her answers it.
+    /// `ask_user`). The user's next message to her answers it. Picking an option sends it as the
+    /// answer; the user may always write one instead (tech-plan.md §5 "要你卡").
     Question {
         id: String,
         question: String,
+        question_kind: crate::question::QuestionKind,
+        options: Vec<String>,
         asked_at: i64,
     },
 }
@@ -256,6 +259,8 @@ pub fn attention(overview: &Overview, quota: &[Domain], still_runs: impl Fn(&Tur
     out.extend(overview.questions.iter().map(|q| Attention::Question {
         id: q.id.clone(),
         question: q.body.clone(),
+        question_kind: q.kind,
+        options: q.options.clone(),
         asked_at: q.created_at,
     }));
     out

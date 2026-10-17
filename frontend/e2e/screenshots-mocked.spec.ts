@@ -34,6 +34,8 @@ const asking: AngelaStatus = {
       kind: 'question',
       id: 'q1',
       question: '导出先做 CSV 还是 Excel？两种格式的表头处理不同，会影响 Malkuth 下一步。',
+      question_kind: 'choice',
+      options: ['先做 CSV', '先做 Excel'],
       asked_at: ago(3),
     },
   ],

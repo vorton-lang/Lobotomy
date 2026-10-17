@@ -88,6 +88,7 @@ pub fn send(db: &Db, request_id: &str, task: Option<&str>, body: &str) -> String
         body: body.into(),
         reply_to: None,
         stop_id: None,
+        question_id: None,
     };
     db.execute(&Caller::User, &message).unwrap().id
 }

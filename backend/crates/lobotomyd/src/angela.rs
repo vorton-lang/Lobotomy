@@ -372,6 +372,7 @@ mod tests {
                         body: key.into(),
                         reply_to: None,
                         stop_id: None,
+                        question_id: None,
                     },
                 )
                 .unwrap()

@@ -313,6 +313,9 @@ pub struct Message {
     /// What the user chose that it replies to: an item or a message of the same database
     /// (manager-actions.md §1.1).
     pub reply_to: Option<String>,
+    /// The question it answers, when that was fixed as it was written: the user answered on the
+    /// question's card, or it went to a worker's open question.
+    pub question_id: Option<String>,
 }
 
 /// Messages waiting in a role's inbox, in arrival order (data-model.md §3.4).
@@ -378,8 +381,8 @@ pub(crate) fn dropped_detail(messages: &[Message]) -> serde_json::Value {
 
 fn messages(conn: &Connection, filter: &str, arg: &str) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, seq, role, source, task_id, body, turn_id, created_at, reply_to FROM message WHERE {filter}
-         ORDER BY seq"
+        "SELECT id, seq, role, source, task_id, body, turn_id, created_at, reply_to, question_id FROM message
+         WHERE {filter} ORDER BY seq"
     ))?;
     let rows = stmt.query_map([arg], |r| {
         Ok(Message {
@@ -392,6 +395,7 @@ fn messages(conn: &Connection, filter: &str, arg: &str) -> Result<Vec<Message>> 
             turn_id: r.get(6)?,
             created_at: r.get(7)?,
             reply_to: r.get(8)?,
+            question_id: r.get(9)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -650,6 +654,10 @@ pub struct SendMessage {
     /// message waits for the worker's next turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_id: Option<String>,
+    /// The role's open question it answers, when the user answered on the question's card: it
+    /// answers that question only (tech-plan.md §5 "要你卡").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_id: Option<String>,
 }
 
 impl Command for SendMessage {
@@ -671,10 +679,16 @@ impl Command for SendMessage {
         {
             return Err(Error::rejected("not_found", format!("nothing here is {target}")));
         }
+        if let Some(question) = &self.question_id {
+            crate::question::answering(cx.tx, question, &self.role, self.task_id.as_deref())?;
+        }
         let target = ReplyTarget::of(cx.tx, self.task_id.as_deref(), self.stop_id.as_deref())?;
         let id = queue_message(cx, &self.role, caller, self.task_id.as_deref(), &self.body)?;
-        cx.tx.execute("UPDATE message SET reply_to = ?2 WHERE id = ?1", params![id, self.reply_to])?;
         target.store(cx.tx, &id)?;
+        cx.tx.execute(
+            "UPDATE message SET reply_to = ?2, question_id = COALESCE(?3, question_id) WHERE id = ?1",
+            params![id, self.reply_to, self.question_id],
+        )?;
         Ok(Created { id })
     }
 }

@@ -21,7 +21,7 @@ use lobotomy_core::Caller;
 use lobotomy_core::host::ProjectState;
 use lobotomy_core::id::new_id;
 use lobotomy_core::ledger::{AddLedgerEntry, CitedEntry, LedgerEntry, LedgerKind, ledger};
-use lobotomy_core::manager::AskUser;
+use lobotomy_core::manager::{AskUser, QuestionKind};
 use lobotomy_core::quota::Domain;
 use lobotomy_core::task::{
     Abandon, Accept, Action, Assign, ContextEntry, Quote, Replied, SendBack, SendToRole, SetPaused, local_minute,
@@ -274,9 +274,35 @@ pub struct RecentArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionKindArg {
+    /// 确认：授权，例如花钱、代表用户对外、合并碰到需要用户授权的路径
+    Confirm,
+    /// 选择：在几个选项中选一个
+    Choice,
+    /// 回答：开放问题，用户直接写
+    Open,
+}
+
+impl From<QuestionKindArg> for QuestionKind {
+    fn from(arg: QuestionKindArg) -> Self {
+        match arg {
+            QuestionKindArg::Confirm => QuestionKind::Confirm,
+            QuestionKindArg::Choice => QuestionKind::Choice,
+            QuestionKindArg::Open => QuestionKind::Open,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct AskArgs {
     /// 只有用户能决定的一个问题，带上你的推荐和默认选择
     pub question: String,
+    pub kind: QuestionKindArg,
+    /// 卡片上的按钮，每个是用户点一下就发给你的回复，例如"同意合并"。confirm 至少 1 个，choice 至少 2 个，
+    /// open 不填。用户总能自己写，不用加"其他"
+    #[serde(default)]
+    pub options: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -504,7 +530,8 @@ impl AngelaTools {
         .await
     }
 
-    #[tool(description = "向用户提一个只有用户能决定的问题。它列进「等你决定」，直到用户在提问之后发来的消息送到你。\
+    #[tool(description = "向用户提一个只有用户能决定的问题，标明类别：确认、选择或回答。它列进「等你决定」，\
+                       直到用户在提问之后发来的消息送到你。确认和选择的选项显示成按钮。\
                        要让相关任务在回答前停下，另外用 set_paused 暂停它们。")]
     async fn ask_user(
         &self,
@@ -517,7 +544,7 @@ impl AngelaTools {
             return refused("这个 URL 不属于 Angela 的 turn".into());
         };
         let caller = Caller::Role { role: turn.role, turn_id: turn.id };
-        let ask = AskUser { question: args.question };
+        let ask = AskUser { question: args.question, kind: args.kind.into(), options: args.options };
         match db(&reach.angela, move |db| db.execute(&caller, &ask)).await {
             Ok(id) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "已列进「等你决定」（{id}）。用户之后发来的消息送到你时，这个问题关闭。"

@@ -660,6 +660,7 @@ async fn deliver(instance: &TaskInstance, attempt: &AttemptRow, params: &SendMes
         body,
         reply_to: None,
         stop_id: None,
+        question_id: None,
     };
     let id = db(instance, move |db| db.execute(&Caller::User, &send)).await?.id;
     // After a turn that did not end normally, the role holds until a reply to the stop continues it.

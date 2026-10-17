@@ -67,7 +67,7 @@ impl Command for ScheduleManagerTurn {
     }
 }
 
-pub use crate::question::Question;
+pub use crate::question::{Question, QuestionKind};
 
 /// Angela's open questions. Queued candidate replies hide attention but do not close them.
 pub fn open_questions(conn: &Connection) -> Result<Vec<Question>> {
@@ -78,9 +78,13 @@ pub fn open_questions(conn: &Connection) -> Result<Vec<Question>> {
 /// notification: the question waits in "等你决定" until the user answers (manager-actions.md §6:
 /// she expresses urgency only by changing state). Tasks that must stop meanwhile she pauses
 /// herself, in their project: a command writes one database (data-model.md §10.6 跨库操作第 5 条).
+/// The options are the card's buttons (tech-plan.md §5 "要你卡"); the user may always write instead.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AskUser {
     pub question: String,
+    pub kind: QuestionKind,
+    #[serde(default)]
+    pub options: Vec<String>,
 }
 
 impl Command for AskUser {
@@ -98,6 +102,21 @@ impl Command for AskUser {
         if self.question.trim().is_empty() {
             return Err(Error::rejected("missing_field", "a question needs words"));
         }
-        crate::question::ask(cx, &turn.role, None, turn_id, &self.question).map(|(id, _)| id)
+        let options: Vec<String> = self.options.iter().map(|o| o.trim().to_owned()).collect();
+        if options.iter().any(String::is_empty) {
+            return Err(Error::rejected("missing_field", "每个选项都要有字"));
+        }
+        let fewest = match self.kind {
+            QuestionKind::Confirm => 1,
+            QuestionKind::Choice => 2,
+            QuestionKind::Open => 0,
+        };
+        if options.len() < fewest {
+            return Err(Error::rejected("missing_field", format!("{} 至少要 {fewest} 个选项", self.kind.as_str())));
+        }
+        if self.kind == QuestionKind::Open && !options.is_empty() {
+            return Err(Error::rejected("invalid_field", "open 是直接回答的问题，不带选项；要给选项就用 choice"));
+        }
+        crate::question::ask(cx, &turn.role, None, turn_id, &self.question, self.kind, &options).map(|(id, _)| id)
     }
 }

@@ -53,6 +53,7 @@ fn main() -> anyhow::Result<()> {
         body: "text".into(),
         reply_to: None,
         stop_id: None,
+        question_id: None,
     };
     println!(
         "{}",

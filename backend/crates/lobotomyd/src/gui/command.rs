@@ -191,6 +191,7 @@ async fn worker_command(project: &Arc<Project>, name: &str, args: &Value) -> any
                 body: back.reason,
                 reply_to: None,
                 stop_id: None,
+                question_id: None,
             })
             .await?;
             Value::Null

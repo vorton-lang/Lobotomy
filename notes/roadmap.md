@@ -139,7 +139,6 @@ M4 之后，用真实项目使用 Lobotomy，包括开发它自己，再按实�
 |---|---|
 | Inspector：状态（含上下文用量）、输出、改动、操作；Angela 的"推测" | frontend.md §2；manager-actions.md §3.3 |
 | 撤回或修改排队中的消息 | ui-ux-plan.md §6、§8 第 9 条（用户定） |
-| `ask_user` 问题上的选项按钮 | frontend.md §2 |
 | 按 agent 节流推送：现在后端每 100ms 查看所有事件日志，变化推给所有窗口 | frontend.md §3 第 3 条、§7.14 |
 | 渲染：流式 Markdown 按块解析，封存已结束的块；Shiki 的 LRU 缓存；查看器中的 ANSI 颜色转为装饰 | frontend.md §4.1、§7.14 |
 

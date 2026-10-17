@@ -95,7 +95,8 @@ impl Command for OrgReport {
             }
             ReportStatus::Blocked => {
                 let reason = self.blocked_on.clone().unwrap_or_else(|| self.title.clone());
-                let (_, asked) = question::ask(cx, role, Some(&task.id), &turn.id, &reason)?;
+                let (_, asked) =
+                    question::ask(cx, role, Some(&task.id), &turn.id, &reason, question::QuestionKind::Open, &[])?;
                 if asked { ReportEffect::Recorded } else { ReportEffect::Unchanged }
             }
             ReportStatus::Done => {

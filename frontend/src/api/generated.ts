@@ -70,7 +70,7 @@ export type AttemptEnd = "candidate" | "abandoned";
 
 export type AttemptState = "submitted" | "preparing" | "working" | "blocked" | "delivered" | "adopted" | "abandoned" | "failed" | "canceled" | "unknown";
 
-export type Attention = { "kind": "hold", role: string, hold: Hold, } | { "kind": "unknown_turn", role: string, turn_id: string, } | { "kind": "task_blocked", task_id: string, title: string, reason: string, } | { "kind": "stalled", role: string, task_id: string, title: string, turn_id: string, report_error: string | null, } | { "kind": "accept", task_id: string, title: string, } | { "kind": "quota", domain: Domain, } | { "kind": "question", id: string, question: string, asked_at: number, };
+export type Attention = { "kind": "hold", role: string, hold: Hold, } | { "kind": "unknown_turn", role: string, turn_id: string, } | { "kind": "task_blocked", task_id: string, title: string, reason: string, } | { "kind": "stalled", role: string, task_id: string, title: string, turn_id: string, report_error: string | null, } | { "kind": "accept", task_id: string, title: string, } | { "kind": "quota", domain: Domain, } | { "kind": "question", id: string, question: string, question_kind: QuestionKind, options: Array<string>, asked_at: number, };
 
 export type BlobParams = { hash: string, };
 
@@ -241,7 +241,12 @@ turn_id: string | null, created_at: number,
  * What the user chose that it replies to: an item or a message of the same database
  * (manager-actions.md §1.1).
  */
-reply_to: string | null, };
+reply_to: string | null,
+/**
+ * The question it answers, when that was fixed as it was written: the user answered on the
+ * question's card, or it went to a worker's open question.
+ */
+question_id: string | null, };
 
 export type ModelView = { id: string, label: string, efforts: Array<string>,
 /**
@@ -313,6 +318,8 @@ export type Push = { "type": "events", project: string, events: Array<LogEvent>,
 
 export type Question = { question_id: string, body: string, options: Array<string>, };
 
+export type QuestionKind = "confirm" | "choice" | "open";
+
 export type Quote = {
 /**
  * The message's id in the manager's database.
@@ -379,7 +386,12 @@ reply_to?: string | null,
  * The stop of the task's worker it continues (worker-interface.md §3); without it, the
  * message waits for the worker's next turn.
  */
-stop_id?: string | null, };
+stop_id?: string | null,
+/**
+ * The role's open question it answers, when the user answered on the question's card: it
+ * answers that question only (tech-plan.md §5 "要你卡").
+ */
+question_id?: string | null, };
 
 export type SetPaused = { request_id: string, task_id: string, paused: boolean, };
 

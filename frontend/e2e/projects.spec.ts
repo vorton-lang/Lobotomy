@@ -213,6 +213,40 @@ test('a message being written to Angela survives a look at a project', async ({ 
   await expect(page.getByLabel('消息')).toHaveValue('还没写完的话');
 });
 
+// Angela asked for authorization in open words, for want of options (tech-plan.md §7 实际验收).
+// An option answers her question; the user can always write instead (用户定).
+test("Angela's question offers its options and a box to write in", async ({ page }) => {
+  const question: Attention = {
+    kind: 'question',
+    id: 'q1',
+    question: '合并 PR #92 吗？它改到 notes/。',
+    question_kind: 'confirm',
+    options: ['同意合并', '先别合并'],
+    asked_at: 1,
+  };
+  const sent: Record<string, unknown>[] = [];
+  await openHost(
+    page,
+    {
+      projects: [entry('alpha'), entry('beta')],
+      attention: [],
+      harnesses: [],
+      angela: { ...angela, attention: [question] },
+      workers_error: null,
+    },
+    (name, args) => {
+      sent.push({ name, ...args });
+      return { id: 'msg1' };
+    },
+  );
+  const card = page.locator('.card').filter({ hasText: 'Angela 请你确认' });
+  await expect(card.getByRole('textbox', { name: '或者自己写' })).toBeVisible();
+  await card.getByRole('button', { name: '同意合并' }).click();
+  await expect
+    .poll(() => sent)
+    .toEqual([expect.objectContaining({ name: 'send_message', role: 'Angela', body: '同意合并', question_id: 'q1' })]);
+});
+
 // The settings are a page of their own (frontend.md §7.8): they open on the page they showed last,
 // wherever the window is, read the project of their page themselves, and leave the window where
 // it was.

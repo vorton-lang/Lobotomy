@@ -118,7 +118,7 @@ Yesod    审查：实现 Codex adapter               进行中
 
 | 使用方 | 工具 |
 |---|---|
-| Manager | `assign(project_id, role, title, quote?, context?, ledger?, interpretation, actions, stop_when, done_when)`；`send_to_role(project_id, role, task_id?, quote?, context?, ledger?, interpretation, stop_id?)` 追加说明，让停下的 worker 继续时写明这次停下（worker-interface.md §3）；`accept(project_id, task_id, criteria_version)`；`send_back(project_id, task_id, reason)`；`abandon(project_id, task_id, reason)`；`set_paused(project_id, task_id, paused)`；`ask_user(question)` |
+| Manager | `assign(project_id, role, title, quote?, context?, ledger?, interpretation, actions, stop_when, done_when)`；`send_to_role(project_id, role, task_id?, quote?, context?, ledger?, interpretation, stop_id?)` 追加说明，让停下的 worker 继续时写明这次停下（worker-interface.md §3）；`accept(project_id, task_id, criteria_version)`；`send_back(project_id, task_id, reason)`；`abandon(project_id, task_id, reason)`；`set_paused(project_id, task_id, paused)`；`ask_user(question, kind, options?)` |
 | 执行者 | `org_report(title, body, status: progress \| blocked \| done, blocked_on?)`；`flag_mismatch(body)`（manager-actions.md §2.3） |
 | Reviewer | `org_report(..., verdict: approve \| changes_requested, items)`（未实现） |
 | 用户（GUI） | Manager 的全部控制流命令（建任务、验收、退回、放弃），以及调整队列、重开、暂停任务；立即生效，Manager 下次运行时从变化中得知（manager-actions.md §6） |

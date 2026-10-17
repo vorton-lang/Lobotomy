@@ -33,6 +33,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0022_store_leftovers.sql"),
     include_str!("../migrations/0023_worker.sql"),
     include_str!("../migrations/0024_worker_reply.sql"),
+    include_str!("../migrations/0025_question_kind.sql"),
 ];
 
 /// One project's database.

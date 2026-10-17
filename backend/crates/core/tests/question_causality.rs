@@ -126,17 +126,18 @@ fn a_question_generation_survives_duplicates_but_not_reasking_or_replacing() {
 
 #[test]
 fn manager_questions_match_individually_by_enqueue_order_and_recipient() {
-    use lobotomy_core::manager::AskUser;
+    use lobotomy_core::manager::{AskUser, QuestionKind};
     let db = db();
     send(&db, "start", None, "看看现状");
     let first = register(&db);
     let caller = Caller::Role { role: ROLE.into(), turn_id: first.turn_id.clone() };
     send(&db, "old", None, "继续");
-    let ask = AskUser { question: "Q1".into() };
+    let ask = AskUser { question: "Q1".into(), kind: QuestionKind::Open, options: Vec::new() };
     let q1 = db.execute(&caller, &ask).unwrap();
     send(&db, "answer", None, "Q1 answer");
     assert_eq!(db.execute(&caller, &ask).unwrap(), q1, "duplicate ask preserves the boundary");
-    let q2 = db.execute(&caller, &AskUser { question: "Q2".into() }).unwrap();
+    let q2 =
+        db.execute(&caller, &AskUser { question: "Q2".into(), kind: QuestionKind::Open, options: Vec::new() }).unwrap();
     db.execute(
         &Caller::Runtime,
         &lobotomy_core::manager::ScheduleManagerTurn {
@@ -165,6 +166,7 @@ fn manager_questions_match_individually_by_enqueue_order_and_recipient() {
             body: "answer".into(),
             reply_to: None,
             stop_id: None,
+            question_id: None,
         },
     )
     .unwrap();
@@ -238,7 +240,7 @@ fn restarting_and_continuing_do_not_turn_context_into_an_answer_or_lift_a_pause(
 
 #[test]
 fn upgrading_recovers_boundaries_from_events_and_keeps_unknown_history_open() {
-    use lobotomy_core::manager::AskUser;
+    use lobotomy_core::manager::{AskUser, QuestionKind};
     for (version, known_history) in [(16, false), (16, true), (17, false), (17, true)] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("question.db");
@@ -249,14 +251,17 @@ fn upgrading_recovers_boundaries_from_events_and_keeps_unknown_history_open() {
         send(&db, "old", Some(&task), "old");
         report(&db, &first.turn_id, ReportStatus::Blocked, Some("worker Q")).unwrap();
         let asker = Caller::Role { role: ROLE.into(), turn_id: first.turn_id.clone() };
-        let manager_q = db.execute(&asker, &AskUser { question: "manager Q".into() }).unwrap();
+        let manager_q = db
+            .execute(&asker, &AskUser { question: "manager Q".into(), kind: QuestionKind::Open, options: Vec::new() })
+            .unwrap();
         send(&db, "answer", None, "answer both");
         finish(&db, &first.turn_id);
         drop(db);
         // Restore the prior schema, including the old task mirror, without losing its data.
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
-            "ALTER TABLE message DROP COLUMN question_id; ALTER TABLE message DROP COLUMN stop_id;
+            "ALTER TABLE question DROP COLUMN kind; ALTER TABLE question DROP COLUMN options;
+            ALTER TABLE message DROP COLUMN question_id; ALTER TABLE message DROP COLUMN stop_id;
             DROP TABLE worker_task; DROP TABLE worker_artifact; DROP TABLE worker_evidence;
             ALTER TABLE role DROP COLUMN remote;
             CREATE TABLE capture (id TEXT PRIMARY KEY); CREATE TABLE workspace (id TEXT PRIMARY KEY);

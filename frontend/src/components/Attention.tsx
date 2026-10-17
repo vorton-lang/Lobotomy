@@ -1,7 +1,7 @@
 // The cards of "等你决定" (frontend.md §2): each says what waits for the user and offers the
 // commands that resolve it. The backend decides what is listed (frontend.md §7).
 
-import type { Attention, Hold, TaskView } from '../api/types';
+import type { Attention, Hold, QuestionKind, TaskView } from '../api/types';
 import { abnormalEnd, harnessName, PERMISSION_LABEL, quotaNote } from '../format';
 import { act, clearDraft, run, selectTask, setPermission, useCommand, useDraft, useStore } from '../store';
 
@@ -45,15 +45,43 @@ export function AttentionCard({ attention: a }: { attention: Attention }) {
         </div>
       );
     case 'question':
-      // Answered by the user's next message to her, here or in the conversation.
-      return (
-        <div className="card">
-          <p>Angela 问你：</p>
-          <p className="quote">{a.question}</p>
-          <Reply role="Angela" taskId={null} placeholder="回复 Angela" />
-        </div>
-      );
+      return <QuestionCard attention={a} />;
   }
+}
+
+const ASKS: Record<QuestionKind, string> = { confirm: '请你确认', choice: '请你选择', open: '问你' };
+
+/**
+ * Angela's question (tech-plan.md §5 "要你卡"). An option goes to her as the user's answer to this
+ * question; the user can always write one instead. Any later message to her also answers it.
+ */
+function QuestionCard({ attention: a }: { attention: Extract<Attention, { kind: 'question' }> }) {
+  const { submit, busy } = useCommand('send_message');
+  return (
+    <div className="card">
+      <p>Angela {ASKS[a.question_kind]}：</p>
+      <p className="quote">{a.question}</p>
+      {a.options.length > 0 && (
+        <div className="actions">
+          {a.options.map((option) => (
+            <button
+              key={option}
+              disabled={busy}
+              onClick={() => submit({ role: 'Angela', task_id: null, body: option, question_id: a.id })}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+      <Reply
+        role="Angela"
+        taskId={null}
+        questionId={a.id}
+        placeholder={a.options.length > 0 ? '或者自己写' : '回复 Angela'}
+      />
+    </div>
+  );
 }
 
 function HoldCard({ role, hold }: { role: string; hold: Hold }) {
@@ -201,6 +229,7 @@ function Reply({
   role,
   taskId,
   stopId = null,
+  questionId = null,
   placeholder = '回复',
   children,
 }: {
@@ -208,11 +237,13 @@ function Reply({
   taskId: string | null;
   /** The worker's stop the reply continues. */
   stopId?: string | null;
+  /** Angela's question the reply answers. */
+  questionId?: string | null;
   placeholder?: string;
   children?: React.ReactNode;
 }) {
-  // A task's id names its reply; Angela's question has none.
-  const key = `reply:${taskId ?? role}`;
+  // A task's id names its reply, as Angela's question's does.
+  const key = `reply:${taskId ?? questionId ?? role}`;
   const [reply, setReply] = useDraft(key);
   const { submit, busy } = useCommand('send_message');
   return (
@@ -230,7 +261,13 @@ function Reply({
           className="primary"
           disabled={!reply.trim() || busy}
           onClick={async () => {
-            const sent = await submit({ role, task_id: taskId, body: reply.trim(), stop_id: stopId });
+            const sent = await submit({
+              role,
+              task_id: taskId,
+              body: reply.trim(),
+              stop_id: stopId,
+              question_id: questionId,
+            });
             if (sent !== undefined) clearDraft(key);
           }}
         >

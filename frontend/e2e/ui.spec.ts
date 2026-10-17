@@ -295,6 +295,7 @@ test('a message the executor never got waits for the user at acceptance', async 
     turn_id: null,
     created_at: 5,
     reply_to: null,
+    question_id: null,
   };
   const details: Record<string, TaskDetail> = { task1: detail(view, [undelivered]) };
   const state: State = {

@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use lobotomy_core::Caller;
-use lobotomy_core::manager::{AskUser, Cursor, ScheduleManagerTurn, cursors, open_questions};
+use lobotomy_core::manager::{AskUser, Cursor, QuestionKind, ScheduleManagerTurn, cursors, open_questions};
 use lobotomy_core::task::queued_messages;
 use lobotomy_core::view::{Attention, attention, last_event, overview};
 
@@ -19,7 +19,8 @@ fn her_question_waits_for_a_message_sent_after_it() {
     let t1 = register(&db);
     send(&db, "m2", None, "顺便问一下进度");
     let asker = Caller::Role { role: ROLE.into(), turn_id: t1.turn_id.clone() };
-    let ask = AskUser { question: "导出先做 CSV 还是 Excel？".into() };
+    let ask =
+        AskUser { question: "导出先做 CSV 还是 Excel？".into(), kind: QuestionKind::Open, options: Vec::new() };
     let id = db.execute(&asker, &ask).unwrap();
     let open = || db.read(open_questions).unwrap();
     assert_eq!(open()[0].id, id);

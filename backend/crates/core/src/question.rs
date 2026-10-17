@@ -6,14 +6,30 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::command::Cx;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::id::new_id;
+use crate::sql::sql_enum;
 use crate::task::Message;
+
+sql_enum! {
+    /// What kind of answer a question needs (tech-plan.md §5 "要你卡"). The user can always write
+    /// an answer instead of picking an option.
+    pub enum QuestionKind {
+        /// An authorization: spending, acting for the user outside, a path the user guards.
+        Confirm = "confirm",
+        /// A choice among the options.
+        Choice = "choice",
+        /// An open question, answered in words.
+        Open = "open",
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Question {
     pub id: String,
     pub body: String,
+    pub kind: QuestionKind,
+    pub options: Vec<String>,
     pub created_at: i64,
     pub role: String,
     pub task_id: Option<String>,
@@ -24,32 +40,47 @@ pub struct Question {
 impl Question {
     /// A subsequent message is a candidate answer, not proof that its words resolve the issue.
     /// Role-wide messages can answer the role's task question; another task's messages cannot.
+    /// A message that names the question it answers answers that one only.
     pub fn accepts(&self, message: &Message) -> bool {
         message.role == self.role
             && message.seq > self.after_message_seq
             && (message.source == "user" || (self.task_id.is_some() && message.source == "manager"))
             && (message.task_id.is_none() || message.task_id == self.task_id)
+            && message.question_id.as_ref().is_none_or(|q| *q == self.id)
     }
 }
 
 /// All current questions, optionally restricted to the role receiving a turn.
 pub fn open_questions(conn: &Connection, role: Option<&str>) -> Result<Vec<Question>> {
     let mut stmt = conn.prepare(
-        "SELECT id, body, created_at, role, task_id, turn_id, after_message_seq FROM question
+        "SELECT id, body, kind, options, created_at, role, task_id, turn_id, after_message_seq FROM question
          WHERE closed_at IS NULL AND (?1 IS NULL OR role = ?1) ORDER BY role, rowid",
     )?;
     let rows = stmt.query_map([role], |r| {
+        let options = serde_json::from_str(&r.get::<_, String>(3)?)
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?;
         Ok(Question {
             id: r.get(0)?,
             body: r.get(1)?,
-            created_at: r.get(2)?,
-            role: r.get(3)?,
-            task_id: r.get(4)?,
-            turn_id: r.get(5)?,
-            after_message_seq: r.get(6)?,
+            kind: r.get(2)?,
+            options,
+            created_at: r.get(4)?,
+            role: r.get(5)?,
+            task_id: r.get(6)?,
+            turn_id: r.get(7)?,
+            after_message_seq: r.get(8)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// A message the user writes as the answer to `id`, from its card: the question must still wait
+/// for the user's answer, from the role the message goes to.
+pub(crate) fn answering(conn: &Connection, id: &str, role: &str, task_id: Option<&str>) -> Result<()> {
+    match open_questions(conn, Some(role))?.into_iter().find(|q| q.id == id) {
+        Some(q) if q.task_id.as_deref() == task_id => Ok(()),
+        _ => Err(Error::rejected("question_closed", format!("问题 {id} 已经不在等回答"))),
+    }
 }
 
 /// Returns the id and whether a new question was asked. All callers share the duplicate rule.
@@ -59,11 +90,16 @@ pub(crate) fn ask(
     task_id: Option<&str>,
     turn_id: &str,
     body: &str,
+    kind: QuestionKind,
+    options: &[String],
 ) -> Result<(String, bool)> {
-    if let Some(question) = open_questions(cx.tx, Some(role))?
-        .into_iter()
-        .find(|q| q.task_id.as_deref() == task_id && q.turn_id == turn_id && q.body == body)
-    {
+    if let Some(question) = open_questions(cx.tx, Some(role))?.into_iter().find(|q| {
+        q.task_id.as_deref() == task_id
+            && q.turn_id == turn_id
+            && q.body == body
+            && q.kind == kind
+            && q.options == options
+    }) {
         return Ok((question.id, false));
     }
     if let Some(task) = task_id {
@@ -71,9 +107,9 @@ pub(crate) fn ask(
     }
     let id = new_id("q");
     cx.tx.execute(
-        "INSERT INTO question (id, body, turn_id, created_at, role, task_id, after_message_seq)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, (SELECT COALESCE(MAX(seq), 0) FROM message))",
-        params![id, body, turn_id, cx.now, role, task_id],
+        "INSERT INTO question (id, body, kind, options, turn_id, created_at, role, task_id, after_message_seq)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, (SELECT COALESCE(MAX(seq), 0) FROM message))",
+        params![id, body, kind, serde_json::to_string(options)?, turn_id, cx.now, role, task_id],
     )?;
     if let Some(task) = task_id {
         task_changed(cx, task, Some(body))?;
