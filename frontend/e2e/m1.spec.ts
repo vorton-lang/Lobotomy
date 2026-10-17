@@ -1,20 +1,24 @@
-// The task chain through the GUI: create a task, watch Malkuth work, read its delivery and accept
-// it. Each test has a backend of its own (fixtures.ts).
+// Angela's conversation through the GUI against a real backend: long threads that only the fake
+// Codex's turns make. Each test has a backend of its own (fixtures.ts).
 
-import { createTask, expect, open, taskPanel, test } from './fixtures';
+import { expect, open, showAngela, test } from './fixtures';
 
 // On a slow machine an older page arrives later than the next render. Scrolling up must still
 // load page after page to the start (the baseline found it stuck at the top in CI).
 // Run the longest independent scenario early so it does not leave one worker idle at the end.
 test('scrolling up on a slow machine loads every older page', async ({ page, backend }) => {
   await open(page, backend);
-  // Three hundred items: the thread opens three pages after the task's brief.
-  await createTask(page, '很长的任务', 'FAKE:many=300');
-  await expect(page.locator('.attention .card').filter({ hasText: '还没有完成' })).toBeVisible();
+  await showAngela(page);
+  // Three hundred items: the thread opens three pages after the first message.
+  const composer = page.getByLabel('消息');
+  await composer.fill('很长的对话从这里开始 FAKE:many=300 FAKE:marker=newest');
+  await composer.press('Enter');
+  await expect(page.locator('.thread')).toContainText('bench newest');
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
   await page.reload();
   await expect(page.getByText('已连接')).toBeVisible();
+  await showAngela(page);
   // The socket opens before the thread loads; scroll the list, not its loading placeholder.
   await expect(page.locator('.thread-area .thread')).toBeVisible();
   const reached = await page.evaluate(
@@ -32,37 +36,16 @@ test('scrolling up on a slow machine loads every older page', async ({ page, bac
         };
         step();
       }),
-    '任务：很长的任务（第 1 轮执行）',
+    '很长的对话从这里开始',
   );
   expect(reached).toBe(true);
-});
-
-// The panel stays open from one candidate to the next: what it shows is always the candidate the
-// "验收" button would accept (#13).
-test('an open task panel follows the candidate through a send-back', async ({ page, backend }) => {
-  await open(page, backend);
-  await createTask(page, '改 work.txt', 'FAKE:done FAKE:text=first');
-  const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
-  await card.getByRole('button', { name: '查看并验收' }).click();
-  const panel = taskPanel(page, '改 work.txt');
-  await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
-
-  await panel.getByRole('button', { name: '退回…' }).click();
-  const sendBack = page.getByRole('dialog', { name: '退回候选成果' });
-  await sendBack.getByLabel(/理由/).fill('FAKE:done FAKE:text=second');
-  await sendBack.getByRole('button', { name: '退回', exact: true }).click();
-  await expect(panel.getByRole('heading', { name: '本轮交付（第 2 轮）' })).toBeVisible();
-  await expect(panel.locator('.now')).toHaveText('第 2 轮交出了候选成果，等你验收。');
-  await expect(panel.locator('.history')).toContainText('你退回了：FAKE:done FAKE:text=second');
-
-  await panel.getByRole('button', { name: '验收', exact: true }).click();
-  await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
 // A command that writes a file through a heredoc takes a line or two until opened; search still
 // reaches its end (#14). Its whole text opens over the window and copies whole (#15).
 test('a long command stays short until opened', async ({ page, backend }) => {
   await open(page, backend);
+  await showAngela(page);
   const composer = page.getByLabel('消息');
   // Forty items before it make the thread taller than the window.
   await composer.fill('FAKE:many=40 FAKE:longcmd');

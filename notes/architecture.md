@@ -9,16 +9,17 @@
 Electron 主进程（窗口、托盘）──启动──→ lobotomyd：后端，常驻，每个 host 目录一个
 Electron 渲染进程 ──WebSocket /gui──→ lobotomyd
                                        ├─ host：项目登记、额度域、权限模式、CLI 配置（host.db）
-                                       ├─ 项目实例 × N：SQLite、文件库、role 的工作目录、调度器
+                                       ├─ 项目实例 × N：SQLite、文件库、调度器（把排队任务交给 worker）
                                        └─ Angela 实例 × 1：她自己的 SQLite、文件库、调度器（host 目录下的 angela/）
-项目中 role 的 CLI（每个 turn 一个进程）──MCP /mcp/{project}/{token}──→ lobotomyd
 Angela 的 CLI（每个 turn 一个进程）──MCP /mcp/angela/{token}──→ lobotomyd
+lobotomyd ──启动，stdio 上的 worker 协议──→ worker 宿主 lobotomy-worker：workers.toml 的每个条目一个
+执行者的 CLI（每个 turn 一个进程）──MCP──→ 所属的 worker 宿主
 ```
 
 **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：`store` crate（jj 私有存储）、采集、验证、预览、展示分支采用与试用终端随 worker 层的替换退出。新方向的分层见 [tech-plan.md](tech-plan.md) §1，worker 接口见 [worker-interface.md](worker-interface.md)。
 
 - 一个后端进程管理所有项目和 Angela（data-model.md §10，frontend.md §1）。Angela 打不开时，项目照常运行。
-- agent 驱动是单独的 crate `lobotomy-agent`（tech-plan.md §7 第 1 步）。后端用它运行项目中 role 与 Angela 的 turn；worker 宿主将来也用它运行执行者。它的模块：
+- agent 驱动是单独的 crate `lobotomy-agent`（tech-plan.md §7 第 1 步）。后端用它运行 Angela 的 turn，worker 宿主用它运行执行者的 turn。它的模块：
   - `instance.rs`：运行 turn、保存对话记录的实例：数据库、文件库、运行中的 turn 与它们的实时条目。runner、GUI 的推送和对话记录的读取对项目实例与 Angela 相同。
   - `runner.rs`：运行一个 turn，以及恢复与对账未结束的 turn。
   - `mcp.rs`：每个 turn 一个 URL 的 MCP 路由，以及执行者的工具。
@@ -31,7 +32,8 @@ Angela 的 CLI（每个 turn 一个进程）──MCP /mcp/angela/{token}──�
   - `project.rs`：一个项目实例，现在只包着它的 `Instance`。
   - `projects.rs`：从登记中打开项目、新建并接入项目、记下打不开的项目，以及停止时逐个停下项目。
   - `angela.rs`：Angela 的实例与调度器。调度器观察各项目，按规则为她登记 turn，规则见 manager-actions.md §6"Manager 什么时候运行"；她的数据位置见 data-model.md §10.6。
-  - `mcp`：后端的 MCP 路由。`mod.rs` 把执行者的工具挂到各项目上，`angela.rs` 是 Angela 的工具。
+  - `mcp`：后端的 MCP 路由，只有 Angela 的工具（`angela.rs`）。执行者的工具由 worker 宿主提供。
+  - `scheduler.rs`：项目的调度器，把排队的任务交给所属的 worker。后端不运行项目中 role 的 turn（tech-plan.md §7 第 7 组）。
   - `workers.rs`：按 host 目录的 `workers.toml` 启动并看管 worker 宿主，经 worker 协议派任务，把 worker 的事件写进所属项目的数据库（tech-plan.md §7 第 1 步）。
 - role 与 Angela 的 CLI 每个 turn 启动一次，结束即退出（harness-adapter.md §1.1）。
 
@@ -84,6 +86,6 @@ spikes/                  实测用的探针脚本
   - 推送到 main 时另外运行性能基线，只记录，不设门槛（perf-baseline.md）。
 - 后端按 `backend/rustfmt.toml` 统一格式（行宽 120）。
 - **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：只保留回归测试，没有拦住过问题的测试已经退役（AGENTS.md"测试的目的"）。
-- 后端测试用假 CLI 驱动真实的后端。真实 CLI 的测试已随测试退役删除，留下的实测结果见 harness-adapter.md §2。
+- 后端测试用假 CLI 驱动真实的后端；执行者的 runner 测试用假 CLI 驱动真实的 worker 宿主（`worker/tests/runner.rs`）。真实 CLI 的测试已随测试退役删除，留下的实测结果见 harness-adapter.md §2。
 - 前端的单元测试与端到端测试见 frontend.md §7.13。
 - 把后端的几个测试入口合并为一个二进制，试过两次，运行时间没有明显缩短，构建反而更慢，已撤回（[#24](https://github.com/vorton-lang/Lobotomy/pull/24)）。

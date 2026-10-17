@@ -4,7 +4,7 @@
 //! `lobotomy-worker --root <dir> --harness <claude|codex> [--model <m>] [--effort <e>]
 //! [--permission <full|auto_review>] [--upstream <url|path> [--base <branch>] [--author-name <n>]
 //! [--author-email <e>] [--port-start <n>]] [--forge github --repo <owner/name> [--app-id <id>
-//! --app-key <pem>] [--forge-api <url>] [--co-author <who>]]` runs it. With a repository, each
+//! --app-key <pem>] [--forge-api <url>] [--co-author <who>]] [--stop-grace <seconds>]` runs it. With a repository, each
 //! attempt works in its own clone of it; without, in a plain folder. On a forge, the task's change
 //! goes out as a pull request, its checks are the evidence, and adopting merges it. The forge's
 //! token comes from the App, or from `LOBOTOMY_FORGE_TOKEN`. `LOBOTOMY_CODEX` and
@@ -25,7 +25,7 @@ use tracing_subscriber::EnvFilter;
 const USAGE: &str = "usage: lobotomy-worker --root <dir> --harness <claude|codex> [--model <m>] [--effort <e>] \
     [--permission <full|auto_review>] [--upstream <url|path> [--base <branch>] [--author-name <n>] \
     [--author-email <e>] [--port-start <n>]] [--forge github --repo <owner/name> [--app-id <id> --app-key <pem>] \
-    [--forge-api <url>] [--co-author <who>]]";
+    [--forge-api <url>] [--co-author <who>]] [--stop-grace <seconds>]";
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -113,11 +113,17 @@ fn parse(args: &[String]) -> anyhow::Result<(PathBuf, Config)> {
         }),
         None => None,
     };
+    let stop_grace = match take("stop-grace") {
+        Some(s) => {
+            std::time::Duration::from_secs(s.parse().with_context(|| format!("--stop-grace {s} is not seconds"))?)
+        }
+        None => std::time::Duration::from_secs(10),
+    };
     if let Some(name) = values.keys().next() {
         bail!("unknown argument --{name}; {USAGE}");
     }
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
-    let config = Config { harness, cli: HarnessConfig::detect()?, model, effort, permission, repo, forge };
+    let config = Config { harness, cli: HarnessConfig::detect()?, model, effort, permission, repo, forge, stop_grace };
     Ok((root, config))
 }
 

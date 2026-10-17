@@ -1,6 +1,7 @@
 // Each test gets a backend of its own (#16): a fresh host directory with one project connected to a
-// fresh git repository, and the fake Codex. Starting one takes a fraction of a second, and no test
-// depends on what an earlier one left. The backend is built beforehand with
+// fresh git repository, and Angela on the fake Codex, whose synthetic turns make long threads
+// (fake-bench.mjs). Starting one takes a fraction of a second, and no test depends on what an earlier
+// one left. The backend is built beforehand with
 // `cargo build -p lobotomyd`; `LOBOTOMYD` names another build, as for the app, such as one in its
 // own target directory while the app runs the usual one.
 
@@ -65,6 +66,7 @@ async function startBackend(): Promise<Backend & { stop: (keepLog?: string) => P
   }
   const { port } = JSON.parse(fs.readFileSync(info, 'utf8')) as { port: number };
   const token = fs.readFileSync(path.join(host, 'gui-token'), 'utf8').trim();
+  await angelaOnCodex(port, token);
 
   /** Stops the backend and removes its directories; its log goes to `keepLog` first, if given. */
   const stop = async (keepLog?: string) => {
@@ -76,6 +78,27 @@ async function startBackend(): Promise<Backend & { stop: (keepLog?: string) => P
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   };
   return { port, token, repo, stop };
+}
+
+/** Puts Angela on the fake Codex through the GUI service, as the settings do. */
+async function angelaOnCodex(port: number, token: string) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/gui?token=${encodeURIComponent(token)}`);
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = reject;
+  });
+  const reply = new Promise<{ error?: { message: string } }>((resolve) => {
+    socket.onmessage = (event) => {
+      const message = JSON.parse(String(event.data));
+      if (message.id === 1) resolve(message);
+    };
+  });
+  const args = { request_id: 'e2e-angela', role: 'Angela', harness: 'codex' };
+  const params = { project: 'angela', name: 'set_role_harness', args };
+  socket.send(JSON.stringify({ id: 1, method: 'command', params }));
+  const { error } = await reply;
+  socket.close();
+  if (error) throw new Error(`Angela stays on Claude: ${error.message}`);
 }
 
 export const test = base.extend<{ backend: Backend }>({
@@ -102,15 +125,8 @@ export async function open(page: Page, backend: Backend) {
   await expect(page.getByText('已连接')).toBeVisible();
 }
 
-/** Creates a task for Malkuth, the executor of the test project, through the "+ 新任务" dialog. */
-export async function createTask(page: Page, title: string, body: string, { criteria = 'work.txt 存在' } = {}) {
-  await page.getByRole('button', { name: '+ 新任务' }).click();
-  const dialog = page.getByRole('dialog', { name: '新任务' });
-  await dialog.getByLabel('标题').fill(title);
-  await dialog.getByLabel('你的原话').fill(body);
-  await dialog.getByLabel('完成条件').fill(criteria);
-  await dialog.getByRole('button', { name: '交给 Malkuth' }).click();
+/** Shows 「全部」, Angela's conversation: the window opens on the backend's one project. */
+export async function showAngela(page: Page) {
+  await page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /^全部/ }).click();
+  await expect(page.getByRole('region', { name: 'Angela' })).toBeVisible();
 }
-
-/** The task panel shows a task over the thread; it is a region named by the task's title. */
-export const taskPanel = (page: Page, title: string) => page.getByRole('region', { name: title });

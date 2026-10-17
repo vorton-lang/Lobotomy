@@ -490,7 +490,7 @@
 - 授权（§4.6）：`workers.toml` 里列出需要用户授权的路径。交付物带上改动的路径；改动碰到这些路径时，采用的工具必须带用户消息的 ID 作为授权。
 - worker 的过程（agent 做了什么、跑了哪些命令），第 1 步不在界面上显示，留给第 3 步的"查看过程"和协议的 `read_log`（用户，2026-10-17）。
 - **实现**（2026-10-17，`lobotomyd/src/workers.rs`）：后端为 `workers.toml` 的每个条目启动一个 worker 宿主，宿主退出 5 秒后重启。重启后按项目库里已应用的 seq 续订。项目打开时，worker 名写成 remote 的 role。项目调度器把 remote role 的排队任务交给 worker。Angela 的 send_to_role、accept、send_back、abandon、set_paused 遇到 worker 的任务时，改走 worker 协议，其中 accept 带授权检查。配置格式见 `workers.rs` 开头的注释。
-- **过渡期的偏差**：计划写的是去掉项目调度器直接运行执行者的路径。现在这条路径只对非 remote 的 role 保留，因为后端的回归测试靠它覆盖 runner。这些测试迁到 worker 宿主之后，再删掉这条路径。
+- **已执行**（用户，2026-10-17）：项目调度器直接运行执行者的路径已经删除。后端只运行 Angela 的 turn；项目调度器只把排队任务交给 worker。项目打开时，没有被任何记录引用的非 remote role 被删除，例如初始的 Malkuth。原来靠这条路径覆盖 runner 的回归测试迁到 worker 宿主（`worker/tests/runner.rs`）。只覆盖本地执行者流程的测试已删除，包括 e2e 中退回后的任务面板、归档时对账 turn，以及真实后端的截图场景。e2e 和性能基线中的长对话改由 Angela 在假 Codex 上的 turn 生成。
 
 **第 1 步的范围**：
 

@@ -268,9 +268,8 @@ fn reports(conn: &Connection, task_id: &str) -> Result<Vec<ReportRead>> {
 // ---- what wakes the manager (manager-actions.md §6 "Manager 什么时候运行") ----
 
 /// Whether nothing in the project moves on without the user: no turn registered or running, no
-/// worker's attempt on its way (tech-plan.md §7 step 1), and nothing the scheduler would start, a
-/// queued task or a message to deliver, for a role that does not wait for the user and whose
-/// harness is not quota-blocked (`blocked`). A role or task that waits for the user is in "等你决定"
+/// worker's attempt on its way, and no queued task for a worker whose harness is not
+/// quota-blocked (`blocked`) (tech-plan.md §7 step 1). What waits for the user is in "等你决定"
 /// instead (manager-actions.md §6 "组织离了用户就无法推进").
 pub fn settled(conn: &Connection, blocked: &[String]) -> Result<bool> {
     let running: bool =
@@ -280,34 +279,9 @@ pub fn settled(conn: &Connection, blocked: &[String]) -> Result<bool> {
     if running || crate::worker::moving(conn)? {
         return Ok(false);
     }
-    for role in crate::role::list_roles(conn)? {
-        if blocked.contains(&role.harness) {
-            continue;
-        }
-        // A worker's queued task goes to the worker.
-        if role.remote {
-            if crate::task::next_queued_task(conn, &role.name)?.is_some() {
-                return Ok(false);
-            }
-            continue;
-        }
-        if crate::turn::hold(conn, &role.name)?.is_some() {
-            continue;
-        }
-        let occupant = crate::task::occupant(conn, &role.name)?;
-        // A free role starts its next queued task.
-        if occupant.is_none() && crate::task::next_queued_task(conn, &role.name)?.is_some() {
-            return Ok(false);
-        }
-        // Its messages go in its next turn while it is free or its task executes.
-        let deliverable = match &occupant {
-            None => true,
-            Some(task) => {
-                let task = load_task(conn, task)?;
-                task.phase == Phase::Executing && !task.paused
-            }
-        };
-        if deliverable && !crate::task::queued_messages(conn, &role.name)?.is_empty() {
+    for role in crate::role::list_roles(conn)?.into_iter().filter(|r| r.remote) {
+        // A queued task goes to its worker.
+        if !blocked.contains(&role.harness) && crate::task::next_queued_task(conn, &role.name)?.is_some() {
             return Ok(false);
         }
     }

@@ -279,6 +279,10 @@ impl Workers {
         .await?;
         for (worker, task, criteria) in queued {
             let Some(entry) = self.entry(&worker) else { continue };
+            // A refused quota starts nothing new until the user retries (data-model.md §8.3, §8.4).
+            if self.host.is_blocked(&entry.agent.harness)? {
+                continue;
+            }
             let params = CreateTaskParams {
                 task_id: task.id.clone(),
                 spec_version: task.criteria_version as u32,
@@ -364,7 +368,7 @@ impl Workers {
             next: AtomicI64::new(1),
         });
         let stdout = BufReader::new(child.stdout.take().context("no stdout")?);
-        let reader = tokio::spawn(read(stdout, client.clone(), project.clone(), name.to_owned()));
+        let reader = tokio::spawn(read(stdout, client.clone(), project.clone(), self.host.clone(), name.to_owned()));
 
         let hello = client.call::<Hello>(&HelloParams { protocols: vec![PROTOCOL_VERSION.into()] }).await?;
         tracing::info!(worker = name, protocol = hello.protocol, "worker host ready");
@@ -391,6 +395,7 @@ async fn read(
     mut stdout: BufReader<tokio::process::ChildStdout>,
     client: Arc<Client>,
     project: Arc<Project>,
+    host: Arc<Host>,
     worker: String,
 ) -> anyhow::Result<()> {
     loop {
@@ -429,14 +434,21 @@ async fn read(
                 }
             }
             Message::Notification(n) if n.method == RESOURCES => {
+                // The quota domain is the host's: a worker's refusal blocks it for every project, and
+                // only the user's retry opens it again (data-model.md §8.3, §8.4).
                 if let Ok(resources) = serde_json::from_value::<Resources>(n.params) {
                     for quota in resources.quota.iter().filter(|q| q.blocked) {
-                        tracing::warn!(
-                            worker,
-                            harness = quota.harness,
-                            message = quota.message,
-                            "the worker's quota is refused"
-                        );
+                        let message = quota.message.clone().unwrap_or_default();
+                        match host.db.block(&quota.harness, quota.resets_at, &message, lobotomy_core::id::now_ms()) {
+                            Ok(true) => {
+                                tracing::warn!(worker, harness = quota.harness, message, "quota domain blocked");
+                                host.changed();
+                            }
+                            Ok(false) => {}
+                            Err(e) => {
+                                tracing::error!(worker, error = format!("{e:#}"), "could not block the quota domain")
+                            }
+                        }
                     }
                 }
             }

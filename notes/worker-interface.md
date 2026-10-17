@@ -176,7 +176,8 @@ evidence = { required = ["ci-ok"] }
 - attempt 的状态由实例中任务的阶段推出：执行中为 `working`；有开放问题为 `blocked`（`needs_input`）；上一个 turn 异常结束为 `blocked`（`resume`）；未结束的 turn 处于 unknown 为 `unknown`；等验收为 `delivered`。
 - `send_message` 按状态落到实例里：`delivered` 时是退回返工，`resume` 时是继续，其余是排队给下一个 turn。
 - `stop` 和 `revise` 先打断进程；等 attempt 没有未结束的 turn，才把它记为 `canceled`。`close(abandoned)` 同理，记为 `abandoned`。
-- 额度：turn 被拒时，宿主发 `resources` 通知，自己不封住额度域，也不自动续接；之后同一 harness 上有 turn 正常结束，就报告额度已恢复。
+- CLI 不响应打断时，宿主在宽限期后连同进程树结束它，这个 turn 记为被打断。宽限期由参数 `--stop-grace <秒>` 给出，默认 10 秒。这是实现时的选择，用户没有逐条确认。
+- 额度：turn 被拒时，宿主发 `resources` 通知，自己不封住额度域，也不自动续接；之后同一 harness 上有 turn 正常结束，就报告额度已恢复。编排层收到被拒的通知后，封住本机的这个额度域：所有项目都不再向这个 harness 派任务，直到用户重试（data-model.md §8.4，tech-plan.md §7 第 1 步的范围）。
 
 **空闲时也停在 `blocked`**（用户确认，2026-10-17）：turn 正常结束，但 agent 既没有汇报 done 也没有提问，而且没有排队的消息时，attempt 停在 `blocked`（`resume`），原因写明。理由：此时什么都不在运行，报 `working` 会把等待藏起来（§4）。会出现的情况：汇报的工具调用失败（#13 记录过一次被拒）；模型只在文字里说"做完了"或提问；只报了 `progress`；模型把命令放到后台后结束了 turn，而 print 模式下后台任务结束不会再唤醒它（harness-adapter.md §1.6 的实测）。
 

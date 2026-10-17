@@ -1,24 +1,18 @@
-//! The scheduler: reconciles unknown turns, starts attempts and registers turns (data-model.md
-//! §3.3, §9.2 runtime commands).
-//!
-//! Each step is a runtime command whose preconditions live in the command itself; a rejection
-//! just means there is nothing to do for that role now.
+//! A project's scheduler: it gives the queued tasks of the project's workers to them
+//! (tech-plan.md §7 step 1, group 7). The backend no longer runs executors itself; turns a project
+//! still has from before are reconciled once their CLI has exited (data-model.md §3.3).
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use lobotomy_agent::ignore_rejection;
-use lobotomy_agent::runner::{db, launch, launch_registered, reconcile, runtime};
+use lobotomy_agent::runner::{db, reconcile};
 use lobotomy_core::project::load_project;
-use lobotomy_core::role::list_roles;
-use lobotomy_core::task::{StartAttempt, next_queued_task, occupant};
-use lobotomy_core::turn::RegisterTurn;
 use tokio_util::sync::CancellationToken;
 
 use crate::project::Project;
 
-/// How often the scheduler looks again without being woken, mainly to see whether the CLI of an
-/// unknown turn has exited.
+/// How often the scheduler looks again without being woken: a worker host that was not running
+/// may be by now.
 const POLL: Duration = Duration::from_secs(5);
 
 /// Call [`lobotomy_agent::runner::recover`] once before.
@@ -41,31 +35,8 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
     if db(project, |db| db.read(load_project)).await?.is_none() {
         return Ok(());
     }
-    // A worker's queued tasks go to the worker (tech-plan.md §7 step 1).
-    if let Some(workers) = project.host.workers.get()
-        && let Err(e) = workers.dispatch(project).await
-    {
-        tracing::warn!(error = format!("{e:#}"), "could not give tasks to the workers");
+    if let Some(workers) = project.host.workers.get() {
+        workers.dispatch(project).await?;
     }
-    let roles = db(project, |db| db.read(list_roles)).await?;
-    // Roles the backend runs itself; they stay until the tests that drive the runner through them
-    // move to the worker host (tech-plan.md §7 step 1).
-    for role in roles.into_iter().filter(|r| !r.remote) {
-        // A blocked quota domain starts nothing new; running turns end on their own. Only the
-        // user's retry opens the domain again (data-model.md §8.3, §8.4).
-        if project.host.is_blocked(&role.harness)? {
-            continue;
-        }
-        let name = role.name.clone();
-        let (busy, next) =
-            db(project, move |db| db.read(|c| Ok((occupant(c, &name)?.is_some(), next_queued_task(c, &name)?))))
-                .await?;
-        if !busy && let Some(task) = next {
-            ignore_rejection(runtime(project, StartAttempt { task_id: task.id }).await)?;
-        }
-        if let Some(turn) = ignore_rejection(runtime(project, RegisterTurn { role: role.name.clone() }).await)? {
-            launch(&project.instance, turn.turn_id);
-        }
-    }
-    launch_registered(&project.instance).await
+    Ok(())
 }

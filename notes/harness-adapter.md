@@ -323,10 +323,12 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 |---|---|
 | Angela（manager） | host 目录下她实例的 `work/`，一个空目录；按绝对路径读各项目的仓库（data-model.md §10.6） |
 | Binah（tech_lead） | 未实现，roadmap 待排 |
-| Malkuth（worker） | 项目数据目录下的 `work/Malkuth/`，一个空目录 |
+| 执行者（worker） | worker 宿主为每个 attempt 准备的工作区：普通文件夹，或给了上游时的一份 clone（worker-interface.md §10） |
 | Yesod（reviewer） | 未实现，roadmap 待排。原设计在固定的候选成果上单独物化审查现场，依赖的私有存储已退出（#86） |
 
 **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，2026-10-17）：每个 role 在自己的空目录中运行。Angela 用她实例的 `work/`，项目的 role 用项目数据目录下的 `work/<role 名>/`。运行时不把仓库复制进任何目录，所以过渡期的 main 不能执行代码任务。依据：槽位与私有存储随 worker 层的替换退出。
+
+**语义更新**（#86，用户，2026-10-17）：后端不再运行项目中的 role，上一条中项目的 role 用 `work/<role 名>/` 不再适用。执行者是 `workers.toml` 中的 worker，在 worker 宿主准备的工作区中运行，见上表。依据：用户要求删掉本地执行者的路径。
 
 角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。Angela 读项目的仓库，与用户看到同一份代码；她的指令写明仓库只用来展示，不修改（data-model.md §10.6，用户确认，2026-10-11）。
 

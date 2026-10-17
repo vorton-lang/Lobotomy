@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FIRST_TASK, START_MARKER, infoFile, startBackend, waitForFile, type BenchInfo } from './setup';
+import { START_MARKER, infoFile, startBackend, waitForFile, type BenchInfo } from './setup';
 import {
   longTasks,
   memory,
@@ -29,14 +29,23 @@ let browserVersion = '';
 
 test.describe.configure({ mode: 'serial' });
 
-async function open(page: Page): Promise<Probe> {
+/**
+ * Opens the GUI and shows 「全部」, Angela's conversation: the window opens on the host's one project.
+ * Returns the probe and when 「全部」 was chosen.
+ */
+async function open(page: Page): Promise<Probe & { shown: number }> {
   const p = await probe(page);
   const { port, token } = info();
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto(`/?backend=${encodeURIComponent(`ws://127.0.0.1:${port}/gui`)}&token=${encodeURIComponent(token)}`, {
     waitUntil: 'commit',
   });
-  return p;
+  return { ...p, shown: await showAngela(p) };
+}
+
+async function showAngela(p: Probe): Promise<number> {
+  await p.page.getByRole('navigation', { name: '项目' }).getByRole('button', { name: /^全部/ }).click();
+  return now(p);
 }
 
 const NEWEST = 'bench newest';
@@ -45,8 +54,9 @@ test('opening a thread of 2000+ items', async ({ page, browser }) => {
   browserVersion = browser.version();
   const p = await open(page);
   const ready = await whenText(p, '.thread .row', NEWEST);
+  // From choosing 「全部」: the project the window opens on comes first.
   results.open = {
-    newest_visible_ms: round(ready),
+    newest_visible_ms: round(ready - p.shown),
     long_tasks: await longTasks(p),
     snapshot_ms: await takeRequests(p, 'snapshot'),
     thread_page_ms: await takeRequests(p, 'thread'),
@@ -54,8 +64,9 @@ test('opening a thread of 2000+ items', async ({ page, browser }) => {
   };
 
   await page.reload({ waitUntil: 'commit' });
+  const shown = await showAngela(p);
   const again = await whenText(p, '.thread .row', NEWEST);
-  results.reload = { newest_visible_ms: round(again), long_tasks: await longTasks(p) };
+  results.reload = { newest_visible_ms: round(again - shown), long_tasks: await longTasks(p) };
 
   // This completed fixture preserves its closed bold prefix; streaming repair has separate e2e coverage.
   await expect(page.locator('.markdown strong', { hasText: 'An unclosed reply' })).toBeVisible();
@@ -103,8 +114,8 @@ test('searching for the start of the thread', async ({ page }) => {
   const field = page.getByLabel('搜索对话');
   await field.click();
   const before = await now(p);
-  // Only the first turn's brief has it: the search loads every older page on the way there.
-  await page.keyboard.type(FIRST_TASK);
+  // Only the first message has it: the search loads every older page on the way there.
+  await page.keyboard.type(START_MARKER);
   const found = await whenText(p, '.thread .row', START_MARKER);
   results.search_to_start = {
     found_ms: round(found - before),
@@ -214,18 +225,17 @@ test('the backend restarts and the GUI catches up', async ({ page }) => {
   };
 });
 
-/** Puts Malkuth on a harness through the settings, as the user does. */
+/** Puts Angela on a harness through the settings, as the user does. */
 async function setHarness(page: Page, harness: 'claude' | 'codex') {
   const name = harness === 'claude' ? 'Claude' : 'Codex';
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const settings = page.getByRole('region', { name: '设置' });
-  await settings.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '常规' }).click();
-  const choice = settings.getByRole('radiogroup', { name: 'Malkuth 使用的 harness' }).getByRole('radio', { name });
+  await settings.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: 'Angela' }).click();
+  const choice = settings.getByRole('radiogroup', { name: 'Angela 使用的 harness' }).getByRole('radio', { name });
   // The controlled radio updates when the backend's settings snapshot arrives.
   await choice.click();
   await expect(choice).toBeChecked();
   await settings.getByRole('button', { name: '返回', exact: true }).click();
-  await expect(page.locator('.role-line .badge')).toHaveText(name);
 }
 
 // Claude's replies stream in a piece at a time; Codex's arrive whole (perf-baseline.md §2).

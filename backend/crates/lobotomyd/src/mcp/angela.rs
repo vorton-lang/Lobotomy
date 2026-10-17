@@ -356,7 +356,7 @@ impl AngelaTools {
         .await
     }
 
-    #[tool(description = "派一项任务给项目中的 role 或 worker。必须写明允许的动作（actions）和停止条件（stop_when）。\
+    #[tool(description = "派一项任务给项目中的 worker。必须写明允许的动作（actions）和停止条件（stop_when）。\
                        要转达的用户原话用 quote 引用消息 ID，由运行时原样插入，不要自己复述成原话。")]
     async fn assign(
         &self,
@@ -364,6 +364,12 @@ impl AngelaTools {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |reach, project, caller| async move {
+            // Only a worker takes tasks (tech-plan.md §7 step 1).
+            let name = args.role.clone();
+            let role = db(&project, move |db| db.read(|c| lobotomy_core::role::load_role(c, &name))).await?;
+            if !role.remote {
+                anyhow::bail!("{} 不是 worker；read_project 的 roles 里 remote 为 true 的才能接任务", args.role);
+            }
             let context = replied_to(&reach.angela, &project, &args.quote, args.context).await?;
             let quotes = quotes(&reach.angela, args.quote).await?;
             let ledger = cite(&reach.angela, &project, args.ledger).await?;
@@ -385,7 +391,7 @@ impl AngelaTools {
         .await
     }
 
-    #[tool(description = "给项目中的 role 发消息，可以附上任务。要转达的用户原话用 quote 引用消息 ID，\
+    #[tool(description = "给某个任务的 worker 发消息。要转达的用户原话用 quote 引用消息 ID，\
                        由运行时原样插入，你的话附在后面。")]
     async fn send_to_role(
         &self,
@@ -393,27 +399,28 @@ impl AngelaTools {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |reach, project, caller| async move {
+            // A worker takes messages about its task only (worker-interface.md §3).
+            let Some(task_id) = args.task_id.clone() else {
+                anyhow::bail!("worker 只接关于任务的消息：写上 task_id");
+            };
+            let Some(worker) = worker_of(&project, &task_id).await? else {
+                anyhow::bail!("任务 {task_id} 还没交给 worker，等它开始后再发");
+            };
             let context = replied_to(&reach.angela, &project, &args.quote, args.context).await?;
             let quotes = quotes(&reach.angela, args.quote).await?;
             let ledger = cite(&reach.angela, &project, args.ledger).await?;
             let cmd = SendToRole {
                 request_id: new_id("req"),
-                role: args.role,
+                role: worker.worker.clone(),
                 task_id: args.task_id,
                 quotes,
                 context,
                 ledger,
                 interpretation: args.interpretation,
             };
-            let task_id = cmd.task_id.clone();
             let created = db(&project, move |db| db.execute(&caller, &cmd)).await?;
-            if let Some(task_id) = task_id
-                && let Some(worker) = worker_of(&project, &task_id).await?
-            {
-                workers(&reach)?.forward(&project, &worker, &task_id, &created.id).await?;
-                return Ok(format!("已转给 worker {}（{}）。", worker.worker, created.id));
-            }
-            Ok(format!("已放进收件箱（{}）；它下一个 turn 收到。", created.id))
+            workers(&reach)?.forward(&project, &worker, &task_id, &created.id).await?;
+            Ok(format!("已转给 worker {}（{}）。", worker.worker, created.id))
         })
         .await
     }

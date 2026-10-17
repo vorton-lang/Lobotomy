@@ -77,6 +77,8 @@ pub struct Tasks {
     open: Mutex<HashMap<String, Open>>,
     /// When each delivered version's checks were last read from the forge.
     polled: Mutex<HashMap<String, Instant>>,
+    /// When each turn was asked to stop: past the grace period, it is ended.
+    interrupts: Mutex<HashMap<String, Instant>>,
 }
 
 /// How often the checks of a delivered version are read again while some are pending.
@@ -84,7 +86,12 @@ const CHECK_POLL: Duration = Duration::from_secs(20);
 
 impl Tasks {
     pub fn new(host: Arc<WorkerHost>) -> Arc<Self> {
-        Arc::new(Self { host, open: Mutex::new(HashMap::new()), polled: Mutex::new(HashMap::new()) })
+        Arc::new(Self {
+            host,
+            open: Mutex::new(HashMap::new()),
+            polled: Mutex::new(HashMap::new()),
+            interrupts: Mutex::new(HashMap::new()),
+        })
     }
 
     /// Whether `version`'s checks are due to be read: never yet, or not for a while.
@@ -452,7 +459,7 @@ impl Tasks {
             match params.level {
                 StopLevel::Turn => {
                     if let Some(instance) = self.instance(&task.id) {
-                        interrupt_running(&instance);
+                        self.interrupt_running(&instance);
                     }
                 }
                 StopLevel::Attempt => {
@@ -630,25 +637,55 @@ async fn deliver(instance: &TaskInstance, attempt: &AttemptRow, params: &SendMes
     Ok(id)
 }
 
-/// Asks the agent's running CLI to stop, once it has started. The turn then ends as interrupted.
-fn interrupt_running(instance: &Arc<TaskInstance>) {
-    let target = instance
-        .running
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(_, t)| t.pid.is_some() && !t.interrupt_requested)
-        .map(|(id, _)| id.clone());
-    if let Some(turn_id) = target {
-        let instance = instance.clone();
-        tokio::spawn(async move {
-            if let Err(e) = runner::interrupt(&instance, &turn_id).await {
-                tracing::warn!(turn_id, error = format!("{e:#}"), "could not interrupt");
+impl Tasks {
+    /// Asks the agent's running CLI to stop, once it has started. The turn then ends as
+    /// interrupted; a CLI that has not exited after the grace period is ended (`force_overdue`).
+    fn interrupt_running(&self, instance: &Arc<TaskInstance>) {
+        let target = instance
+            .running
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, t)| t.pid.is_some() && !t.interrupt_requested)
+            .map(|(id, _)| id.clone());
+        if let Some(turn_id) = target {
+            self.interrupts.lock().unwrap().insert(turn_id.clone(), Instant::now());
+            let instance = instance.clone();
+            tokio::spawn(async move {
+                if let Err(e) = runner::interrupt(&instance, &turn_id).await {
+                    tracing::warn!(turn_id, error = format!("{e:#}"), "could not interrupt");
+                }
+            });
+        }
+    }
+
+    /// Ends the CLIs that ignored an interrupt for longer than the grace period, with their process
+    /// trees, and their turns as interrupted (harness-adapter.md §1.8).
+    async fn force_overdue(&self, instance: &Arc<TaskInstance>) -> anyhow::Result<()> {
+        let grace = self.host.config.stop_grace;
+        let overdue: Vec<(String, CancellationToken)> = {
+            let interrupts = self.interrupts.lock().unwrap();
+            let running = instance.running.lock().unwrap();
+            running
+                .iter()
+                .filter(|(id, t)| t.interrupt_requested && interrupts.get(*id).is_some_and(|at| at.elapsed() >= grace))
+                .map(|(id, t)| (id.clone(), t.stop.clone()))
+                .collect()
+        };
+        for (turn_id, stop) in overdue {
+            tracing::warn!(turn_id, "the CLI ignored the interrupt; ending its process tree");
+            // The runner ends the process tree, then lets the turn go without ending it.
+            stop.cancel();
+            while instance.running.lock().unwrap().contains_key(&turn_id) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-        });
+            runtime(instance, EndTurn { turn_id: turn_id.clone(), outcome: Outcome::Interrupted, failure: None })
+                .await?;
+            self.interrupts.lock().unwrap().remove(&turn_id);
+        }
+        Ok(())
     }
 }
-
 // ---- the loop ----
 
 async fn run(tasks: Arc<Tasks>, task_id: String, instance: Arc<TaskInstance>, stop: CancellationToken) {
@@ -674,6 +711,7 @@ async fn run(tasks: Arc<Tasks>, task_id: String, instance: Arc<TaskInstance>, st
 /// orchestrator what changed. Returns whether the task is finished: closed, with nothing left
 /// running.
 async fn step(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> anyhow::Result<bool> {
+    tasks.force_overdue(instance).await?;
     reconcile(instance).await?;
     // create_task opens the instance before it records the task.
     let id = task_id.to_owned();
@@ -1014,7 +1052,7 @@ async fn settle_endings(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstanc
                         .await?;
                 }
                 // Its CLI exits; an unknown one is reconciled once it has.
-                _ => interrupt_running(instance),
+                _ => tasks.interrupt_running(instance),
             }
             continue;
         }

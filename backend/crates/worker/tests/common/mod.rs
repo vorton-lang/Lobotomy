@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use lobotomy_worker_protocol::event::{Artifact, AttemptState, Event, EventBody};
+use lobotomy_worker_protocol::event::{Artifact, AttemptState, Event, EventBody, Resources};
 use lobotomy_worker_protocol::ops::{
     Action, Budget, CreateTaskParams, Hello, HelloParams, SendMessageParams, Snapshot, Subscribe, SubscribeParams,
     TaskSpec,
@@ -19,9 +19,13 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 pub const WAIT: Duration = Duration::from_secs(60);
 
-fn fixture(name: &str) -> String {
+/// A fake CLI from lobotomyd's fixtures, as `LOBOTOMY_CODEX` or `LOBOTOMY_CLAUDE` take it: run by
+/// Node, with `flags` before the CLI's own arguments.
+pub fn fixture(name: &str, flags: &[&str]) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lobotomyd/tests/fixtures").join(name);
-    serde_json::to_string(&["node".to_owned(), path.to_string_lossy().into_owned()]).unwrap()
+    let mut command = vec!["node".to_owned(), path.to_string_lossy().into_owned()];
+    command.extend(flags.iter().map(|f| (*f).to_owned()));
+    serde_json::to_string(&command).unwrap()
 }
 
 pub struct Worker {
@@ -30,6 +34,8 @@ pub struct Worker {
     stdout: BufReader<ChildStdout>,
     next_id: i64,
     events: VecDeque<Event>,
+    /// The `resources` notifications, in order.
+    pub resources: Vec<Resources>,
 }
 
 impl Worker {
@@ -39,11 +45,16 @@ impl Worker {
 
     /// With `args` after the required ones, and `env` added to the process's.
     pub async fn start_with(root: &Path, args: &[&str], env: &[(&str, &str)]) -> Self {
+        Self::start_on(root, "codex", args, env).await
+    }
+
+    /// On `harness`, with `args` after the required ones, and `env` added to the process's.
+    pub async fn start_on(root: &Path, harness: &str, args: &[&str], env: &[(&str, &str)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_lobotomy-worker"))
-            .args(["--root".as_ref(), root.as_os_str(), "--harness".as_ref(), "codex".as_ref()])
+            .args(["--root".as_ref(), root.as_os_str(), "--harness".as_ref(), harness.as_ref()])
             .args(args)
-            .env("LOBOTOMY_CODEX", fixture("fake-codex.mjs"))
-            .env("LOBOTOMY_CLAUDE", fixture("fake-claude.mjs"))
+            .env("LOBOTOMY_CODEX", fixture("fake-codex.mjs", &[]))
+            .env("LOBOTOMY_CLAUDE", fixture("fake-claude.mjs", &[]))
             .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -52,9 +63,9 @@ impl Worker {
             .unwrap();
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut worker = Self { child, stdin, stdout, next_id: 0, events: VecDeque::new() };
+        let mut worker = Self { child, stdin, stdout, next_id: 0, events: VecDeque::new(), resources: Vec::new() };
         let hello = worker.call::<Hello>(&HelloParams { protocols: vec![PROTOCOL_VERSION.into()] }).await.unwrap();
-        assert_eq!(hello.capabilities.agent.harness, "codex");
+        assert_eq!(hello.capabilities.agent.harness, harness);
         worker
     }
 
@@ -78,10 +89,12 @@ impl Worker {
             .expect("the worker host said nothing for a minute")
             .unwrap()
             .expect("the worker host closed its stdout");
-        if let Message::Notification(n) = &message
-            && n.method == "event"
-        {
-            self.events.push_back(serde_json::from_value(n.params.clone()).unwrap());
+        if let Message::Notification(n) = &message {
+            match n.method.as_str() {
+                "event" => self.events.push_back(serde_json::from_value(n.params.clone()).unwrap()),
+                "resources" => self.resources.push(serde_json::from_value(n.params.clone()).unwrap()),
+                _ => {}
+            }
         }
         message
     }
@@ -190,4 +203,33 @@ pub fn upstream(dir: &Path) -> PathBuf {
     git(&work, &["commit", "--quiet", "-m", "initial"]);
     git(dir, &["clone", "--quiet", "--bare", "upstream-work", "upstream.git"]);
     dir.join("upstream.git")
+}
+
+impl Worker {
+    /// The first state change of `task` to `state` whose reason `wanted` accepts.
+    pub async fn state_why(&mut self, task: &str, state: AttemptState, wanted: impl Fn(&str) -> bool) -> String {
+        let what = format!("{task} to be {state:?} for the reason expected");
+        let event = self
+            .event(&what, |e| {
+                e.task_id == task
+                    && matches!(&e.body, EventBody::StateChanged { state: s, reason: Some(r), .. } if *s == state && wanted(r))
+            })
+            .await;
+        match event.body {
+            EventBody::StateChanged { reason: Some(reason), .. } => reason,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Reads, until `wanted` accepts one, the `resources` notifications.
+    pub async fn resources_until(&mut self, wanted: impl Fn(&Resources) -> bool) -> Resources {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            if let Some(r) = self.resources.iter().find(|r| wanted(r)) {
+                return r.clone();
+            }
+            assert!(tokio::time::Instant::now() < deadline, "timed out waiting for resources");
+            self.read().await;
+        }
+    }
 }

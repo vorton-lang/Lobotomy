@@ -7,9 +7,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lobotomy_core::task::CreateTask;
-use lobotomy_core::turn::{Turn, TurnState, last_turn};
-use lobotomy_core::{Caller, Db};
 use lobotomyd::host::{Cli, HarnessConfig, Host};
 use lobotomyd::project::Project;
 
@@ -103,42 +100,13 @@ impl Started {
 }
 
 pub async fn start(dir: &Path) -> Started {
-    start_with(dir, fake_codex()).await
-}
-
-pub async fn start_with(dir: &Path, harness: HarnessConfig) -> Started {
     // Keep runtime errors in the failing test's captured output.
     let _ = tracing_subscriber::fmt().with_env_filter("lobotomyd=info").with_test_writer().with_ansi(false).try_init();
-    let host = open_project(dir, harness).await.host.clone();
+    let host = open_project(dir, fake_codex()).await.host.clone();
     let backend = lobotomyd::Backend::start(host, 0).await.unwrap();
     let id = project_id(&backend.host, &dir.join("project")).unwrap();
     let project = backend.project(&id).expect("the project opened");
     Started { addr: backend.addr, backend, project }
-}
-
-/// Creates a task and wakes its scheduler, as a GUI command does. Database-only fixtures can
-/// also use this: without a running scheduler, the notification has nothing to wake.
-pub fn create_task(project: &Project, body: &str) -> String {
-    let task = project
-        .db
-        .execute(
-            &Caller::User,
-            &CreateTask {
-                request_id: format!("c-{body}"),
-                title: "测试任务".into(),
-                body: body.into(),
-                criteria: "work.txt 存在".into(),
-                executor: "Malkuth".into(),
-            },
-        )
-        .unwrap()
-        .id;
-    project.wake.notify_one();
-    task
-}
-
-pub fn last(db: &Db) -> Option<Turn> {
-    db.read(|c| last_turn(c, "Malkuth")).unwrap()
 }
 
 /// Waits until `check` gives a value, keeping the existing CI deadline and polling interval.
@@ -209,22 +177,7 @@ pub async fn wait_for_backend<T>(project: &Project, what: &str, check: impl FnMu
     wait_for_diagnostic(what, check, || backend_diagnostic(project)).await
 }
 
-pub async fn ended_turn(db: &Db) -> Turn {
-    wait_for("the turn to end", || last(db).filter(|t| t.state == TurnState::Ended)).await
-}
-
-/// Malkuth's working directory in the project of [`open_project`].
-pub fn work(dir: &Path) -> PathBuf {
-    dir.join("project").join("work").join("Malkuth")
-}
-
 /// Where the fake CLI leaves its diagnostics: inside `.git` when there is one, else in dir.
 pub fn diag(dir: &Path) -> PathBuf {
     if dir.join(".git").exists() { dir.join(".git") } else { dir.to_path_buf() }
-}
-
-/// Lets the scheduler run a few rounds.
-pub async fn settle(backend: &Started) {
-    backend.project.wake.notify_one();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
 }

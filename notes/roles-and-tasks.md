@@ -19,12 +19,13 @@
 |---|---|---|---|
 | Angela | manager | Claude | host 目录下她自己的空目录；全局一个（data-model.md §10.6） |
 | Binah | tech_lead | Claude | 未实现 |
-| Malkuth | worker | Codex | 项目数据目录下自己的空目录（harness-adapter.md §3） |
+| Malkuth | worker | Codex | 不再运行，见下方语义更新 |
 | Yesod | reviewer | Codex | 未实现；原设计的审查现场依赖已退出的私有存储（#86） |
 
 - 表中的 harness 是默认值。每个 role 都能换 harness，Angela 也一样（harness-adapter.md §0，用户确认，2026-10-09）。
 - Angela 全局只有一个，属于用户（**语义更新**，[#23](https://github.com/vorton-lang/Lobotomy/issues/23)，用户确认，2026-10-09；data-model.md §10.6）。
-- Binah 与 Yesod 未实现，列入 roadmap 待排。现在每个项目中只有 Malkuth 一个执行类 role。
+- Binah 与 Yesod 未实现，列入 roadmap 待排。
+- **语义更新**（#86，用户，2026-10-17）：后端不再运行 Malkuth。项目的执行类 role 是 host 目录的 `workers.toml` 中列出的 worker：名字、harness 和模型都由配置给出，agent 在 worker 宿主中运行（tech-plan.md §7 第 7 组，harness-adapter.md §3）。依据：用户要求删掉本地执行者的路径。
 
 ### 1.3 类型职责
 

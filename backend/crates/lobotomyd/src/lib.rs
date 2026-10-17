@@ -1,7 +1,7 @@
 //! The Lobotomy backend: one process for all projects of a host directory and for Angela
-//! (data-model.md §10), and the services roles and the GUI call: MCP at `/mcp/{project}/{token}`
-//! and `/mcp/angela/{token}`, the GUI at `/gui`. The agent driver that runs the roles' turns is
-//! the `lobotomy-agent` crate.
+//! (data-model.md §10), and the services Angela and the GUI call: MCP at `/mcp/angela/{token}`,
+//! the GUI at `/gui`. The agent driver that runs her turns is the `lobotomy-agent` crate;
+//! executors run in the worker hosts the backend starts (`workers`).
 
 pub mod angela;
 pub mod gui;
@@ -62,13 +62,13 @@ impl Backend {
 
         let serving = CancellationToken::new();
         let gui_sessions = TaskTracker::new();
-        let mut app = mcp::org_router(projects.clone(), serving.clone()).merge(gui::gui_router(
+        let mut app = gui::gui_router(
             host.clone(),
             projects.clone(),
             angela_instance.clone(),
             serving.clone(),
             gui_sessions.clone(),
-        ));
+        );
         if let Ok(instance) = angela_instance {
             let reach = mcp::angela::Reach { angela: instance, projects: projects.clone() };
             app = app.merge(mcp::angela::router(reach, serving.clone()));

@@ -104,7 +104,8 @@ fn is_cli_value(value: &str) -> bool {
 }
 
 /// The project's workers, as the host's configuration lists them (tech-plan.md §7 step 1): each
-/// gets a remote role of its name; a remote role no longer listed stops taking tasks.
+/// gets a remote role of its name; a remote role no longer listed stops taking tasks. Roles the
+/// backend used to run itself, such as the seeded executor, go while nothing refers to them.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncWorkerRoles {
     /// Each worker's name and harness.
@@ -118,6 +119,19 @@ impl Command for SyncWorkerRoles {
     fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
         caller.require_runtime()?;
         let listed: Vec<&str> = self.workers.iter().map(|(name, _)| name.as_str()).collect();
+        for role in list_roles(cx.tx)?.into_iter().filter(|r| !r.remote && !listed.contains(&r.name.as_str())) {
+            let referred: bool = cx.tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM native_session WHERE role = ?1) OR EXISTS (SELECT 1 FROM message WHERE role = ?1)
+                     OR EXISTS (SELECT 1 FROM task WHERE executor = ?1) OR EXISTS (SELECT 1 FROM thread WHERE role = ?1)",
+                [&role.name],
+                |r| r.get(0),
+            )?;
+            if !referred {
+                cx.tx.execute("DELETE FROM role_model WHERE role = ?1", [&role.name])?;
+                cx.tx.execute("DELETE FROM role WHERE name = ?1", [&role.name])?;
+                cx.emit("role.removed", &role.name, json!({}))?;
+            }
+        }
         for role in list_roles(cx.tx)?.into_iter().filter(|r| r.remote && !listed.contains(&r.name.as_str())) {
             cx.tx.execute("UPDATE role SET remote = 0 WHERE name = ?1", [&role.name])?;
             cx.emit("role.worker_removed", &role.name, json!({}))?;

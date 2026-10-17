@@ -22,7 +22,6 @@ use tokio::sync::{Notify, broadcast};
 
 use crate::instance::Instance;
 
-const WORKER_INSTRUCTIONS: &str = include_str!("prompts/worker.md");
 const MANAGER_INSTRUCTIONS: &str = include_str!("prompts/manager.md");
 
 pub struct Host {
@@ -219,18 +218,14 @@ impl AgentHost for Host {
         self.mcp_base.lock().unwrap().clone()
     }
 
-    /// By the role's kind.
+    /// The backend runs only Angela's turns; executors run in the worker hosts.
     fn instructions(&self, role: &Role) -> String {
-        let text = if role.kind == "manager" { MANAGER_INSTRUCTIONS } else { WORKER_INSTRUCTIONS };
-        text.replace("{name}", &role.name)
+        MANAGER_INSTRUCTIONS.replace("{name}", &role.name)
     }
 
-    /// An empty directory of the role's own. The manager's is her instance's `work`
-    /// (data-model.md §10.6); a project's roles each have one under theirs. Roles get no copy of
-    /// the repository until the worker layer is replaced (#86).
-    fn working_dir(&self, instance: &Instance, _turn: &Turn, role: &Role) -> anyhow::Result<PathBuf> {
-        let work = instance.data_dir.join("work");
-        let dir = if role.kind == "manager" { work } else { work.join(&role.name) };
+    /// Her instance's empty `work` directory (data-model.md §10.6).
+    fn working_dir(&self, instance: &Instance, _turn: &Turn, _role: &Role) -> anyhow::Result<PathBuf> {
+        let dir = instance.data_dir.join("work");
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         Ok(dir)
     }

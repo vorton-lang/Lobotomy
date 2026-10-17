@@ -31,6 +31,9 @@ pub struct Config {
     pub repo: Option<Repo>,
     /// The forge the repository is on, for pull requests, checks and merges.
     pub forge: Option<forge::Config>,
+    /// How long an interrupted CLI has to exit before it ends with its process tree
+    /// (harness-adapter.md §1.8).
+    pub stop_grace: std::time::Duration,
 }
 
 /// What goes to the subscriber, once stored.
