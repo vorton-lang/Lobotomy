@@ -178,7 +178,7 @@ evidence = { required = ["ci-ok"] }
 - `stop` 和 `revise` 先打断进程；等 attempt 没有未结束的 turn，才把它记为 `canceled`。`close(abandoned)` 同理，记为 `abandoned`。
 - 额度：turn 被拒时，宿主发 `resources` 通知，自己不封住额度域，也不自动续接；之后同一 harness 上有 turn 正常结束，就报告额度已恢复。
 
-下面一项是实现时的选择，**待用户确认**：turn 正常结束，但 agent 既没有汇报 done 也没有提问，而且没有排队的消息时，attempt 也停在 `blocked`（`resume`），原因写明。理由：此时什么都不在运行，报 `working` 会把等待藏起来（§4）。
+**空闲时也停在 `blocked`**（用户确认，2026-10-17）：turn 正常结束，但 agent 既没有汇报 done 也没有提问，而且没有排队的消息时，attempt 停在 `blocked`（`resume`），原因写明。理由：此时什么都不在运行，报 `working` 会把等待藏起来（§4）。会出现的情况：汇报的工具调用失败（#13 记录过一次被拒）；模型只在文字里说"做完了"或提问；只报了 `progress`；模型把命令放到后台后结束了 turn，而 print 模式下后台任务结束不会再唤醒它（harness-adapter.md §1.6 的实测）。
 
 还没做的：`progress` 事件（粒度待决，§12）；预算的执行（第 6 组随 CI 内循环一起做）；交付物、证据和 `adopt`（第 5、6 组），在此之前 `hello` 声明不支持，要求检查或开 PR 的任务在 `create_task` 时被拒。
 
@@ -204,7 +204,7 @@ evidence = { required = ["ci-ok"] }
 - **非代码交付物**：用 `put_blob` 按内容哈希分块上传，小报告内联，不接受 worker 本地路径（§6）。
 - **能力扩展**：核心能力跟着协议版本走；扩展用 `x-<作者>.<名字>`，不认识的忽略（§8）。
 - **`mismatch_flagged` 是核心事件**，不放进扩展（§5；用户，2026-10-17）。
-- **turn 异常结束时 attempt 停在 `blocked`（`need` 为 `resume`），用 `send_message` 续接**；`failed` 只用于 attempt 级的失败（§3；用户，2026-10-17）。
+- **turn 异常结束时 attempt 停在 `blocked`（`need` 为 `resume`），用 `send_message` 续接**；`failed` 只用于 attempt 级的失败（§3；用户，2026-10-17）。turn 正常结束却没有汇报、也没有排队的消息时同样处理（§10；用户，2026-10-17）。
 
 **待决**
 - **`progress` 的粒度和频率**：暂时没有想法，做到时再考察（用户，2026-10-16）。

@@ -166,6 +166,7 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
 | gh | `GH_CONFIG_DIR` 指向空目录，并从进程环境中删除 `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN`、`GITHUB_ENTERPRISE_TOKEN`（这四个变量优先于配置目录中的凭据，[#10](https://github.com/vorton-lang/Lobotomy/issues/10)），等同未登录。额度检查调用同样处理 | 同左 |
 | harness 自带的长期记忆 | 进程环境变量 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`：Claude Code 不读也不写 `~/.claude/projects/<工作目录>/memory/`。`--setting-sources ""` 关不掉它：2026-10-11 Angela 在那里写过文件。依据：长期记忆由 Lobotomy 保存（roadmap.md"原则"） | 未查 |
 | 用户自己装的 skill（见下） | 实测不加载 | `-c skills.config=[…]` 按路径逐个关掉 |
+| 后台任务（用户确认，2026-10-17） | 进程环境变量 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`：命令和子 agent 都在前台运行。依据见下面的实测 | 未查 |
 
 - 保留网页搜索与读取、子 agent。
 - 这些措施防的是失误和过度热心，不防对抗：bypass 模式下 agent 总能绕过（例如从凭据管理器取 token）。
@@ -181,6 +182,10 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
   - 用上面的参数启动后，`system/init` 中的工具清单为 Task、Edit、Glob、Grep、NotebookEdit、PowerShell、Read、ReportFindings、Skill、TaskCreate、TaskGet、TaskList、TaskStop、TaskUpdate、ToolSearch、WebFetch、WebSearch、Write；MCP 服务只有 lobotomy。
   - `Workflow` 是新出现的工具，会在后台启动多个 agent，可能在 turn 结束后仍在运行，所以去掉。子 agent（`Task`）在 turn 内同步完成，保留。
   - Windows 上执行命令的工具是 `PowerShell`，不是 `Bash`。待办列表改为 `TaskCreate`、`TaskUpdate` 等工具，不再是 `TodoWrite`。
+- **后台任务的实测**（Claude Code 2.1.283，haiku，`-p` 加 stream-json，Windows，2026-10-17）：
+  - 不设变量时，模型用 `run_in_background` 启动一条 20 秒的命令，回复"已在后台启动"后，turn 以 `result/success` 结束。约 5 秒后，Claude Code 把后台任务标为 `killed`，进程以退出码 0 退出，命令没有跑完。print 模式下，后台任务结束不会再唤醒模型。
+  - 设了变量后，工具中没有 `run_in_background` 参数。明确要求放后台时，模型改用 PowerShell 的 `Start-Job`；turn 照样正常结束，作业随进程树结束（§1.8）。所以这个变量只减少这种情况，不能杜绝。worker 宿主对这种情况的处理见 worker-interface.md §10。
+  - 设了变量后，同一条回复中派出的两个子 agent 仍然并行运行（`is_backgrounded: false`）：各运行 15 秒，约 18 秒后一起返回，主 agent 等两个都返回才继续。
 - 外部系统（GitHub 等）由 Lobotomy 统一接入，role 经 Lobotomy MCP 访问，见 [manager-actions.md](manager-actions.md)。未实现，roadmap 待排（对外操作与导出）。
 
 ### 1.7 中断后的范围（#7）

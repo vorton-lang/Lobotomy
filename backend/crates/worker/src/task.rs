@@ -767,7 +767,9 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
                     None if unfinished.is_none() && queued_messages(c, ROLE)?.is_empty() => blocked(
                         Need::Resume,
                         None,
-                        "the agent ended its turn without reporting done or asking".to_owned(),
+                        "the agent ended its turn without reporting done or asking; whatever it left running in \
+                         the background ended with the turn"
+                            .to_owned(),
                     ),
                     None => Status::of(AttemptState::Working),
                 }
