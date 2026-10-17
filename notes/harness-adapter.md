@@ -220,12 +220,12 @@ Lobotomy 负责自己启动的进程树（[#46](https://github.com/vorton-lang/L
 
 **turn 结束时**：CLI 退出后，运行时结束这个 turn 的进程树，确认其中的进程已退出，然后才结束这个 turn。代价是 agent 在 turn 中启动的后台进程（例如开发服务器）不会存活到 turn 之后。
 
-**后端正常关闭时**（用户定）：运行时不先中断再等待，直接结束 CLI 的进程树。被结束的 turn 在下次启动时照常核对。依据：第 1 步的实际验收中（2026-10-17），Codex 在 10 秒内没有响应 Ctrl+C，用户只看到应用迟迟不退出；强制结束后，任务照样在同一个会话里续接。没有证据表明多等能多留下什么。
+**后端正常关闭时**（用户定）：运行时不先中断再等待，直接结束 CLI 的进程树，确认其中的进程已退出。被结束的 turn 在下次启动时照常核对。worker 宿主收到退出时同样处理，它的 turn 在宿主下次启动时核对。依据：第 1 步的实际验收中（2026-10-17），Codex 在 10 秒内没有响应 Ctrl+C，用户只看到应用迟迟不退出；强制结束后，任务照样在同一个会话里续接。没有证据表明多等能多留下什么。
 
-未实现，见 tech-plan.md §7"实际验收"。现状是先中断再等待：
+**归档时**（data-model.md §10.4）先中断再等待：
 
 1. 运行时调用 harness 的原生中断或退出路径。
-2. 运行时等待 CLI 退出。归档超过宽限期时强制结束所属进程组或 Job Object，确认其中的进程已退出，再释放项目。Linux 已退出但尚未回收的僵尸进程不再运行，不阻止这一步。
+2. 运行时等待 CLI 退出。超过宽限期时强制结束所属进程组或 Job Object，确认其中的进程已退出，再释放项目。Linux 已退出但尚未回收的僵尸进程不再运行，不阻止这一步。
 
 丢弃 runner、关闭进程句柄和 kill-on-drop 都只作兜底，不能代替正常收尾中的退出确认。
 
@@ -254,7 +254,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 **测试**：
 
 - [backend/crates/harness/tests/process_tree.rs](../backend/crates/harness/tests/process_tree.rs)：在两个平台上，确认结束时 CLI 与它的子进程都已退出；丢弃进程的所有者时也结束整个进程树。
-- [backend/crates/worker/tests/runner.rs](../backend/crates/worker/tests/runner.rs)：停止 turn 时经辅助进程中断，不响应中断的 CLI 在宽限期后连同进程树结束。
+- [backend/crates/worker/tests/runner.rs](../backend/crates/worker/tests/runner.rs)：停止 turn 时经辅助进程中断，不响应中断的 CLI 在宽限期后连同进程树结束；worker 宿主退出时不等中断，直接结束这样的 CLI 和它的子进程。
 
 ### 1.9 权限模式
 

@@ -92,15 +92,15 @@ impl Backend {
         self.angela.as_ref().ok().map(|a| a.instance.clone())
     }
 
-    /// Normal shutdown (harness-adapter.md §1.8): every project and Angela stop scheduling,
-    /// interrupt their running CLIs and wait for them until `grace` has passed; the MCP service
-    /// stays up meanwhile. After `grace`, the remaining CLIs end with their jobs when the process
-    /// exits. GUI requests already admitted get what is left of the grace period.
+    /// Normal shutdown (harness-adapter.md §1.8): every project and Angela stop scheduling, and
+    /// their running CLIs end with their process trees, without an interrupt first. The worker
+    /// hosts are told to quit, which ends their CLIs the same way, and are waited for until `grace`
+    /// has passed. GUI requests already admitted get what is left of the grace period.
     pub async fn shutdown(self, grace: Duration) {
         let deadline = Instant::now() + grace;
         let angela = async {
             if let Ok(angela) = self.angela {
-                angela.stop(deadline).await;
+                angela.stop().await;
             }
         };
         let workers = async {
@@ -108,7 +108,7 @@ impl Backend {
                 workers.shutdown(deadline).await;
             }
         };
-        futures::future::join3(self.projects.stop_all(deadline), angela, workers).await;
+        futures::future::join3(self.projects.stop_all(), angela, workers).await;
         self.serving.cancel();
         let _ = self.server.await;
         // No new upgrades after the server stopped.

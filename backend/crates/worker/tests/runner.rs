@@ -5,7 +5,7 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -111,13 +111,11 @@ async fn a_refused_quota_holds_the_attempt_and_tells_the_orchestrator() {
     worker.quit().await;
 }
 
-/// Stopping an attempt whose CLI ignores the interrupt ends the CLI and its children once the grace
-/// period is over; the attempt is then canceled (harness-adapter.md §1.8).
-#[tokio::test]
-async fn a_cli_that_ignores_the_interrupt_ends_with_its_process_tree() {
-    let dir = tempfile::tempdir().unwrap();
-    let script = dir.path().join("deaf-cli.mjs");
-    let ready = dir.path().join("tree-ready");
+/// A CLI that ignores the interrupt, with an ordinary child, for `LOBOTOMY_CODEX`; and the file
+/// where it writes the child's pid once the tree is ready (`deaf_child`).
+fn deaf_cli(dir: &Path) -> (String, PathBuf) {
+    let script = dir.join("deaf-cli.mjs");
+    let ready = dir.join("tree-ready");
     std::fs::write(
         &script,
         format!(
@@ -138,27 +136,58 @@ if (process.argv[2] === 'child') {{
         ),
     )
     .unwrap();
-    let codex = serde_json::to_string(&["node", &script.to_string_lossy()]).unwrap();
+    (serde_json::to_string(&["node", &script.to_string_lossy()]).unwrap(), ready)
+}
+
+/// The deaf CLI's child, once its handlers and the child are ready: a launched pid alone could let
+/// SIGINT end Node before it installed its handler and hide the forced stop.
+async fn deaf_child(ready: &Path) -> u32 {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if let Some(pid) = std::fs::read_to_string(ready).ok().and_then(|s| s.parse().ok()) {
+            assert!(child_is_running(pid));
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "the process tree never got ready");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Stopping an attempt whose CLI ignores the interrupt ends the CLI and its children once the grace
+/// period is over; the attempt is then canceled (harness-adapter.md §1.8).
+#[tokio::test]
+async fn a_cli_that_ignores_the_interrupt_ends_with_its_process_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, ready) = deaf_cli(dir.path());
     let mut worker = Worker::start_with(&root(&dir), &["--stop-grace", "1"], &[("LOBOTOMY_CODEX", &codex)]).await;
     worker.subscribe(BTreeMap::new()).await;
     worker.call::<CreateTask>(&create("t", "deaf")).await.unwrap();
     worker.state("t", AttemptState::Working).await;
-    let deadline = Instant::now() + WAIT;
-    let child: u32 = loop {
-        // The handlers and the ordinary child are ready before the interrupt; a launched pid alone
-        // could let SIGINT end Node before it installed its handler and hide the forced stop.
-        if let Some(pid) = std::fs::read_to_string(&ready).ok().and_then(|s| s.parse().ok()) {
-            break pid;
-        }
-        assert!(Instant::now() < deadline, "the process tree never got ready");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    assert!(child_is_running(child));
+    let child = deaf_child(&ready).await;
 
     worker.call::<Stop>(&StopParams { task_id: "t".into(), level: StopLevel::Attempt }).await.unwrap();
     worker.state("t", AttemptState::Canceled).await;
     assert!(!child_is_running(child), "the ordinary child ended with the tree");
     worker.quit().await;
+}
+
+/// Quitting does not wait for the CLI to answer an interrupt: the CLI and its children end at once.
+/// In the first real acceptance, Codex ignored Ctrl+C for the whole wait and the app looked stuck
+/// (harness-adapter.md §1.8).
+#[tokio::test]
+async fn quitting_ends_a_cli_that_ignores_the_interrupt_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, ready) = deaf_cli(dir.path());
+    let mut worker = Worker::start_with(&root(&dir), &[], &[("LOBOTOMY_CODEX", &codex)]).await;
+    worker.subscribe(BTreeMap::new()).await;
+    worker.call::<CreateTask>(&create("t", "deaf")).await.unwrap();
+    worker.state("t", AttemptState::Working).await;
+    let child = deaf_child(&ready).await;
+
+    let quitting = Instant::now();
+    worker.quit().await;
+    assert!(quitting.elapsed() < Duration::from_secs(5), "quitting took {:?}", quitting.elapsed());
+    assert!(!child_is_running(child), "the ordinary child ended with the tree");
 }
 
 fn child_is_running(pid: u32) -> bool {

@@ -114,8 +114,9 @@ pub async fn interrupt<H: AgentHost>(instance: &Instance<H>, turn_id: &str) -> a
     Ok(())
 }
 
-/// Interrupts every turn the instance runs and waits for them until `deadline`, as quitting does
-/// (harness-adapter.md §1.8).
+/// Interrupts every turn the instance runs and waits for them until `deadline`, as archiving does
+/// (data-model.md §10.4). Quitting ends them at once instead (`Instance::end_turns`,
+/// harness-adapter.md §1.8).
 pub async fn interrupt_all<H: AgentHost>(instance: &Instance<H>, deadline: Instant) {
     let running: Vec<String> = instance.running.lock().unwrap().keys().cloned().collect();
     for turn_id in running {

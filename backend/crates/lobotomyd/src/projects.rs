@@ -43,26 +43,29 @@ impl Running {
         Ok(Self { project, scheduling, scheduler, watching, watcher })
     }
 
-    /// Normal shutdown of this project (harness-adapter.md §1.8): scheduling stops, and its running
-    /// CLIs are interrupted and waited for until `deadline`. The MCP service stays up meanwhile, so
-    /// a CLI can still report. Work still running keeps the project lock until it finishes or the
-    /// process exits.
-    pub async fn stop(self, deadline: Instant) {
+    /// Stops this project: scheduling, then its running CLIs, then the watcher. With `interrupt`,
+    /// the CLIs are interrupted first and waited for until that deadline, as archiving does; the MCP
+    /// service stays up meanwhile, so a CLI can still report. The CLIs still running then end with
+    /// their process trees, as quitting does at once (harness-adapter.md §1.8); their turns are
+    /// reconciled when the project opens next.
+    async fn stop(self, interrupt: Option<Instant>) -> anyhow::Result<()> {
         self.scheduling.cancel();
         let _ = self.scheduler.await;
-        runner::interrupt_all(&self.project, deadline).await;
+        if let Some(deadline) = interrupt {
+            runner::interrupt_all(&self.project, deadline).await;
+        }
+        let ended = self.project.end_turns().await;
         self.watching.cancel();
         // Cancellation only asks the watcher to stop; join it before releasing its project.
         let _ = self.watcher.await;
+        ended
     }
 
-    /// Stops this project while the backend runs on, for archiving (data-model.md §10.4): as
-    /// [`Running::stop`], then the CLIs still running end with their process trees. Returns the
-    /// instance, still open; the caller lets it go.
+    /// Stops this project while the backend runs on, for archiving (data-model.md §10.4): its CLIs
+    /// get `grace` to answer an interrupt. Returns the instance, still open; the caller lets it go.
     async fn close(self, grace: Duration) -> anyhow::Result<Arc<Project>> {
         let project = self.project.clone();
-        self.stop(Instant::now() + grace).await;
-        project.end_turns().await?;
+        self.stop(Some(Instant::now() + grace)).await?;
         project.tasks.close();
         project.tasks.wait().await;
         Ok(project)
@@ -250,10 +253,15 @@ impl Projects {
         self.host.db.project(id)?.ok_or_else(|| Error::rejected("unknown_project", format!("没有项目 {id}")).into())
     }
 
-    /// Stops every open project, side by side, until `deadline` (harness-adapter.md §1.8).
-    pub async fn stop_all(&self, deadline: Instant) {
+    /// Stops every open project, side by side, for quitting: their running CLIs end at once,
+    /// without an interrupt (harness-adapter.md §1.8).
+    pub async fn stop_all(&self) {
         let runtimes = std::mem::take(&mut *self.runtimes.lock().unwrap());
-        futures::future::join_all(runtimes.into_values().map(|running| running.stop(deadline))).await;
+        for ended in futures::future::join_all(runtimes.into_values().map(|running| running.stop(None))).await {
+            if let Err(e) = ended {
+                tracing::warn!(error = format!("{e:#}"), "could not end a project's turns");
+            }
+        }
         self.open.lock().unwrap().clear();
     }
 }

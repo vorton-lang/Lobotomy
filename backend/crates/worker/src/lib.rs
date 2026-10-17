@@ -10,7 +10,6 @@ pub mod store;
 pub mod task;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use lobotomy_agent::mcp::{OrgTools, ToolTarget, router};
 use tokio::io::{AsyncBufRead, AsyncWrite};
@@ -19,12 +18,9 @@ use tokio_util::sync::CancellationToken;
 use crate::host::WorkerHost;
 use crate::task::Tasks;
 
-/// How long quitting waits for interrupted CLIs to exit.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
-
 /// Runs the worker host: its agents' MCP service on a loopback port, its tasks, and the protocol
-/// on `input` and `output` until the orchestrator closes `input`. Then it interrupts the running
-/// CLIs and waits for them a while; those left end with their jobs when the process exits.
+/// on `input` and `output` until the orchestrator closes `input`. Then the running CLIs end with
+/// their process trees, without an interrupt first (harness-adapter.md §1.8).
 pub async fn run(
     host: Arc<WorkerHost>,
     input: impl AsyncBufRead + Unpin,
@@ -46,7 +42,7 @@ pub async fn run(
     });
     tasks.recover().await?;
     let served = server::serve(tasks.clone(), input, output).await;
-    tasks.shutdown(Instant::now() + SHUTDOWN_GRACE).await;
+    tasks.shutdown().await;
     serving.cancel();
     let _ = server.await;
     served

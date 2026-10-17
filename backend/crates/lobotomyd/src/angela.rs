@@ -8,10 +8,10 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lobotomy_agent::ignore_rejection;
-use lobotomy_agent::runner::{self, db, launch, launch_registered, reconcile, runtime};
+use lobotomy_agent::runner::{db, launch, launch_registered, reconcile, runtime};
 use lobotomy_core::ledger::ledger_lines;
 use lobotomy_core::manager::{Cursor, ScheduleManagerTurn, cursors};
 use lobotomy_core::task::queued_messages;
@@ -70,12 +70,14 @@ impl Angela {
         Ok(Self { instance, scheduling, scheduler, watching, watcher })
     }
 
-    /// Normal shutdown (harness-adapter.md §1.8): scheduling stops, and her running CLI is
-    /// interrupted and waited for until `deadline`.
-    pub async fn stop(self, deadline: Instant) {
+    /// Normal shutdown (harness-adapter.md §1.8): scheduling stops, and her running CLI ends with
+    /// its process tree, without an interrupt first. The turn is reconciled when she opens next.
+    pub async fn stop(self) {
         self.scheduling.cancel();
         let _ = self.scheduler.await;
-        runner::interrupt_all(&self.instance, deadline).await;
+        if let Err(e) = self.instance.end_turns().await {
+            tracing::warn!(error = format!("{e:#}"), "could not end Angela's turns");
+        }
         self.watching.cancel();
         let _ = self.watcher.await;
     }

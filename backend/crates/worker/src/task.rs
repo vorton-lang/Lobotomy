@@ -125,9 +125,10 @@ impl Tasks {
         Ok(())
     }
 
-    /// Stops every task's loop, then interrupts their running CLIs and waits for them until
-    /// `deadline`, as quitting does (harness-adapter.md §1.8).
-    pub async fn shutdown(&self, deadline: Instant) {
+    /// Stops every task's loop, then ends their running CLIs with their process trees, without an
+    /// interrupt first, as quitting does (harness-adapter.md §1.8). Their turns are reconciled when
+    /// the worker host starts again.
+    pub async fn shutdown(&self) {
         let open: Vec<Open> = self.open.lock().unwrap().drain().map(|(_, o)| o).collect();
         for o in &open {
             o.stop.cancel();
@@ -135,12 +136,14 @@ impl Tasks {
         for o in open {
             // A finished loop waits for all instance owners before removing its workspace.
             // Do not hold an owner while waiting for that loop. Active runners own the
-            // instance themselves, so they remain available to interrupt after it exits.
+            // instance themselves, so they remain available to end after it exits.
             let instance = Arc::downgrade(&o.instance);
             drop(o.instance);
             let _ = o.handle.await;
-            if let Some(instance) = instance.upgrade() {
-                runner::interrupt_all(&instance, deadline).await;
+            if let Some(instance) = instance.upgrade()
+                && let Err(e) = instance.end_turns().await
+            {
+                tracing::warn!(task = instance.id, error = format!("{e:#}"), "could not end the task's turns");
             }
         }
     }
@@ -1413,7 +1416,7 @@ mod tests {
             cleanup_workspace(workspace).await;
         });
         tasks.open.lock().unwrap().insert("closed".into(), Open { instance, stop, handle });
-        tokio::time::timeout(Duration::from_secs(5), tasks.shutdown(Instant::now()))
+        tokio::time::timeout(Duration::from_secs(5), tasks.shutdown())
             .await
             .expect("shutdown held the instance while joining its finishing loop");
         assert!(!path.exists());
