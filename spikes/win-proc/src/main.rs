@@ -1,5 +1,5 @@
 //! Windows process-control probe for the harness adapter (notes/harness-adapter.md §1.8, §6).
-//! Launches a command, waits, then ends it in one of four ways so we can observe what the
+//! Launches a command, waits, then ends it in the selected mode so we can observe what the
 //! harness and its tool subprocesses do.
 //!
 //! Usage: win-proc <mode> <secs> <stdout-file> -- <cmd> [args...]

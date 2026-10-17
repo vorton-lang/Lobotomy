@@ -84,7 +84,7 @@ async function openMocked(page: Page, state: State) {
   });
   await page.routeWebSocket(/\/gui\?token=ui-test$/, (route) => {
     socket = route;
-    route.onMessage((raw) => {
+    route.onMessage(async (raw) => {
       const { id, method, params } = JSON.parse(String(raw)) as {
         id: number;
         method: string;
@@ -108,7 +108,7 @@ async function openMocked(page: Page, state: State) {
         case 'command': {
           const call: Sent = { name: params.name, args: params.args };
           sent.push(call);
-          result = state.command?.(call) ?? null;
+          result = (await state.command?.(call)) ?? null;
           changed = typeof call.args.task_id === 'string' ? call.args.task_id : undefined;
           break;
         }
@@ -144,6 +144,42 @@ async function openMocked(page: Page, state: State) {
     },
   };
 }
+
+// The duplicate-submit regression from #16 (9f543fb), independent of the executor's task flow.
+test('double-clicking a new task submits the draft once while its reply waits', async ({ page }) => {
+  let finish!: () => void;
+  const reply = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const worker = { ...role(null), remote: true };
+  const backend = await openMocked(page, {
+    snapshot: { roles: [worker], tasks: [], attention: [] },
+    command: async ({ name }) => {
+      expect(name).toBe('create_task');
+      await reply;
+      return { id: 'created' };
+    },
+  });
+  await page.getByRole('button', { name: '+ 新任务' }).click();
+  const form = page.getByRole('dialog', { name: '新任务' });
+  await form.getByLabel('标题', { exact: true }).fill('只创建一次');
+  await form.getByLabel('你的原话').fill('检查任务的重复提交');
+  await form.getByLabel('完成条件').fill('只创建一个任务');
+  const submit = form.getByRole('button', { name: '交给 Malkuth' });
+  try {
+    await submit.dblclick();
+    await expect(submit).toBeDisabled();
+    expect(backend.sent).toHaveLength(1);
+    expect(backend.sent[0]).toMatchObject({
+      name: 'create_task',
+      args: { title: '只创建一次', body: '检查任务的重复提交', criteria: '只创建一个任务', executor: 'Malkuth' },
+    });
+  } finally {
+    finish();
+  }
+  await expect(form).toHaveCount(0);
+  expect(backend.sent).toHaveLength(1);
+});
 
 // A scroll before the viewport is measured must not look like the user reading back. Later
 // pages must keep their last message visible, without even a temporary loss of following.

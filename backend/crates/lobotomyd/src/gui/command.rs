@@ -166,14 +166,10 @@ async fn worker_command(project: &Arc<Project>, name: &str, args: &Value) -> any
     let Some(worker) = worker_of(project, task_id).await? else { return Ok(None) };
     let worker = &worker;
     // A message to the worker is recorded in the project, then sent.
-    let send = |body: String| async move {
-        let message = SendMessage {
-            request_id: lobotomy_core::id::new_id("req"),
-            role: worker.worker.clone(),
-            task_id: Some(task_id.to_owned()),
-            body,
-            reply_to: None,
-        };
+    let send = |message: SendMessage| async move {
+        if message.role != worker.worker {
+            return Err(Error::rejected("wrong_executor", "消息的 role 必须是任务的 worker").into());
+        }
         let created = db(project, move |db| db.execute(&Caller::User, &message)).await?;
         workers.forward(project, worker, task_id, &created.id).await?;
         anyhow::Ok(created)
@@ -187,13 +183,20 @@ async fn worker_command(project: &Arc<Project>, name: &str, args: &Value) -> any
         }
         n if n == SendBack::NAME => {
             let back: SendBack = serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
-            send(back.reason).await?;
+            send(SendMessage {
+                request_id: back.request_id,
+                role: worker.worker.clone(),
+                task_id: Some(task_id.to_owned()),
+                body: back.reason,
+                reply_to: None,
+            })
+            .await?;
             Value::Null
         }
         n if n == SendMessage::NAME => {
             let message: SendMessage =
                 serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
-            serde_json::to_value(send(message.body).await?)?
+            serde_json::to_value(send(message).await?)?
         }
         n if n == Abandon::NAME => {
             let abandon: Abandon = serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;

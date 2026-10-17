@@ -1,6 +1,6 @@
 // Not a test: captures the main screens with rich content for design review (notes/ui-ux-plan.md
 // §5), against a mocked backend. Run with `SCREENSHOT_DIR=<dir> npx playwright test screenshots`;
-// without the variable it is skipped. screenshots.spec.ts covers flows with the real backend.
+// without the variable it is skipped.
 
 import { expect, test, type Page } from '@playwright/test';
 import { devOrigin } from '../dev-server.mjs';

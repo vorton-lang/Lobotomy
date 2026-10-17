@@ -21,8 +21,8 @@ use lobotomy_harness::{Harness, Permission};
 pub use crate::harness::{Cli, HarnessConfig};
 pub use crate::instance::Instance;
 
-/// What the process that owns an instance provides to the driver: the backend's host for Angela
-/// and the projects, the worker host for its tasks.
+/// What the process that runs turns provides to the driver: the backend's host for Angela,
+/// or the worker host for its tasks.
 pub trait AgentHost: Send + Sync + Sized + 'static {
     /// How to start the harness CLIs.
     fn harness(&self) -> &HarnessConfig;

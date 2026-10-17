@@ -10,5 +10,5 @@ CREATE TABLE project (
   registered_at INTEGER NOT NULL
 ) STRICT;
 
--- One unarchived project per repository: two would write their previews into the same branch.
+-- One unarchived project per repository prevented two previews from sharing a branch.
 CREATE UNIQUE INDEX project_unarchived_repo ON project (repo_path) WHERE state <> 'archived';

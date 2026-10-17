@@ -7,7 +7,7 @@
 ## 原则
 
 - **每个里程碑都端到端可用。** 先打通一条完整链路，再增加对象种类和调度能力。
-- **主路径先存在。** 主路径是用户经 Angela 管理项目，借鉴 OpenAI Dots。用户也可以直接打开 Malkuth 等角色的窗口。这条直接通路是常设的二等入口，不是临时方案；用户自然选择，不强制。M1 已经验证"没有 Angela，控制流也能跑通"。
+- **主路径先存在。** 主路径是用户经 Angela 管理项目，借鉴 OpenAI Dots。用户也可以直接给项目的 worker 建任务，或在任务卡片中发消息（**语义更新**，#86，第 1 步，2026-10-17）；原来的本地执行者窗口已退出。M1 曾验证"没有 Angela，控制流也能跑通"；新方向不再保留这一设计目标（tech-plan.md §8）。
 - **接触成果是一等入口，直接指挥执行者是二等入口。** 用户在任何地方都能直接查看和试用成果。Angela 对话中引用的成果，点开就是任务面板。任务面板中的 diff 与试用随私有存储退出（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，2026-10-17），成果的入口随 worker 层的替换重新设计。二等入口指的是另一件事：绕过 Angela，直接给执行者发消息或建任务。依据：[#20](https://github.com/vorton-lang/Lobotomy/issues/20) 约束 5 要求用户能直接接触成果；Dots 式的主路径约束的是指挥执行者，不是查看成果（用户确认，2026-10-11）。
 - **事实、权威、判断分开。** 运行时持有事实，用户持有权威，Angela 与各 role 给出判断。判断不能冒充事实，也不能冒充权威。现有的例子：原文由运行时插入，Manager 只引用 ID；`decision` 必须引用用户原话；只有状态能触发通知；记忆不能给模型扩权（[#22](https://github.com/vorton-lang/Lobotomy/issues/22) §4）。新设计按这一条检查：事实归谁，权威归谁，判断有没有机会伪装成另外两者（用户确认，2026-10-11）。
 - **角色不绑定 harness。** 每个 role 都能换 harness，Angela 也一样。外部测试者没有 Claude，所有 role 都要能在 Codex 上运行。官方 CLI 担任 Angela 表现不佳时，可以改用自建的 API harness（用户确认，2026-10-09）。
@@ -30,7 +30,7 @@
 **第一优先级是降低用户回来接上工作的成本**（[#50](https://github.com/vorton-lang/Lobotomy/issues/50)，用户确认，2026-10-11）。用户回来时，应能直接试用成果、看懂关键变化、表达下一步意见，不必从聊天记录重新讲起。怎样帮助用户回来后进入状态，用户状态不确定时怎样协作，是开放的研究问题（[#60](https://github.com/vorton-lang/Lobotomy/issues/60)，关联 [#21](https://github.com/vorton-lang/Lobotomy/issues/21)、#50），不作为立即实现的方案。
 
 - 全局只有一个 Angela，放在 host（data-model.md §10.6）。她能看到所有未归档的项目，工具都带项目 ID。
-- 主区是与 Angela 的对话。各项目中 Malkuth 的对话、任务面板和"等你决定"保留为直接入口。Angela 引用的成果，点开就是任务面板（见"原则"）。
+- 主区是与 Angela 的对话。项目的任务面板和"等你决定"保留为直接入口；原来 Malkuth 的本地对话入口已退出（**语义更新**，#86，第 1 步，2026-10-17）。Angela 引用的成果，点开就是任务面板（见"原则"）。
 - 她的工具：
   - 读取：`list_projects`、`read_project`、`read_task`、`read_events`（`read_diff` 随私有存储退出，#86）；
   - 操作：`assign`、`send_to_role`、`accept`、`send_back`、`abandon`、`set_paused`；

@@ -5,7 +5,7 @@
 //! Object and on its own hidden console:
 //! - The process is created suspended and joins the job before it runs, so nothing it starts can
 //!   escape the job.
-//! - If the backend dies, the OS closes the job handle and ends the CLI with everything it
+//! - If the owning process dies, the OS closes the job handle and ends the CLI with everything it
 //!   started.
 //! - After the CLI exits, the runtime closes the job with [`Spawned::reap`], which ends whatever
 //!   the CLI left running.
@@ -21,7 +21,7 @@ use std::process::Stdio;
 
 use tokio::process::{Child, Command};
 
-/// What to start. The process inherits the backend's environment, minus `env_remove`, plus
+/// What to start. The process inherits the caller's environment, minus `env_remove`, plus
 /// `env`.
 pub struct Spec<'a> {
     pub program: &'a Path,
@@ -35,8 +35,8 @@ pub struct Spec<'a> {
 pub struct Spawned {
     pub child: Child,
     pub pid: u32,
-    /// The OS start time of the process; with the pid it identifies the process across a
-    /// backend restart (data-model.md §3.2).
+    /// The OS start time of the process; with the pid it identifies the process across
+    /// a restart of its owner (data-model.md §3.2).
     pub process_start: i64,
     guard: imp::Guard,
 }
@@ -52,10 +52,15 @@ impl Spawned {
         drop(self.guard);
     }
 
+    /// Requests termination of the owned process tree. `finish` confirms its exit.
+    pub fn end_tree(&self) -> io::Result<()> {
+        self.guard.end()
+    }
+
     /// Ends the owned process tree and confirms it has exited. Used before releasing a project;
     /// dropping the task/guard alone only requests termination and cannot confirm completion.
     pub async fn finish(mut self) -> io::Result<()> {
-        self.guard.end()?;
+        self.end_tree()?;
         self.child.wait().await?;
         while self.guard.is_running()? {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -106,14 +111,14 @@ pub async fn interrupt(pid: u32, helper: &[String]) -> io::Result<()> {
 
 /// The helper's side of [`interrupt`] on Windows: attaches to the CLI's console and sends Ctrl+C
 /// there. The console is process-wide state, so this runs in a short-lived helper process, never
-/// in the backend.
+/// in the process that owns the CLI.
 #[cfg(windows)]
 pub fn send_ctrl_c(pid: u32) -> io::Result<()> {
     imp::send_ctrl_c(pid)
 }
 
-/// Makes the backend's own stdin, stdout and stderr non-inheritable. Without this every CLI
-/// would inherit them, and whoever reads the backend's output would wait for the CLIs too
+/// Makes the caller's own stdin, stdout and stderr non-inheritable. Without this every CLI
+/// would inherit them, and whoever reads the caller's output would wait for the CLIs too
 /// (harness-adapter.md §1.8). Call once at startup.
 pub fn isolate_std_handles() {
     imp::isolate_std_handles();
@@ -382,7 +387,7 @@ mod imp {
     pub fn prepare(cmd: &mut Command) {
         cmd.process_group(0);
         let parent = std::process::id() as libc::pid_t;
-        // Ask the kernel to send SIGTERM when the thread that started us exits. If the backend
+        // Ask the kernel to send SIGTERM when the thread that started us exits. If the parent
         // died before this ran, exit now (harness-adapter.md §1.8).
         unsafe {
             cmd.pre_exec(move || {

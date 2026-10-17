@@ -174,15 +174,29 @@ struct Client {
     next: AtomicI64,
 }
 
+struct PendingCall<'a> {
+    client: &'a Client,
+    id: i64,
+}
+
+impl Drop for PendingCall<'_> {
+    fn drop(&mut self) {
+        self.client.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
+    }
+}
+
 impl Client {
     async fn call<M: Method>(&self, params: &M::Params) -> anyhow::Result<M::Result> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, tx);
+        let _pending = PendingCall { client: self, id };
         let request = Message::Request(Request::new::<M>(Id::Number(id), params));
-        let mut stdin = self.stdin.lock().await;
-        let stdin = stdin.as_mut().context("the backend is quitting")?;
-        rpc::write(stdin, &request).await.context("writing to the worker host")?;
+        {
+            let mut stdin = self.stdin.lock().await;
+            let stdin = stdin.as_mut().context("the backend is quitting")?;
+            rpc::write(stdin, &request).await.context("writing to the worker host")?;
+        }
         let response = tokio::time::timeout(CALL_TIMEOUT, rx)
             .await
             .with_context(|| format!("{} got no answer", M::NAME))?
@@ -232,7 +246,12 @@ impl Workers {
         self.stop.cancel();
         let clients: Vec<Arc<Client>> = self.clients.lock().unwrap().drain().map(|(_, c)| c).collect();
         for client in clients {
-            client.stdin.lock().await.take();
+            match tokio::time::timeout_at(deadline.into(), client.stdin.lock()).await {
+                Ok(mut stdin) => {
+                    stdin.take();
+                }
+                Err(_) => tracing::warn!("worker host stdin still busy at the end of the grace period"),
+            }
         }
         self.tasks.close();
         if tokio::time::timeout_at(deadline.into(), self.tasks.wait()).await.is_err() {
@@ -307,7 +326,25 @@ impl Workers {
                 attempt_id: created.attempt_id,
             };
             lobotomy_agent::ignore_rejection(runtime(project, recorded).await)?;
+            self.refresh(project, &worker).await?;
         }
+        Ok(())
+    }
+
+    /// Events can precede a create/revise reply. Once the attempt is recorded, reconcile it and
+    /// replay from the project's stored seq so those early events are not lost.
+    async fn refresh(&self, project: &Project, worker: &str) -> anyhow::Result<()> {
+        let name = worker.to_owned();
+        let after = db(project, move |db| db.read(|c| worker_seqs(c, &name)))
+            .await?
+            .into_iter()
+            .map(|(task, seq)| (task, seq as u64))
+            .collect();
+        let snapshot = self.call::<Subscribe>(worker, &SubscribeParams { after }).await?;
+        for task in snapshot.tasks {
+            runtime(project, ApplyWorkerSnapshot { snapshot: task }).await?;
+        }
+        project.wake.notify_one();
         Ok(())
     }
 
@@ -539,10 +576,15 @@ impl Workers {
         message_id: &str,
     ) -> anyhow::Result<()> {
         let id = message_id.to_owned();
-        let body: String = db(project, move |db| {
-            db.read(|c| Ok(c.query_row("SELECT body FROM message WHERE id = ?1", [&id], |r| r.get(0))?))
+        let (body, state): (String, String) = db(project, move |db| {
+            db.read(|c| {
+                Ok(c.query_row("SELECT body, state FROM message WHERE id = ?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)))?)
+            })
         })
         .await?;
+        if state != "queued" {
+            return Ok(());
+        }
         let params = ops::SendMessageParams {
             task_id: task_id.to_owned(),
             message_id: message_id.to_owned(),
@@ -667,6 +709,10 @@ impl Workers {
             spec_version: task.criteria_version,
             attempt_id: revised.attempt_id,
         };
-        runtime(project, cmd).await
+        runtime(project, cmd).await?;
+        self.refresh(project, &worker.worker).await
     }
 }
+
+#[cfg(test)]
+mod tests;

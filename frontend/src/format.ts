@@ -132,10 +132,6 @@ export function jsonArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-export function jsonNumber(value: unknown): number {
-  return typeof value === 'number' ? value : 0;
-}
-
 export function isBlob(value: unknown): value is BlobRef {
   const ref = jsonObject(value);
   return (

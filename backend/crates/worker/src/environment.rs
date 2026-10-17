@@ -162,7 +162,12 @@ impl Environment {
         let source = clone.to_string_lossy().into_owned();
         git(&self.mirror(), &["fetch", "--quiet", "--no-tags", &source, &format!("+HEAD:{keep}")], &env)?;
         let stat = git(clone, &["diff", "--shortstat", &base, &head], &env)?;
-        let files = git(clone, &["diff", "--name-only", &base, &head], &env)?.lines().map(str::to_owned).collect();
+        // Authorization needs literal paths, including the source of a rename out of a protected
+        // directory. Text output quotes names; rename detection would report only the destination.
+        let paths =
+            String::from_utf8(git_output(clone, &["diff", "--no-renames", "--name-only", "-z", &base, &head], &env)?)
+                .context("the changed paths are not UTF-8")?;
+        let files = paths.split_terminator('\0').map(str::to_owned).collect();
         Ok(Some(Delivered { head, size: shortstat(&stat), files, committed_leftovers: leftovers }))
     }
 
@@ -188,6 +193,10 @@ fn git_env(dirs: &AttemptDirs) -> Vec<(String, String)> {
 
 /// Runs git in `dir` and returns its trimmed output.
 fn git(dir: &Path, args: &[&str], env: &[(String, String)]) -> anyhow::Result<String> {
+    Ok(String::from_utf8_lossy(&git_output(dir, args, env)?).trim().to_owned())
+}
+
+fn git_output(dir: &Path, args: &[&str], env: &[(String, String)]) -> anyhow::Result<Vec<u8>> {
     let mut command = Command::new("git");
     command.arg("-C").arg(dir).args(args).envs(env.iter().map(|(k, v)| (k, v)));
     #[cfg(windows)]
@@ -200,7 +209,7 @@ fn git(dir: &Path, args: &[&str], env: &[(String, String)]) -> anyhow::Result<St
     if !out.status.success() {
         bail!("git {} in {}: {}", args.join(" "), dir.display(), String::from_utf8_lossy(&out.stderr).trim());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    Ok(out.stdout)
 }
 
 /// `git diff --shortstat`'s line, such as "2 files changed, 5 insertions(+), 1 deletion(-)".

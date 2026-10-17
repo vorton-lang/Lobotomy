@@ -1,12 +1,11 @@
-//! Starting the processes the backend runs: role turns and quota checks. They share what keeps
+//! Starting harness processes for the backend and worker host: turns and quota checks share what keeps
 //! them safe, so no path can leave a part out (#16):
 //! - the trimmed environment (harness-adapter.md §1.6);
 //! - a job of their own, joined before they run (harness-adapter.md §1.8);
 //! - stderr read from the moment they run, so a process that writes much there before it reads
-//!   its input cannot block on a full pipe while the backend waits to write that input (#10).
+//!   its input cannot block on a full pipe while the caller waits to write that input (#10).
 //!
-//! Stdout is the caller's to read once the input is written: Codex reads its input before it
-//! writes anything on stdout.
+//! Stdout is returned to the caller once the input is written.
 
 use std::future::Future;
 use std::path::Path;

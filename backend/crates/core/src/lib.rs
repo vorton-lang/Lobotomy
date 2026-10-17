@@ -1,6 +1,7 @@
 //! Business objects, the SQLite schema and the command layer (notes/data-model.md).
 //!
-//! Everything here belongs to one project instance; nothing is global (data-model.md §10).
+//! Commands and reads use an explicitly supplied database. Project records, Angela and worker
+//! tasks share the instance schema; cross-project host state has its own database (`host`).
 
 pub mod command;
 pub mod db;

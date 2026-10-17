@@ -482,10 +482,12 @@ Codex 被拒时的形式未知，暂不处理。
 
 **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户，2026-10-16）：新方向改为全局一个数据库，不再按项目分库，见 tech-plan.md §4.1。未实现，顺序见 tech-plan.md §7。
 
-### 10.1 项目内不变
+### 10.1 项目实例与执行者
 
-- 每个项目有独立的数据目录：SQLite、文件库与 role 的工作目录。项目内的命令、规则与对话记录不变。
-- Malkuth 等执行类 role 不跨项目共享，每个项目一套。它们的 native session、Thread、工作目录都属于项目实例。
+**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，第 1 步，用户确认，2026-10-17）：第 1 步保留按项目分库，全局库在第 2 步做（tech-plan.md §7）。执行者已移到 worker 宿主，后端只运行 Angela 的 turn。
+
+- 每个项目仍有独立的 SQLite 与文件库，保存编排任务及 worker 的状态、交付物与证据。
+- 执行者的 native session、Thread 与工作目录属于 worker 宿主的 task 实例；每个 attempt 有自己的 clone。项目实例不再运行本地执行者。
 - **后端实现约束：不使用全局单例。** 项目范围内的状态都挂在项目实例上，通过参数传递，不放进全局单例或进程级静态变量。这些状态包括数据库连接、调度器、MCP 路由、运行中的 turn、项目配置。
 
 ### 10.2 host

@@ -1,4 +1,4 @@
-// A stand-in for `codex exec --json` in backend tests. It prints events in Codex's format and
+// A stand-in for `codex exec --json` in backend and worker tests. It prints events in Codex's format and
 // calls org_report on the real MCP service through the URL in its arguments.
 //
 // The input decides what happens:
@@ -18,7 +18,7 @@
 //   FAKE:many=…, FAKE:huge, …  synthetic turns for the performance baseline (fake-bench.mjs)
 //   otherwise   completes the turn with a message
 // Flags placed before Codex's own arguments change the process itself:
-//   --fake-stderr-flood  writes 4 MiB to stderr first and waits until it is read
+//   --fake-stderr-flood  writes 4 MiB to stderr after reading stdin and waits until it is read
 //   --fake-hang          never finishes on its own
 //   --fake-start-error   rejects its arguments: an error and a backtrace on stderr, nothing on
 //                        stdout, exit code 1 (#13)
