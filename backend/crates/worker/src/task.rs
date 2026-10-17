@@ -133,8 +133,15 @@ impl Tasks {
             o.stop.cancel();
         }
         for o in open {
+            // A finished loop waits for all instance owners before removing its workspace.
+            // Do not hold an owner while waiting for that loop. Active runners own the
+            // instance themselves, so they remain available to interrupt after it exits.
+            let instance = Arc::downgrade(&o.instance);
+            drop(o.instance);
             let _ = o.handle.await;
-            runner::interrupt_all(&o.instance, deadline).await;
+            if let Some(instance) = instance.upgrade() {
+                runner::interrupt_all(&instance, deadline).await;
+            }
         }
     }
 
@@ -1361,4 +1368,52 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CI caught shutdown retaining the owner a finishing loop was waiting to release.
+    #[tokio::test]
+    async fn shutdown_releases_its_instance_before_waiting_for_a_finished_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(
+            WorkerHost::open(
+                dir.path().to_path_buf(),
+                crate::host::Config {
+                    harness: lobotomy_harness::Harness::Codex,
+                    cli: lobotomy_agent::HarnessConfig::detect().unwrap(),
+                    model: None,
+                    effort: None,
+                    permission: lobotomy_harness::Permission::default(),
+                    repo: None,
+                    forge: None,
+                    stop_grace: Duration::from_secs(1),
+                },
+            )
+            .unwrap(),
+        );
+        let tasks = Tasks::new(host.clone());
+        let path = host.task_dir("closed");
+        let instance = Arc::new(Instance::open("closed", &path, host).unwrap());
+        let stop = CancellationToken::new();
+        let finishing = instance.clone();
+        let stopped = stop.clone();
+        let workspace = path.clone();
+        let handle = tokio::spawn(async move {
+            // shutdown has drained Open before cancellation, matching the CI race.
+            stopped.cancelled().await;
+            while Arc::strong_count(&finishing) > 1 {
+                tokio::task::yield_now().await;
+            }
+            drop(finishing);
+            cleanup_workspace(workspace).await;
+        });
+        tasks.open.lock().unwrap().insert("closed".into(), Open { instance, stop, handle });
+        tokio::time::timeout(Duration::from_secs(5), tasks.shutdown(Instant::now()))
+            .await
+            .expect("shutdown held the instance while joining its finishing loop");
+        assert!(!path.exists());
+    }
 }
