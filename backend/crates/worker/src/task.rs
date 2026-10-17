@@ -481,12 +481,35 @@ impl Tasks {
         }
         let attempt = self.attempt(&task.attempt_id).await?;
         if params.outcome == CloseOutcome::Adopted && task.status.state != AttemptState::Adopted {
-            return Err(rejected("not_adopted", format!("attempt {} has not been adopted", attempt.id)));
+            // A delivery without a change, such as a report, is adopted by accepting it.
+            let change = format!("{}:change", attempt.id);
+            let has_change = self.read(move |c| store::artifact(c, &change)).await.map_err(rpc_error)?.is_some();
+            if task.status.state != AttemptState::Delivered || has_change {
+                return Err(rejected("not_adopted", format!("attempt {} has not been adopted", attempt.id)));
+            }
+            let instance = self.ensure_open(&task.id).await.map_err(rpc_error)?;
+            let (core_task, request) = (attempt.core_task.clone(), format!("{}:accept", attempt.id));
+            db(&instance, move |db| {
+                let (version, dropping) = db.read(|c| {
+                    let undelivered = undelivered_user_messages(c, &core_task)?;
+                    Ok((load_task(c, &core_task)?.criteria_version, undelivered.into_iter().map(|m| m.id).collect()))
+                })?;
+                db.execute(
+                    &Caller::User,
+                    &Accept { request_id: request, task_id: core_task, criteria_version: version, dropping },
+                )
+            })
+            .await
+            .map_err(rpc_error)?;
         }
         let (task_id, attempt_id) = (task.id.clone(), attempt.id.clone());
         self.write(move |tx| {
             if attempt.ended.is_none() {
-                store::set_ending(tx, &attempt_id, AttemptState::Abandoned)?;
+                match params.outcome {
+                    // Its instance's task is done: nothing runs to wait for.
+                    CloseOutcome::Adopted => store::set_ended(tx, &attempt_id, &Status::of(AttemptState::Adopted))?,
+                    CloseOutcome::Abandoned => store::set_ending(tx, &attempt_id, AttemptState::Abandoned)?,
+                }
             }
             store::set_closed(tx, &task_id, params.outcome)
         })

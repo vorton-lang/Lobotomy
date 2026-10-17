@@ -155,5 +155,12 @@ async fn a_change_goes_out_as_a_pull_request_ci_failures_go_back_and_adopting_me
     worker.state("t", AttemptState::Adopted).await;
     assert_eq!(git(&upstream, &["rev-parse", "refs/heads/main"]), fixed.version);
     worker.call::<Close>(&CloseParams { task_id: "t".into(), outcome: CloseOutcome::Adopted }).await.unwrap();
+    // A few rounds of the task's loop later, it is still adopted, not abandoned.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let snapshot = worker.subscribe(BTreeMap::new()).await;
+    assert_eq!(
+        (snapshot.tasks[0].state, snapshot.tasks[0].closed),
+        (AttemptState::Adopted, Some(CloseOutcome::Adopted))
+    );
     worker.quit().await;
 }

@@ -299,7 +299,9 @@ impl Command for ApplyWorkerEvent {
 }
 
 /// The worker's snapshot of a task after (re)subscribing: it is authoritative
-/// (worker-interface.md §9). A task this project does not know is left alone.
+/// (worker-interface.md §9), unless an event after it already applied. It does not move the seq:
+/// the events it covers that the worker resends after it still apply, in order, and end where it
+/// stands. A task this project does not know is left alone.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApplyWorkerSnapshot {
     pub snapshot: TaskSnapshot,
@@ -313,6 +315,9 @@ impl Command for ApplyWorkerSnapshot {
         caller.require_runtime()?;
         let s = &self.snapshot;
         let Some(current) = worker_task(cx.tx, &s.task_id)? else { return Ok(()) };
+        if current.seq > s.seq as i64 {
+            return Ok(());
+        }
         let status = WorkerStatus {
             state: s.state,
             blocked: s.blocked.clone(),
@@ -320,8 +325,8 @@ impl Command for ApplyWorkerSnapshot {
             question: s.question.clone(),
         };
         cx.tx.execute(
-            "UPDATE worker_task SET spec_version = ?2, attempt_id = ?3, status = ?4, seq = MAX(seq, ?5) WHERE task_id = ?1",
-            params![s.task_id, s.spec_version, s.attempt_id, status_json(&status)?, s.seq as i64],
+            "UPDATE worker_task SET spec_version = ?2, attempt_id = ?3, status = ?4 WHERE task_id = ?1",
+            params![s.task_id, s.spec_version, s.attempt_id, status_json(&status)?],
         )?;
         for artifact in &s.artifacts {
             upsert_artifact(cx, &s.task_id, &s.attempt_id, artifact)?;
@@ -377,6 +382,30 @@ impl Command for CloseWorkerTask {
         let decision = record_decision(cx, kind, Some(&task.id), caller, detail)?;
         close_task(cx, &task, phase)?;
         cx.emit(event, &task.id, json!({ "decision_id": decision, "reason": self.reason }))?;
+        Ok(())
+    }
+}
+
+/// The message went to the task's worker (worker-interface.md §3 `send_message`): it no longer
+/// waits in the role's inbox, and stays as the record of what was said.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MessageForwarded {
+    pub message_id: String,
+}
+
+impl Command for MessageForwarded {
+    const NAME: &'static str = "message_forwarded";
+    type Output = ();
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
+        caller.require_runtime()?;
+        let changed = cx.tx.execute(
+            "UPDATE message SET state = 'bound', delivered_at = ?2 WHERE id = ?1 AND state = 'queued'",
+            params![self.message_id, cx.now],
+        )?;
+        if changed > 0 {
+            cx.emit("message.forwarded", &self.message_id, json!({}))?;
+        }
         Ok(())
     }
 }

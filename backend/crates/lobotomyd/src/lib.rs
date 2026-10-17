@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod project;
 pub mod projects;
 pub mod scheduler;
+pub mod workers;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -48,7 +49,11 @@ impl Backend {
         let addr = listener.local_addr()?;
         *host.mcp_base.lock().unwrap() = format!("http://{addr}");
         let projects = Arc::new(Projects::new(host.clone()));
+        // Before the projects open: each gets its workers' roles, and its scheduler gives them tasks.
+        let workers = workers::Workers::load(host.clone(), &projects)?;
+        let _ = host.workers.set(workers.clone());
         projects.open_registered().await?;
+        workers.start();
         let angela = Angela::start(host.clone(), projects.clone()).await.map_err(|e| {
             tracing::error!(error = format!("{e:#}"), "Angela could not be opened");
             format!("{e:#}")
@@ -98,7 +103,12 @@ impl Backend {
                 angela.stop(deadline).await;
             }
         };
-        futures::future::join(self.projects.stop_all(deadline), angela).await;
+        let workers = async {
+            if let Some(workers) = self.host.workers.get() {
+                workers.shutdown(deadline).await;
+            }
+        };
+        futures::future::join3(self.projects.stop_all(deadline), angela, workers).await;
         self.serving.cancel();
         let _ = self.server.await;
         // No new upgrades after the server stopped.

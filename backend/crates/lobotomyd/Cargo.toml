@@ -13,6 +13,7 @@ ts-rs = { workspace = true, optional = true }
 lobotomy-core.workspace = true
 lobotomy-harness.workspace = true
 lobotomy-agent.workspace = true
+lobotomy-worker-protocol.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 futures.workspace = true
@@ -26,6 +27,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 rusqlite.workspace = true
+toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
 
 [[example]]
 name = "export-gui-types"

@@ -38,6 +38,9 @@ pub struct Host {
     pub gui_push: broadcast::Sender<Arc<str>>,
     /// The GUI asked the backend to stop (frontend.md §1).
     pub shutdown_requested: Notify,
+    /// The workers tasks go to (tech-plan.md §7 step 1), once the backend has read their
+    /// configuration.
+    pub workers: std::sync::OnceLock<Arc<crate::workers::Workers>>,
     /// Domains with a check in progress: at most one check per domain (data-model.md §8.4).
     checking: Mutex<HashSet<String>>,
     /// Codex's model catalog, once read; [`Host::models`] starts reading it.
@@ -77,6 +80,7 @@ impl Host {
             mcp_base: Mutex::new(String::new()),
             gui_push: broadcast::channel(crate::gui::PUSH_BUFFER).0,
             shutdown_requested: Notify::new(),
+            workers: std::sync::OnceLock::new(),
             checking: Mutex::new(HashSet::new()),
             codex_models: Mutex::new(Vec::new()),
             catalog_requested: AtomicBool::new(false),

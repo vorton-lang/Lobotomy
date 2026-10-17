@@ -58,6 +58,7 @@ agent 负责验收并合并这些修复 PR：看改动是否只修了失败的�
 | `backend/crates/worker`（worker 宿主） | `cargo test -p lobotomy-worker` |
 | 运行时：`backend/crates/agent`（runner、执行者的 MCP 工具、恢复），以及 `backend/crates/lobotomyd` 中的额度、调度与 Angela | `cargo test -p lobotomyd --test backend <名字片段>`，只运行名字含这个片段的测试，例如 `quota`、`claude`、`angela` |
 | `backend/crates/agent/src/launch.rs`、`capability.rs`（子进程的环境） | `cargo test -p lobotomyd --test environment` |
+| `backend/crates/lobotomyd/src/workers.rs`（后端接 worker 宿主） | 先 `cargo build -p lobotomy-worker`，再 `cargo test -p lobotomyd --test workers` |
 | `backend/crates/lobotomyd/src/gui` | `cargo test -p lobotomyd --test gui` |
 | 发给 GUI 的 Rust 类型：带 ts-rs 派生的结构，在 core、agent 与 lobotomyd 中，例如 `core::view`、`agent::instance::LiveTurn`、`lobotomyd/src/gui` | 在 `frontend/` 运行 `npm run api:generate`，提交生成的 `src/api/generated.ts`；再运行 `npm run api:check` |
 | `frontend/src` | `npm run lint`、`npm run typecheck` 和 `npm test`；改了界面行为时，加上相关的 e2e：`npx playwright test -g "<标题片段>"` |

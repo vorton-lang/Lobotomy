@@ -247,8 +247,12 @@ async fn prepare(instance: &Instance, projects: &Projects) -> anyhow::Result<Opt
         );
         messages.push(body);
     }
+    // A worker's attempt that delivered, is blocked, failed, stopped or got lost wakes her
+    // whether or not the rest of the project has settled (tech-plan.md §7 step 1).
     let wakes = |s: &Seen| {
-        s.changes.as_ref().is_ok_and(|c| !c.mismatches.is_empty() || (s.settled.is_some() && c.by_others > 0))
+        s.changes
+            .as_ref()
+            .is_ok_and(|c| !c.mismatches.is_empty() || c.wakes > 0 || (s.settled.is_some() && c.by_others > 0))
     };
     let woken: Vec<&Seen> = seen.iter().filter(|s| wakes(s)).collect();
     let mut sections = Vec::new();

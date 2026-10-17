@@ -88,11 +88,20 @@ fn the_worker_events_move_the_task_once_each_and_the_snapshot_wins() {
         evidence: Vec::new(),
         seq: 9,
     };
-    db.execute(&Caller::Runtime, &ApplyWorkerSnapshot { snapshot }).unwrap();
+    db.execute(&Caller::Runtime, &ApplyWorkerSnapshot { snapshot: snapshot.clone() }).unwrap();
     let worker = db.read(|c| worker_task(c, &task)).unwrap().unwrap();
-    assert_eq!((worker.status.state, worker.seq), (AttemptState::Delivered, 9));
+    assert_eq!(
+        (worker.status.state, worker.seq),
+        (AttemptState::Delivered, 5),
+        "the snapshot holds; the seq waits for the resent events"
+    );
     assert_eq!(worker.change().unwrap().version, "abc");
-    assert!(!apply(event(8, "a1", state(AttemptState::Working))), "behind the snapshot");
+    assert!(apply(event(9, "a1", state(AttemptState::Working))));
+    let stale = TaskSnapshot { seq: 8, ..snapshot.clone() };
+    db.execute(&Caller::Runtime, &ApplyWorkerSnapshot { snapshot: stale }).unwrap();
+    let worker = db.read(|c| worker_task(c, &task)).unwrap().unwrap();
+    assert_eq!(worker.status.state, AttemptState::Working, "an event after the snapshot wins");
+    assert!(apply(event(10, "a1", state(AttemptState::Delivered))));
 
     let close = CloseWorkerTask {
         request_id: "close".into(),

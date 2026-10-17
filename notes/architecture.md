@@ -32,6 +32,7 @@ Angela 的 CLI（每个 turn 一个进程）──MCP /mcp/angela/{token}──�
   - `projects.rs`：从登记中打开项目、新建并接入项目、记下打不开的项目，以及停止时逐个停下项目。
   - `angela.rs`：Angela 的实例与调度器。调度器观察各项目，按规则为她登记 turn，规则见 manager-actions.md §6"Manager 什么时候运行"；她的数据位置见 data-model.md §10.6。
   - `mcp`：后端的 MCP 路由。`mod.rs` 把执行者的工具挂到各项目上，`angela.rs` 是 Angela 的工具。
+  - `workers.rs`：按 host 目录的 `workers.toml` 启动并看管 worker 宿主，经 worker 协议派任务，把 worker 的事件写进所属项目的数据库（tech-plan.md §7 第 1 步）。
 - role 与 Angela 的 CLI 每个 turn 启动一次，结束即退出（harness-adapter.md §1.1）。
 
 ## 2. 代码布局

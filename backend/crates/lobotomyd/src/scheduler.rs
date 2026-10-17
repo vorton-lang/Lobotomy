@@ -41,8 +41,16 @@ async fn tick(project: &Arc<Project>) -> anyhow::Result<()> {
     if db(project, |db| db.read(load_project)).await?.is_none() {
         return Ok(());
     }
+    // A worker's queued tasks go to the worker (tech-plan.md §7 step 1).
+    if let Some(workers) = project.host.workers.get()
+        && let Err(e) = workers.dispatch(project).await
+    {
+        tracing::warn!(error = format!("{e:#}"), "could not give tasks to the workers");
+    }
     let roles = db(project, |db| db.read(list_roles)).await?;
-    for role in roles {
+    // Roles the backend runs itself; they stay until the tests that drive the runner through them
+    // move to the worker host (tech-plan.md §7 step 1).
+    for role in roles.into_iter().filter(|r| !r.remote) {
         // A blocked quota domain starts nothing new; running turns end on their own. Only the
         // user's retry opens the domain again (data-model.md §8.3, §8.4).
         if project.host.is_blocked(&role.harness)? {

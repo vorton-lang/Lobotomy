@@ -33,6 +33,9 @@ impl Running {
     /// Reconciles the turns the last run left (data-model.md §3.3) and starts scheduling.
     pub async fn start(project: Arc<Project>) -> anyhow::Result<Self> {
         runner::recover(&project).await?;
+        if let Some(workers) = project.host.workers.get() {
+            workers.sync_roles(&project).await?;
+        }
         let watching = CancellationToken::new();
         let watcher = tokio::spawn(gui::watch(project.instance.clone(), watching.clone()));
         let scheduling = CancellationToken::new();
