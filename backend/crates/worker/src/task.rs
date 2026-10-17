@@ -116,7 +116,9 @@ impl Tasks {
         let tasks = tokio::task::spawn_blocking(move || host.store.read(store::tasks)).await??;
         for task in tasks {
             let finished = task.closed.is_some() && task.status.state.is_final();
-            if !finished && let Err(e) = self.ensure_open(&task.id).await {
+            if finished {
+                cleanup_workspace(self.host.task_dir(&task.id)).await;
+            } else if let Err(e) = self.ensure_open(&task.id).await {
                 tracing::error!(task = task.id, error = format!("{e:#}"), "could not open the task");
             }
         }
@@ -131,8 +133,15 @@ impl Tasks {
             o.stop.cancel();
         }
         for o in open {
+            // A finished loop waits for all instance owners before removing its workspace.
+            // Do not hold an owner while waiting for that loop. Active runners own the
+            // instance themselves, so they remain available to interrupt after it exits.
+            let instance = Arc::downgrade(&o.instance);
+            drop(o.instance);
             let _ = o.handle.await;
-            runner::interrupt_all(&o.instance, deadline).await;
+            if let Some(instance) = instance.upgrade() {
+                runner::interrupt_all(&instance, deadline).await;
+            }
         }
     }
 
@@ -694,6 +703,26 @@ async fn run(tasks: Arc<Tasks>, task_id: String, instance: Arc<TaskInstance>, st
             Ok(true) => {
                 tracing::info!(task = task_id, "task finished");
                 tasks.open.lock().unwrap().remove(&task_id);
+                instance.tasks.close();
+                instance.tasks.wait().await;
+                let mut instance = instance;
+                loop {
+                    match Arc::try_unwrap(instance) {
+                        Ok(instance) => {
+                            // MCP requests can hold the database independently of the instance.
+                            while Arc::strong_count(&instance.db) > 1 {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
+                            drop(instance);
+                            break;
+                        }
+                        Err(shared) => {
+                            instance = shared;
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    }
+                }
+                cleanup_workspace(tasks.host.task_dir(&task_id)).await;
                 return;
             }
             Ok(false) => {}
@@ -703,6 +732,22 @@ async fn run(tasks: Arc<Tasks>, task_id: String, instance: Arc<TaskInstance>, st
             _ = instance.wake.notified() => {}
             _ = tokio::time::sleep(POLL) => {}
             _ = stop.cancelled() => return,
+        }
+    }
+}
+
+/// Best effort: a lingering Windows file handle must not take down the host.
+async fn cleanup_workspace(path: std::path::PathBuf) {
+    for retry in 0..5 {
+        let target = path.clone();
+        let result = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(target)).await;
+        match result {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => return,
+            result if retry == 4 => {
+                tracing::warn!(path = %path.display(), error = ?result, "could not clean up the task workspace");
+            }
+            _ => tokio::time::sleep(Duration::from_millis(100 * (retry + 1))).await,
         }
     }
 }
@@ -1323,4 +1368,54 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for 16477d9: Windows CI run 39038283832, job 117412447911,
+    /// a_task_is_delivered_reworked_and_closed_and_retries_change_nothing timed out
+    /// in Worker::quit: shutdown retained the owner the finishing loop needed released.
+    #[tokio::test]
+    async fn shutdown_releases_its_instance_before_waiting_for_a_finished_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Arc::new(
+            WorkerHost::open(
+                dir.path().to_path_buf(),
+                crate::host::Config {
+                    harness: lobotomy_harness::Harness::Codex,
+                    cli: lobotomy_agent::HarnessConfig::detect().unwrap(),
+                    model: None,
+                    effort: None,
+                    permission: lobotomy_harness::Permission::default(),
+                    repo: None,
+                    forge: None,
+                    stop_grace: Duration::from_secs(1),
+                },
+            )
+            .unwrap(),
+        );
+        let tasks = Tasks::new(host.clone());
+        let path = host.task_dir("closed");
+        let instance = Arc::new(Instance::open("closed", &path, host).unwrap());
+        let stop = CancellationToken::new();
+        let finishing = instance.clone();
+        let stopped = stop.clone();
+        let workspace = path.clone();
+        let handle = tokio::spawn(async move {
+            // shutdown has drained Open before cancellation, matching the CI race.
+            stopped.cancelled().await;
+            while Arc::strong_count(&finishing) > 1 {
+                tokio::task::yield_now().await;
+            }
+            drop(finishing);
+            cleanup_workspace(workspace).await;
+        });
+        tasks.open.lock().unwrap().insert("closed".into(), Open { instance, stop, handle });
+        tokio::time::timeout(Duration::from_secs(5), tasks.shutdown(Instant::now()))
+            .await
+            .expect("shutdown held the instance while joining its finishing loop");
+        assert!(!path.exists());
+    }
 }
