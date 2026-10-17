@@ -47,6 +47,60 @@ impl WorkerTask {
     }
 }
 
+/// What a message to a worker's task replies to, fixed as it is written (worker-interface.md §3):
+/// the worker's open question, and the stop it continues.
+pub(crate) struct ReplyTarget {
+    question_id: Option<String>,
+    stop_id: Option<String>,
+}
+
+impl ReplyTarget {
+    /// For a message about `task_id` that continues `stop`, if it names one. A stop takes one reply:
+    /// a later one is refused, saying who replied and when, as is one to a stop the worker is no
+    /// longer at.
+    pub(crate) fn of(conn: &Connection, task_id: Option<&str>, stop: Option<&str>) -> Result<Self> {
+        let worker = match task_id {
+            Some(task) => worker_task(conn, task)?,
+            None => None,
+        };
+        if let Some(stop) = stop {
+            let Some(worker) = &worker else {
+                return Err(Error::rejected("not_stopped", "只有交给 worker 的任务会停下等回复"));
+            };
+            let answered: Option<(String, String, i64)> = conn
+                .query_row(
+                    "SELECT id, source, created_at FROM message WHERE task_id = ?1 AND stop_id = ?2",
+                    params![task_id, stop],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            if let Some((id, source, at)) = answered {
+                let (who, when) = (crate::prompts::sender(&source), crate::task::local_minute(conn, at)?);
+                return Err(Error::rejected(
+                    "stop_answered",
+                    format!("{who} 在 {when} 已经回复了这次停下（消息 {id}）"),
+                ));
+            }
+            if worker.status.blocked.as_ref().and_then(|b| b.stop_id.as_deref()) != Some(stop) {
+                return Err(Error::rejected(
+                    "not_stopped",
+                    format!("worker 已经不在这次停下（{stop}），先看它现在的状态"),
+                ));
+            }
+        }
+        let question_id = worker.and_then(|w| w.status.question).map(|q| q.question_id);
+        Ok(Self { question_id, stop_id: stop.map(str::to_owned) })
+    }
+
+    pub(crate) fn store(&self, conn: &Connection, message_id: &str) -> Result<()> {
+        conn.execute(
+            "UPDATE message SET question_id = ?2, stop_id = ?3 WHERE id = ?1",
+            params![message_id, self.question_id, self.stop_id],
+        )?;
+        Ok(())
+    }
+}
+
 fn status_json(status: &WorkerStatus) -> Result<String> {
     Ok(serde_json::to_string(status)?)
 }

@@ -157,6 +157,7 @@ fn tell_angela(angela: &Instance, body: &str) -> String {
         task_id: None,
         body: body.into(),
         reply_to: None,
+        stop_id: None,
     };
     let id = angela.db.execute(&Caller::User, &message).unwrap().id;
     angela.wake.notify_one();

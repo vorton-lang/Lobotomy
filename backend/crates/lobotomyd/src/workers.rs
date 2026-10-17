@@ -587,8 +587,9 @@ pub async fn worker_of(project: &Project, task_id: &str) -> anyhow::Result<Optio
 
 impl Workers {
     /// Sends the project's message `message_id` to the task's worker (worker-interface.md §3
-    /// `send_message`); it answers the worker's open question, if there is one. The message stays
-    /// in the project as the record, out of the role's inbox.
+    /// `send_message`), with the question it answers and the stop it continues as they were when it
+    /// was written: a retry sends the same. The message stays in the project as the record, out of
+    /// the role's inbox.
     pub async fn forward(
         &self,
         project: &Project,
@@ -597,12 +598,17 @@ impl Workers {
         message_id: &str,
     ) -> anyhow::Result<()> {
         let id = message_id.to_owned();
-        let (body, state): (String, String) = db(project, move |db| {
-            db.read(|c| {
-                Ok(c.query_row("SELECT body, state FROM message WHERE id = ?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)))?)
+        let (body, state, question_id, stop_id): (String, String, Option<String>, Option<String>) =
+            db(project, move |db| {
+                db.read(|c| {
+                    Ok(c.query_row(
+                        "SELECT body, state, question_id, stop_id FROM message WHERE id = ?1",
+                        [&id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                    )?)
+                })
             })
-        })
-        .await?;
+            .await?;
         if state != "queued" {
             return Ok(());
         }
@@ -611,8 +617,8 @@ impl Workers {
             message_id: message_id.to_owned(),
             body,
             refs: Vec::new(),
-            question_id: worker.status.question.as_ref().map(|q| q.question_id.clone()),
-            stop_id: None,
+            question_id,
+            stop_id,
         };
         self.call::<ops::SendMessage>(&worker.worker, &params).await?;
         runtime(project, MessageForwarded { message_id: message_id.to_owned() }).await

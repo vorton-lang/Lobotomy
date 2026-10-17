@@ -52,6 +52,7 @@ fn main() -> anyhow::Result<()> {
         task_id: None,
         body: "text".into(),
         reply_to: None,
+        stop_id: None,
     };
     println!(
         "{}",

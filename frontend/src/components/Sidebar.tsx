@@ -2,7 +2,7 @@
 
 import { attentionKey } from '../format';
 import { useStore } from '../store';
-import { AttentionCard } from './Attention';
+import { AttentionCard, LeftoverReplies } from './Attention';
 import { WorkersError } from './Overview';
 import { Workboard } from './Workboard';
 
@@ -17,6 +17,7 @@ export function Sidebar({ width }: { width: number }) {
         {attention.map((a) => (
           <AttentionCard key={attentionKey(a)} attention={a} />
         ))}
+        <LeftoverReplies attention={attention} />
       </section>
       <Workboard />
     </aside>

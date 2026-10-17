@@ -1,7 +1,7 @@
 // The cards of "等你决定" (frontend.md §2): each says what waits for the user and offers the
 // commands that resolve it. The backend decides what is listed (frontend.md §7).
 
-import type { Attention, Hold } from '../api/types';
+import type { Attention, Hold, TaskView } from '../api/types';
 import { abnormalEnd, harnessName, PERMISSION_LABEL, quotaNote } from '../format';
 import { act, clearDraft, run, selectTask, setPermission, useCommand, useDraft, useStore } from '../store';
 
@@ -131,12 +131,52 @@ function UndeliveredNote({ taskId }: { taskId: string }) {
 }
 
 function BlockedCard({ taskId, title, reason }: { taskId: string; title: string; reason: string }) {
-  const executor = useStore((s) => s.snapshot?.tasks.find((t) => t.id === taskId)?.executor);
+  const task = useStore((s) => s.snapshot?.tasks.find((t) => t.id === taskId));
+  // A stopped worker goes on from a reply to this stop, and only from the first one
+  // (worker-interface.md §3).
+  const stopId = task?.worker?.status.blocked?.stop_id ?? null;
   return (
     <div className="card">
       <p>「{title}」的执行者在等你：</p>
       <p className="quote">{reason}</p>
-      {executor && <Reply role={executor} taskId={taskId} />}
+      {task && <Reply role={task.executor} taskId={taskId} stopId={stopId} />}
+    </div>
+  );
+}
+
+/**
+ * Replies being written when their card went, as when Angela continued the worker first: they are
+ * not dropped silently (worker-interface.md §3). One can still go as a plain message, which waits
+ * for the worker's next turn.
+ */
+export function LeftoverReplies({ attention }: { attention: Attention[] }) {
+  const tasks = useStore((s) => s.snapshot?.tasks);
+  const drafts = useStore((s) => s.drafts);
+  const shown = new Set(attention.map((a) => (a.kind === 'task_blocked' || a.kind === 'stalled' ? a.task_id : null)));
+  const left = (tasks ?? []).filter(
+    (t) => ['executing', 'accepting'].includes(t.phase) && drafts[`reply:${t.id}`]?.trim() && !shown.has(t.id),
+  );
+  return left.map((t) => <LeftoverReply key={t.id} task={t} />);
+}
+
+function LeftoverReply({ task }: { task: TaskView }) {
+  const key = `reply:${task.id}`;
+  const text = useStore((s) => s.drafts[key] ?? '');
+  const { submit, busy } = useCommand('send_message');
+  const send = async () => {
+    const sent = await submit({ role: task.executor, task_id: task.id, body: text.trim() });
+    if (sent !== undefined) clearDraft(key);
+  };
+  return (
+    <div className="card">
+      <p>「{task.title}」的卡片已经处理掉了，你写到一半的回复没有发出：</p>
+      <p className="quote">{text}</p>
+      <div className="actions">
+        <button onClick={() => clearDraft(key)}>丢弃</button>
+        <button className="primary" disabled={busy} onClick={send}>
+          作为普通消息发送
+        </button>
+      </div>
     </div>
   );
 }
@@ -160,11 +200,14 @@ function StalledCard({ attention: a }: { attention: Extract<Attention, { kind: '
 function Reply({
   role,
   taskId,
+  stopId = null,
   placeholder = '回复',
   children,
 }: {
   role: string;
   taskId: string | null;
+  /** The worker's stop the reply continues. */
+  stopId?: string | null;
   placeholder?: string;
   children?: React.ReactNode;
 }) {
@@ -187,7 +230,7 @@ function Reply({
           className="primary"
           disabled={!reply.trim() || busy}
           onClick={async () => {
-            const sent = await submit({ role, task_id: taskId, body: reply.trim() });
+            const sent = await submit({ role, task_id: taskId, body: reply.trim(), stop_id: stopId });
             if (sent !== undefined) clearDraft(key);
           }}
         >

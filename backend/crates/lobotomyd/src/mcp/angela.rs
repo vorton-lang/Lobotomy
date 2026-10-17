@@ -186,6 +186,9 @@ pub struct SendToRoleArgs {
     pub ledger: Vec<String>,
     /// 你的话。转发原话时写你的解读；没有原话时就是你要说的话
     pub interpretation: String,
+    /// 让停下的 worker 继续时填它这次停下的 ID：read_task 中 worker.status.blocked.stop_id。不填的消息排到它下一个 turn，它不会因此继续
+    #[serde(default)]
+    pub stop_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -417,6 +420,7 @@ impl AngelaTools {
                 context,
                 ledger,
                 interpretation: args.interpretation,
+                stop_id: args.stop_id,
             };
             let created = db(&project, move |db| db.execute(&caller, &cmd)).await?;
             workers(&reach)?.forward(&project, &worker, &task_id, &created.id).await?;
@@ -469,6 +473,7 @@ impl AngelaTools {
                     context: Vec::new(),
                     ledger: Vec::new(),
                     interpretation: args.reason,
+                    stop_id: None,
                 };
                 let created = db(&project, move |db| db.execute(&caller, &cmd)).await?;
                 workers(&reach)?.forward(&project, &worker, &args.task_id, &created.id).await?;

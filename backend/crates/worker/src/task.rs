@@ -653,8 +653,14 @@ async fn deliver(instance: &TaskInstance, attempt: &AttemptRow, params: &SendMes
         })
         .await;
     }
-    let send =
-        SendMessage { request_id: request.clone(), role: ROLE.into(), task_id: Some(core_task), body, reply_to: None };
+    let send = SendMessage {
+        request_id: request.clone(),
+        role: ROLE.into(),
+        task_id: Some(core_task),
+        body,
+        reply_to: None,
+        stop_id: None,
+    };
     let id = db(instance, move |db| db.execute(&Caller::User, &send)).await?.id;
     // After a turn that did not end normally, the role holds until a reply to the stop continues it.
     if params.stop_id.is_none() {

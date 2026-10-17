@@ -44,6 +44,7 @@ async fn harness_processes_do_not_see_gh_tokens() {
         task_id: None,
         body: "anything".into(),
         reply_to: None,
+        stop_id: None,
     };
     angela.db.execute(&Caller::User, &message).unwrap();
     angela.wake.notify_one();

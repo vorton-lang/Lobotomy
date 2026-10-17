@@ -379,7 +379,7 @@ Codex 被拒时的形式未知，暂不处理。
 | occupancy | role | 占用它的 task | 每个 role 最多被一个任务占用 |
 | native_session | session_id（运行时生成） | role、harness、所属任务（可空）、harness 原生 ID（可后补）、开始与结束时间 | 每个 role 每个任务最多一个当前 session（§4.1） |
 | turn | turn_id | role、native session、task 与 attempt（可空）、MCP token、输入、状态与结果、失败原因、pid 与进程启动时间。原始输出文件按 turn_id 命名（§7.4） | 每个 role 最多一个未结束的 turn；token 唯一 |
-| message | message_id | 目标 role、来源、所属任务（可空）、正文、到达顺序 `seq`、状态（排队、已绑定、未投递）、绑定的 turn、投递时间、用户选定的回复对象（可空，manager-actions.md §1.1） | `seq` 唯一，按到达顺序递增（§3.5） |
+| message | message_id | 目标 role、来源、所属任务（可空）、正文、到达顺序 `seq`、状态（排队、已绑定、未投递）、绑定的 turn、投递时间、用户选定的回复对象（可空，manager-actions.md §1.1）；发给 worker 任务的消息回答的问题和续接的停下（可空，写入时定下，worker-interface.md §3） | `seq` 唯一，按到达顺序递增（§3.5）；同一任务的同一次停下只有一条消息续接 |
 | question | question_id | role、task（Angela 的问题为空）、正文、提问 turn、`after_message_seq`、关闭时间与交付 turn（§3.5） | 每个任务最多一个开放问题 |
 | decision | decision_id | 种类（验收、退回、放弃、重开）、操作者、依据（完成条件版本、放下的未投递消息）、理由 | 只追加 |
 | notification_intent（未实现，见 manager-actions.md §6） | 状态键 | 内容引用、是否已显示 | 每个状态键一条 |

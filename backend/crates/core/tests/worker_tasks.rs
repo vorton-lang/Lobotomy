@@ -4,12 +4,14 @@
 mod common;
 
 use common::*;
-use lobotomy_core::Caller;
 use lobotomy_core::role::SyncWorkerRoles;
-use lobotomy_core::task::{CreateTask, Phase, load_task};
+use lobotomy_core::task::{CreateTask, Phase, SendMessage, SendToRole, load_task};
 use lobotomy_core::view::manager::settled;
 use lobotomy_core::worker::{ApplyWorkerEvent, ApplyWorkerSnapshot, CloseWorkerTask, WorkerTaskCreated, worker_task};
-use lobotomy_worker_protocol::event::{Artifact, ArtifactKind, AttemptState, Event, EventBody, TaskSnapshot};
+use lobotomy_core::{Caller, Db, Error};
+use lobotomy_worker_protocol::event::{
+    Artifact, ArtifactKind, AttemptState, Blocked, Event, EventBody, Need, TaskSnapshot,
+};
 use lobotomy_worker_protocol::ops::CloseOutcome;
 
 const WORKER: &str = "lobotomy-codex";
@@ -22,28 +24,32 @@ fn state(state: AttemptState) -> EventBody {
     EventBody::StateChanged { state, blocked: None, reason: None }
 }
 
+/// A task of the worker's, before the worker has it.
+fn queued_task(db: &Db) -> String {
+    let workers = SyncWorkerRoles { workers: vec![(WORKER.into(), "codex".into())] };
+    db.execute(&Caller::Runtime, &workers).unwrap();
+    let create = CreateTask {
+        request_id: "t".into(),
+        title: "加一个 new.txt".into(),
+        body: "原话".into(),
+        criteria: "CI 通过".into(),
+        executor: WORKER.into(),
+    };
+    db.execute(&Caller::User, &create).unwrap().id
+}
+
+fn hand_over(db: &Db, task: &str) {
+    let created =
+        WorkerTaskCreated { task_id: task.into(), worker: WORKER.into(), spec_version: 1, attempt_id: "a1".into() };
+    db.execute(&Caller::Runtime, &created).unwrap();
+}
+
 #[test]
 fn the_worker_events_move_the_task_once_each_and_the_snapshot_wins() {
     let db = db();
-    let workers = SyncWorkerRoles { workers: vec![(WORKER.into(), "codex".into())] };
-    db.execute(&Caller::Runtime, &workers).unwrap();
-    let task = db
-        .execute(
-            &Caller::User,
-            &CreateTask {
-                request_id: "t".into(),
-                title: "加一个 new.txt".into(),
-                body: "原话".into(),
-                criteria: "CI 通过".into(),
-                executor: WORKER.into(),
-            },
-        )
-        .unwrap()
-        .id;
+    let task = queued_task(&db);
     assert!(!db.read(|c| settled(c, &[])).unwrap(), "a queued task waits to go to its worker");
-    let created =
-        WorkerTaskCreated { task_id: task.clone(), worker: WORKER.into(), spec_version: 1, attempt_id: "a1".into() };
-    db.execute(&Caller::Runtime, &created).unwrap();
+    hand_over(&db, &task);
     let apply = |e: Event| db.execute(&Caller::Runtime, &ApplyWorkerEvent { task_id: task.clone(), event: e }).unwrap();
 
     assert!(apply(event(1, "a1", state(AttemptState::Working))));
@@ -111,4 +117,41 @@ fn the_worker_events_move_the_task_once_each_and_the_snapshot_wins() {
     };
     db.execute(&Caller::User, &close).unwrap();
     assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, Phase::Done);
+}
+
+/// A stop takes one reply. In the first real acceptance the user and Angela continued a stopped
+/// worker at once, and the later message went into its next turn (worker-interface.md §3).
+#[test]
+fn a_second_reply_to_a_stop_is_refused_saying_who_replied() {
+    let db = db();
+    let task = queued_task(&db);
+    hand_over(&db, &task);
+    let blocked = Blocked { need: Need::Resume, question_id: None, stop_id: Some("turn_1".into()) };
+    let stopped =
+        EventBody::StateChanged { state: AttemptState::Blocked, blocked: Some(blocked), reason: Some("中断".into()) };
+    db.execute(&Caller::Runtime, &ApplyWorkerEvent { task_id: task.clone(), event: event(1, "a1", stopped) }).unwrap();
+
+    let user = SendMessage {
+        request_id: "user".into(),
+        role: WORKER.into(),
+        task_id: Some(task.clone()),
+        body: "继续".into(),
+        reply_to: None,
+        stop_id: Some("turn_1".into()),
+    };
+    db.execute(&Caller::User, &user).unwrap();
+    let angela = SendToRole {
+        request_id: "angela".into(),
+        role: WORKER.into(),
+        task_id: Some(task.clone()),
+        quotes: Vec::new(),
+        context: Vec::new(),
+        ledger: Vec::new(),
+        interpretation: "接着做".into(),
+        stop_id: Some("turn_1".into()),
+    };
+    let refused = db.execute(&Caller::Manager { turn_id: "angela-turn".into() }, &angela).unwrap_err();
+    let Error::Rejected { code, message } = refused else { panic!("{refused:?}") };
+    assert_eq!(code, "stop_answered");
+    assert!(message.contains("用户"), "it says who replied: {message}");
 }

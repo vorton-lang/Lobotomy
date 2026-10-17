@@ -82,7 +82,12 @@ export type Blocked = { need: Need,
 /**
  * The question to answer, for `needs_input`.
  */
-question_id: string | null, };
+question_id: string | null,
+/**
+ * This stop, for `resume`: a message that names it goes on from here. Only the first one
+ * does; later ones are refused (§3).
+ */
+stop_id: string | null, };
 
 export type ChangeSize = { files: number, additions: number, deletions: number, };
 
@@ -369,7 +374,12 @@ export type SendMessage = { request_id: string, role: string, task_id: string | 
  * What it replies to, when the user chose it: an item or a message of this database, such as
  * one of the manager's replies. Every role follows it (manager-actions.md §1.1).
  */
-reply_to?: string | null, };
+reply_to?: string | null,
+/**
+ * The stop of the task's worker it continues (worker-interface.md §3); without it, the
+ * message waits for the worker's next turn.
+ */
+stop_id?: string | null, };
 
 export type SetPaused = { request_id: string, task_id: string, paused: boolean, };
 

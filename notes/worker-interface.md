@@ -45,7 +45,7 @@ worker 宿主（自带电池或第三方实现）
 |---|---|---|
 | task | 编排层生成的 `task_id` | 交出去的一件事；带任务说明的版本号。对应 A2A 的 contextId |
 | attempt | worker 生成，`(task_id, 序号)` | 按某个说明版本执行一次。进入终态后不再接收消息；新 attempt 指回上一个。对应 A2A 的 Task |
-| message | 编排层生成的 `message_id` | 发给 attempt 的消息；回答问题时带 `question_id` |
+| message | 编排层生成的 `message_id` | 发给 attempt 的消息；回答问题时带 `question_id`，续接一次停下时带 `stop_id` |
 | question | worker 生成的 `question_id` | agent 受阻时提出的问题，带可选项 |
 | artifact | `artifact_id`，加上版本 | 交付物：`change`（代码，版本是 head SHA）、`document`（版本是内容哈希）、`report`（文本） |
 | evidence | 绑定到 `(artifact_id, 版本)` | 一条检查或审查结果，标明来源：`environment` 或 `agent` |
@@ -60,7 +60,7 @@ turn 和 native session 留在 worker 内部。对外只以不透明 ID 出现�
 |---|---|---|
 | `hello` | 协商协议版本，交换能力声明（§8） | 能力清单 |
 | `create_task(task_id, spec)` | 新建 task，开始 attempt 1 | `attempt_id` |
-| `send_message(task_id, message_id, body, refs, question_id?)` | 给当前 attempt 发消息 | 只承诺"已持久保存并排队"。之后用事件报告绑定、投递或未投递 |
+| `send_message(task_id, message_id, body, refs, question_id?, stop_id?)` | 给当前 attempt 发消息 | 只承诺"已持久保存并排队"。之后用事件报告绑定、投递或未投递 |
 | `revise(task_id, spec_version, spec)` | 需求变化：在一步之内停止当前 attempt、开新 attempt，消除两步之间的竞态 | 新 `attempt_id`；退回还没投递的消息，标为"已被取代"。这些消息不转给新 attempt，由编排层决定哪些内容写进新的任务说明 |
 | `stop(task_id, level)` | `level=turn`：只中断当前 turn，attempt 停在 delivered/blocked 等可继续的状态。`level=attempt`：取消 attempt | 写明作用到哪个 attempt；以进程确认退出为准 |
 | `adopt(task_id, artifact_id, version)` | 编排层决定采用；由环境执行（代码就是合并） | `adopted`，或拒绝原因：版本已变、证据不足、冲突 |
@@ -68,8 +68,10 @@ turn 和 native session 留在 worker 内部。对外只以不透明 ID 出现�
 | `subscribe(after_seq)` | 首帧给全部 task 的权威快照，之后补发 seq 之后的事件 | 事件流 |
 
 - 任务说明无效，或要求了 worker 没有声明的能力时，`create_task` 当场返回错误，不创建 attempt。开始执行后，attempt 级的失败记为 `failed` 并写明原因，例如预算用完、环境准备不了。不设 `rejected` 状态。
-  - turn 异常结束不算 attempt 失败（用户定）。turn 被 `stop(turn)` 打断、CLI 失败或额度被拒时，attempt 停在 `blocked`，`need` 为 `resume`，写明原因，不带问题。编排层用 `send_message` 续接；worker 宿主沿用"继续"的语义起新 turn：同一会话、同一工作区，harness 没开始过的 turn 原样重发（data-model.md §3.4、§9.2）。运行时不自动续接，额度失败也一样。
-  - 续接是对一次停下的回复（用户定）。每次停下带一个 ID，像问题一样；`send_message` 写明它回复哪一次停下。第一条回复关掉这次停下，之后对同一 ID 的回复被拒绝，并说明谁在什么时候已经回复。不写回复对象的消息是普通消息，排到下一个 turn。依据：实际验收中，用户和 Angela 几乎同时续接，后到的一条被当成普通消息排进了下一个 turn。未实现，见 tech-plan.md §7"实际验收"。
+  - turn 异常结束不算 attempt 失败（用户定）。turn 被 `stop(turn)` 打断、CLI 失败或额度被拒时，attempt 停在 `blocked`，`need` 为 `resume`，写明原因，不带问题。编排层用写明这次停下的 `send_message` 续接；worker 宿主沿用"继续"的语义起新 turn：同一会话、同一工作区，harness 没开始过的 turn 原样重发（data-model.md §3.4、§9.2）。运行时不自动续接，额度失败也一样。
+  - 续接是对一次停下的回复（用户定）。每次停下带一个 ID，像问题一样；`send_message` 写明它回复哪一次停下。第一条回复关掉这次停下，之后对同一 ID 的回复被拒绝，并说明谁在什么时候已经回复。不写回复对象的消息是普通消息，排到下一个 turn。依据：实际验收中，用户和 Angela 几乎同时续接，后到的一条被当成普通消息排进了下一个 turn。
+    - 实现：停下的 ID（`blocked.stop_id`）取造成这次停下的那个 turn 的 ID（实现时的选择）。worker 宿主逐条接收消息；回复一次已经有人回复过的停下，拒绝原因是 `stop_answered`，写明那条消息和时间；回复一次 attempt 已不在的停下，拒绝原因是 `not_stopped`。
+    - 编排层在消息写进项目库时就判定：同一次停下已有回复时，后到的一条不写入，直接拒绝，写明谁在什么时候回复的。消息回答的问题和续接的停下也在这时定下，重发同一条消息时参数不变。
 - 过程记录由 worker 推给编排层保存，task 目录用完即删，不放持久内容（用户定）。agent 每完成一个条目，worker 带 seq 推送；`close` 带上编排层已存到的 seq，worker 确认没有更晚的条目后才删目录。这样 worker 搬到远端后，查看过程也不必经过网络去问 worker，因此不需要按需读完整日志的 `read_log`。推送和 `close` 时的 seq 确认未实现，随 tech-plan.md §7 第 3 步"查看过程"做。
 - worker → 编排层只有一种请求：`put_blob(hash, chunk)`，按内容哈希分块上传非代码交付物，内容存进 Lobotomy 的文件库（§6）。
 - 不设"暂停"原语。依据：实验和调研都显示，暂停在各家实现里都不可靠；需要时由编排层停止，之后再续接。
@@ -77,7 +79,7 @@ turn 和 native session 留在 worker 内部。对外只以不透明 ID 出现�
 ## 4. 状态（attempt 级）
 
 ```
-submitted → preparing → working ⇄ blocked{needs_input | needs_auth | resume, question_id?}
+submitted → preparing → working ⇄ blocked{needs_input | needs_auth | resume, question_id?, stop_id?}
                            ↓  ↑（审查意见：续接会话追加消息）
                         delivered（有交付物，证据满足 done_when，空闲等审查）
 终态：adopted / abandoned / failed / canceled
@@ -175,7 +177,7 @@ evidence = { required = ["ci-ok"] }
 **自带的 worker 宿主**（[worker](../backend/crates/worker)）。可执行文件是 `lobotomy-worker`，由编排层启动，用 stdio 通信，日志写 stderr。做法如下：
 - 每个 task 一个实例目录，里面是一个项目结构的数据库，agent 是其中唯一的 role。每个 attempt 是这个库里的一个任务。turn、消息、问题沿用 data-model.md §3、§4 的规则，由共用的 agent 驱动运行。宿主自己的 `worker.db` 记录 task、attempt、消息的对应关系和发出的事件。
 - attempt 的状态由实例中任务的阶段推出：执行中为 `working`；有开放问题为 `blocked`（`needs_input`）；上一个 turn 异常结束为 `blocked`（`resume`）；未结束的 turn 处于 unknown 为 `unknown`；等验收为 `delivered`。
-- `send_message` 按状态落到实例里：`delivered` 时是退回返工，`resume` 时是继续，其余是排队给下一个 turn。
+- `send_message` 按状态落到实例里：`delivered` 时是退回返工，`resume` 时写明这次停下的消息是继续，其余是排队给下一个 turn。
 - `stop` 和 `revise` 先打断进程；等 attempt 没有未结束的 turn，才把它记为 `canceled`。`close(abandoned)` 同理，记为 `abandoned`。
 - CLI 不响应打断时，宿主在宽限期后连同进程树结束它，这个 turn 记为被打断。宽限期由参数 `--stop-grace <秒>` 给出，默认 10 秒。这是实现时的选择，用户没有逐条确认。
 - 编排层关闭 stdin 时，宿主退出：不先打断，直接结束正在运行的 CLI 的进程树。这些 turn 在宿主下次启动时核对（harness-adapter.md §1.8，用户定）。
@@ -233,7 +235,7 @@ evidence = { required = ["ci-ok"] }
 - **非代码交付物**：用 `put_blob` 按内容哈希分块上传，小报告内联，不接受 worker 本地路径（§6）。
 - **能力扩展**：核心能力跟着协议版本走；扩展用 `x-<作者>.<名字>`，不认识的忽略（§8）。
 - **`mismatch_flagged` 是核心事件**，不放进扩展（§5）。
-- **turn 异常结束时 attempt 停在 `blocked`（`need` 为 `resume`），用 `send_message` 续接**；`failed` 只用于 attempt 级的失败（§3）。turn 正常结束却没有汇报、也没有排队的消息时同样处理（§10）。
+- **turn 异常结束时 attempt 停在 `blocked`（`need` 为 `resume`），用回复这次停下的 `send_message` 续接**；`failed` 只用于 attempt 级的失败（§3）。turn 正常结束却没有汇报、也没有排队的消息时同样处理（§10）。
 
 **待决**
 - **`progress` 的粒度和频率**：暂时没有想法，做到时再考察（用户定）。

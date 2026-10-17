@@ -19,6 +19,7 @@ fn message(db: &Db, manager: bool, request: &str, task: &str, body: &str) {
                 context: vec![],
                 ledger: vec![],
                 interpretation: body.into(),
+                stop_id: None,
             },
         )
         .unwrap();
@@ -163,6 +164,7 @@ fn manager_questions_match_individually_by_enqueue_order_and_recipient() {
             task_id: None,
             body: "answer".into(),
             reply_to: None,
+            stop_id: None,
         },
     )
     .unwrap();
@@ -254,7 +256,8 @@ fn upgrading_recovers_boundaries_from_events_and_keeps_unknown_history_open() {
         // Restore the prior schema, including the old task mirror, without losing its data.
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE worker_task; DROP TABLE worker_artifact; DROP TABLE worker_evidence;
+            "ALTER TABLE message DROP COLUMN question_id; ALTER TABLE message DROP COLUMN stop_id;
+            DROP TABLE worker_task; DROP TABLE worker_artifact; DROP TABLE worker_evidence;
             ALTER TABLE role DROP COLUMN remote;
             CREATE TABLE capture (id TEXT PRIMARY KEY); CREATE TABLE workspace (id TEXT PRIMARY KEY);
             CREATE TABLE project_config (version INTEGER PRIMARY KEY);

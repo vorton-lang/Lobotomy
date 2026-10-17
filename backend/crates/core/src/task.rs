@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 use crate::id::new_id;
 use crate::prompts;
 use crate::sql::sql_enum;
+use crate::worker::ReplyTarget;
 
 sql_enum! {
     pub enum Phase {
@@ -645,6 +646,10 @@ pub struct SendMessage {
     /// one of the manager's replies. Every role follows it (manager-actions.md §1.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
+    /// The stop of the task's worker it continues (worker-interface.md §3); without it, the
+    /// message waits for the worker's next turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_id: Option<String>,
 }
 
 impl Command for SendMessage {
@@ -666,8 +671,10 @@ impl Command for SendMessage {
         {
             return Err(Error::rejected("not_found", format!("nothing here is {target}")));
         }
+        let target = ReplyTarget::of(cx.tx, self.task_id.as_deref(), self.stop_id.as_deref())?;
         let id = queue_message(cx, &self.role, caller, self.task_id.as_deref(), &self.body)?;
         cx.tx.execute("UPDATE message SET reply_to = ?2 WHERE id = ?1", params![id, self.reply_to])?;
+        target.store(cx.tx, &id)?;
         Ok(Created { id })
     }
 }
@@ -783,6 +790,9 @@ pub struct SendToRole {
     #[serde(default)]
     pub ledger: Vec<crate::ledger::CitedEntry>,
     pub interpretation: String,
+    /// The stop of the task's worker it continues, as for [`SendMessage`].
+    #[serde(default)]
+    pub stop_id: Option<String>,
 }
 
 impl Command for SendToRole {
@@ -802,9 +812,11 @@ impl Command for SendToRole {
         if self.interpretation.trim().is_empty() {
             return Err(Error::rejected("missing_field", "a message needs the manager's own words"));
         }
+        let target = ReplyTarget::of(cx.tx, self.task_id.as_deref(), self.stop_id.as_deref())?;
         let quoted = with_extras(render_quotes(cx.tx, &self.quotes)?, &self.context, &self.ledger);
         let body = prompts::forwarded(&quoted, &self.interpretation);
         let id = queue_message(cx, &self.role, caller, self.task_id.as_deref(), &body)?;
+        target.store(cx.tx, &id)?;
         store_quotes(cx, &self.quotes, None, Some(&id))?;
         store_context(cx, &self.context, None, Some(&id))?;
         Ok(Created { id })

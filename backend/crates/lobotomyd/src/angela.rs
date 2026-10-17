@@ -371,6 +371,7 @@ mod tests {
                         task_id: None,
                         body: key.into(),
                         reply_to: None,
+                        stop_id: None,
                     },
                 )
                 .unwrap()
