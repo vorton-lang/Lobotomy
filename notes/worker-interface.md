@@ -163,6 +163,13 @@ evidence = { required = ["ci-ok"] }
 - 自带电池从一开始就跑在独立进程里，不走进程内的特权通道（用户确认，2026-10-16）。这样协议能不能撑起完整功能，第一天就会暴露出来；worker 崩溃也不会拖垮 Lobotomy。代价是多一层进程管理，这部分现在已经有了。
 - 消息类型用 Rust 定义，像现在的 GUI 类型一样生成 TypeScript 和 JSON Schema，给第三方用。
 
+**协议 0.1 的实现**（2026-10-17，[worker-protocol](../backend/crates/worker-protocol)，tech-plan.md §7 第 1 步第 3 组）。下面几项是实现时的选择，用户没有逐条确认：
+- 帧格式：stdio 上每行一条 JSON-RPC 2.0 消息，与 MCP 的 stdio 传输相同。一行解析不了，不影响后面的行。
+- `subscribe` 的参数是按 task 的"已收到的最后一个 seq"。worker 宿主先回快照，再补发这些 task 之后的、它还留着的事件，然后接着推送新事件。
+- 任务说明里的预算写成机器可读的字段：`turns`（attempt 的 turn 数，含 CI 返工）和 `ci_rounds`（CI 失败交回 agent 的次数）。`stop_when` 的文字仍然交给 agent。必需的检查单列为 `required_checks`，例如 `ci-ok`。
+- 协议自己的拒绝用错误码 -32000，原因写在 `data.reason`，例如 `unknown_task`、`invalid_spec`。
+- 未实现：生成 TypeScript 与 JSON Schema（第 1 步只有 Rust 两端用它）；`read_log`；`put_blob`。
+
 ## 11. 与现有实现的对应
 
 | 现有 | 去向 |

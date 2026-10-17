@@ -41,6 +41,7 @@ backend/                 Rust workspace
   crates/core            业务对象、SQLite schema 与迁移、命令层（事务、幂等、事件序号）、GUI 的读模型（view）、host.db
   crates/harness         Claude 与 Codex 的 adapter：参数、事件解析；平台层（Windows 的 Job、控制台、句柄，Linux 的进程组）
   crates/agent           agent 驱动：实例、turn runner、启动与能力裁剪、每个 turn 的 MCP 路由与执行者的工具
+  crates/worker-protocol worker 协议的类型与 JSON-RPC 帧格式（worker-interface.md）
   crates/lobotomyd       后端进程：host、项目实例与 Angela、调度器、GUI WebSocket、MCP HTTP
     examples/            export-gui-types.rs：从 Rust 类型导出 GUI 的 TypeScript 类型（需 ts-rs feature）
     tests/fixtures       假 Codex、假 Claude（fake-*.mjs）
