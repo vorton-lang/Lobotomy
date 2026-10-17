@@ -1,10 +1,9 @@
 // The cards of "等你决定" (frontend.md §2): each says what waits for the user and offers the
 // commands that resolve it. The backend decides what is listed (frontend.md §7).
 
-import { useState } from 'react';
 import type { Attention, Hold } from '../api/types';
 import { abnormalEnd, harnessName, PERMISSION_LABEL, quotaNote } from '../format';
-import { act, run, selectTask, setPermission, useCommand, useStore } from '../store';
+import { act, clearDraft, run, selectTask, setPermission, useCommand, useDraft, useStore } from '../store';
 
 export function AttentionCard({ attention: a }: { attention: Attention }) {
   switch (a.kind) {
@@ -168,7 +167,9 @@ function Reply({
   placeholder?: string;
   children?: React.ReactNode;
 }) {
-  const [reply, setReply] = useState('');
+  // A task's id names its reply; Angela's question has none.
+  const key = `reply:${taskId ?? role}`;
+  const [reply, setReply] = useDraft(key);
   const { submit, busy } = useCommand('send_message');
   return (
     <>
@@ -186,7 +187,7 @@ function Reply({
           disabled={!reply.trim() || busy}
           onClick={async () => {
             const sent = await submit({ role, task_id: taskId, body: reply.trim() });
-            if (sent !== undefined) setReply('');
+            if (sent !== undefined) clearDraft(key);
           }}
         >
           发送

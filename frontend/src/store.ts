@@ -104,6 +104,9 @@ interface State {
   ledger: Ledgers | null;
   /** What the next message to Angela replies to, chosen by the user (manager-actions.md §1.1). */
   replyTo: ReplyTarget | null;
+  /** Text being written, by where it is written (`useDraft`). Kept here, not in the components,
+   *  so it survives a switch to another project, 「全部」 or the settings, which unmounts them. */
+  drafts: Record<string, string>;
   /** Where Angela forwarded each of the user's messages on screen (`wantForwards`). */
   forwards: Record<string, Forward[]>;
 }
@@ -153,12 +156,35 @@ export const useStore = create<State>(() => ({
   refs: { quotes: {}, attachments: {} },
   ledger: null,
   replyTo: null,
+  drafts: {},
   forwards: {},
 }));
 
 /** The user chooses, or drops, what the next message to Angela replies to. */
 export function setReplyTo(target: ReplyTarget | null) {
   useStore.setState({ replyTo: target });
+}
+
+/**
+ * A text field's content, kept in the store under `key` so leaving the page does not lose it.
+ * Until something is typed it is `initial`. Closing a dialog keeps it; sending or cancelling
+ * clears it with `clearDraft`.
+ */
+export function useDraft(key: string, initial = ''): [string, (text: string) => void] {
+  const text = useStore((s) => s.drafts[key]) ?? initial;
+  const set = useCallback(
+    (value: string) => useStore.setState((s) => ({ drafts: { ...s.drafts, [key]: value } })),
+    [key],
+  );
+  return [text, set];
+}
+
+export function clearDraft(key: string) {
+  useStore.setState((s) => {
+    const drafts = { ...s.drafts };
+    delete drafts[key];
+    return { drafts };
+  });
 }
 
 /** What requests and pushes name instead of a project for Angela (data-model.md §10.6). */

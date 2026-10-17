@@ -1,14 +1,13 @@
 // Messages to Angela on 「全部」. A project's workers get messages through their tasks: the cards of
 // "等你决定" and the task panel.
 
-import { useState } from 'react';
 import { X } from 'lucide-react';
 import { harnessName } from '../format';
-import { act, setFollowing, setReplyTo, useCommand, useMainRole, useStore } from '../store';
+import { act, clearDraft, setFollowing, setReplyTo, useCommand, useDraft, useMainRole, useStore } from '../store';
 import { ICON } from './common';
 
 export function Composer() {
-  const [text, setText] = useState('');
+  const [text, setDraft] = useDraft('angela');
   const role = useMainRole();
   const running = role?.unfinished?.state === 'running' ? role.unfinished : null;
   // What the message replies to, chosen on one of Angela's replies (manager-actions.md §1.1).
@@ -21,7 +20,7 @@ export function Composer() {
     if (!body) return;
     const sent = await submit({ role: role.name, task_id: null, body, reply_to: replyTo?.id ?? null });
     if (sent === undefined) return;
-    setText('');
+    clearDraft('angela');
     setReplyTo(null);
     // What the user just sent, and what comes of it, is at the end of the thread.
     setFollowing(true);
@@ -41,7 +40,7 @@ export function Composer() {
       )}
       <textarea
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => setDraft(e.target.value)}
         placeholder={`发给 ${role.name}`}
         aria-label="消息"
         rows={3}

@@ -188,6 +188,18 @@ async function openHost(
   return { asked, push: (p: Push) => push(p) };
 }
 
+// A project's page has no composer, so going there unmounts it; the message being written to
+// Angela must still be there on return (found in use, 2026-10-17).
+test('a message being written to Angela survives a look at a project', async ({ page }) => {
+  await openHost(page, { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela });
+  await page.getByLabel('消息').fill('还没写完的话');
+  const projects = page.getByRole('navigation', { name: '项目' });
+  await projects.getByRole('button', { name: /alpha/ }).click();
+  await expect(page.locator('.topbar')).toContainText('alpha');
+  await projects.getByRole('button', { name: /^全部/ }).click();
+  await expect(page.getByLabel('消息')).toHaveValue('还没写完的话');
+});
+
 // The settings are a page of their own (frontend.md §7.8): they open on the page they showed last,
 // wherever the window is, read the project of their page themselves, and leave the window where
 // it was.

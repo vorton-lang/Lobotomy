@@ -1,18 +1,24 @@
 // A new task for a role.
 
-import { useState } from 'react';
-import { selectTask, toast, useCommand } from '../store';
+import { clearDraft, selectTask, toast, useCommand, useDraft, useStore } from '../store';
 import { Modal } from './common';
 
 export function NewTask({ executor, onClose }: { executor: string; onClose: () => void }) {
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [criteria, setCriteria] = useState('');
+  const project = useStore((s) => s.project);
+  const keys = ['title', 'body', 'criteria'].map((field) => `new-task:${project}:${field}`);
+  const [title, setTitle] = useDraft(keys[0]);
+  const [body, setBody] = useDraft(keys[1]);
+  const [criteria, setCriteria] = useDraft(keys[2]);
   const { submit, busy } = useCommand('create_task');
+  // Closing keeps the draft for the next time; cancelling or creating the task drops it.
+  const discard = () => {
+    keys.forEach(clearDraft);
+    onClose();
+  };
   const create = async () => {
     const created = await submit({ title, body, criteria, executor });
     if (!created) return;
-    onClose();
+    discard();
     // An open task panel would cover the thread where the new task's work shows (#13); the
     // earlier task stays a click away in the Workboard.
     selectTask(null);
@@ -43,7 +49,7 @@ export function NewTask({ executor, onClose }: { executor: string; onClose: () =
         />
       </label>
       <div className="actions">
-        <button onClick={onClose}>取消</button>
+        <button onClick={discard}>取消</button>
         <button className="primary" disabled={!title.trim() || busy} onClick={create}>
           交给 {executor}
         </button>

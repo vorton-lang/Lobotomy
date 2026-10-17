@@ -8,7 +8,7 @@ import { X } from 'lucide-react';
 import type { TaskDetail } from '../api/types';
 import type { AttemptState, WorkerTask } from '../api/generated';
 import { ACTION_LABEL, clock, PHASE_LABEL, PHASE_LOOK, taskNow, timeline } from '../format';
-import { run, selectTask, useStore } from '../store';
+import { clearDraft, run, selectTask, useDraft, useStore } from '../store';
 import { ICON, Markdown, Modal } from './common';
 import { Sash, useWidth } from './Sash';
 import { StatusPill } from './Status';
@@ -253,7 +253,13 @@ function History({ detail }: { detail: TaskDetail }) {
 }
 
 function SendBack({ taskId, initial, onClose }: { taskId: string; initial: string; onClose: () => void }) {
-  const [reason, setReason] = useState(initial);
+  // Closing keeps the reason for the next time; cancelling or sending back drops it.
+  const key = `send-back:${taskId}`;
+  const [reason, setReason] = useDraft(key, initial);
+  const discard = () => {
+    clearDraft(key);
+    onClose();
+  };
   return (
     <Modal title="退回候选成果" onClose={onClose}>
       <label>
@@ -261,12 +267,12 @@ function SendBack({ taskId, initial, onClose }: { taskId: string; initial: strin
         <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={5} autoFocus />
       </label>
       <div className="actions">
-        <button onClick={onClose}>取消</button>
+        <button onClick={discard}>取消</button>
         <button
           className="primary"
           disabled={!reason.trim()}
           onClick={async () =>
-            (await run('send_back', { task_id: taskId, reason: reason.trim() })) !== undefined && onClose()
+            (await run('send_back', { task_id: taskId, reason: reason.trim() })) !== undefined && discard()
           }
         >
           退回
@@ -281,19 +287,25 @@ function EditCriteria(props: { taskId: string; version: number; text: string; on
   // makes the backend refuse, instead of being written over (#16).
   const [{ version, text }] = useState(() => ({ version: props.version, text: props.text }));
   const { taskId, onClose } = props;
-  const [value, setValue] = useState(text);
+  // An edit of this version; closing keeps it, cancelling or saving drops it.
+  const key = `criteria:${taskId}:${version}`;
+  const [value, setValue] = useDraft(key, text);
+  const discard = () => {
+    clearDraft(key);
+    onClose();
+  };
   return (
     <Modal title="修改完成条件" onClose={onClose}>
       <p className="muted">修改会生成新版本。任务在执行时，新版本会发给执行者。</p>
       <textarea value={value} onChange={(e) => setValue(e.target.value)} rows={6} autoFocus aria-label="完成条件" />
       <div className="actions">
-        <button onClick={onClose}>取消</button>
+        <button onClick={discard}>取消</button>
         <button
           className="primary"
           disabled={value.trim() === text.trim()}
           onClick={async () =>
             (await run('edit_criteria', { task_id: taskId, expected_version: version, text: value })) !== undefined &&
-            onClose()
+            discard()
           }
         >
           保存为第 {version + 1} 版
