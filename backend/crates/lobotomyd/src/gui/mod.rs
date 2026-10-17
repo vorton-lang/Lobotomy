@@ -43,6 +43,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use futures::{SinkExt as _, StreamExt as _};
+use lobotomy_agent::runner::db;
 use lobotomy_core::Error;
 use lobotomy_core::view::{events_after, last_event, thread_heads};
 use serde::Deserialize;
@@ -56,7 +57,6 @@ use crate::host::Host;
 use crate::instance::Instance;
 use crate::project::Project;
 use crate::projects::Projects;
-use crate::runner::db;
 
 /// How often the event log and the live view are looked at for changes.
 const WATCH_INTERVAL: Duration = Duration::from_millis(100);
@@ -259,7 +259,7 @@ pub async fn watch(instance: Arc<Instance>, shutdown: CancellationToken) {
         match db(&instance, move |db| db.read(|c| events_after(c, after))).await {
             Ok(events) if !events.is_empty() => {
                 last_seq = events.last().map_or(last_seq, |e| e.seq);
-                instance.push(Push::Events { project: &instance.id, events: &events });
+                push(&instance, Push::Events { project: &instance.id, events: &events });
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(error = format!("{e:#}"), "could not read the event log"),
@@ -269,7 +269,7 @@ pub async fn watch(instance: Arc<Instance>, shutdown: CancellationToken) {
         if let Ok(heads) = db(&instance, |db| db.read(thread_heads)).await {
             for (role, seq) in &heads {
                 if last_items.get(role) != Some(seq) {
-                    instance.push(Push::Thread { project: &instance.id, role, seq: *seq });
+                    push(&instance, Push::Thread { project: &instance.id, role, seq: *seq });
                 }
             }
             last_items = heads;
@@ -278,9 +278,16 @@ pub async fn watch(instance: Arc<Instance>, shutdown: CancellationToken) {
         if version != last_live {
             last_live = version;
             let live = instance.live.lock().unwrap().clone();
-            instance.push(Push::Live { project: &instance.id, live: &live });
+            push(&instance, Push::Live { project: &instance.id, live: &live });
         }
     }
+}
+
+/// Tells the GUIs about a change of an instance. The push includes the instance's id as `project`
+/// (frontend.md §3 rule 8).
+fn push(instance: &Instance, push: impl serde::Serialize) {
+    let text = serde_json::to_string(&push).expect("GUI pushes are JSON serializable");
+    let _ = instance.host.gui_push.send(text.into());
 }
 
 #[derive(Deserialize)]

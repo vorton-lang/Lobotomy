@@ -6,6 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
+use lobotomy_agent::runner::db;
 use lobotomy_core::Error;
 use lobotomy_core::host::ProjectEntry;
 use lobotomy_core::quota::Domain;
@@ -19,7 +20,6 @@ use crate::host::Host;
 use crate::instance::{Instance, LiveTurn};
 use crate::project::Project;
 use crate::projects::Projects;
-use crate::runner::db;
 
 /// Answers a read method about a project.
 pub async fn answer(project: &Arc<Project>, method: &str, params: Value) -> anyhow::Result<Value> {

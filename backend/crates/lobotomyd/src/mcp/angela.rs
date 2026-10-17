@@ -14,6 +14,8 @@ use axum::{
     response::IntoResponse,
     routing::any,
 };
+use lobotomy_agent::mcp::{TurnToken, turn_token};
+use lobotomy_agent::runner::db;
 use lobotomy_core::Caller;
 use lobotomy_core::host::ProjectState;
 use lobotomy_core::id::new_id;
@@ -42,12 +44,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use super::{TurnToken, turn_token};
 use crate::gui::project_attention;
 use crate::instance::Instance;
 use crate::project::Project;
 use crate::projects::Projects;
-use crate::runner::db;
 
 /// What her tools read: her instance, for her turn, and the projects.
 #[derive(Clone)]
@@ -58,7 +58,7 @@ pub struct Reach {
 
 /// The route of her tools.
 pub fn router(reach: Reach, shutdown: CancellationToken) -> Router {
-    let service = super::service(AngelaTools::new, shutdown);
+    let service = lobotomy_agent::mcp::service(AngelaTools::new, shutdown);
     Router::new().route(
         "/mcp/angela/{token}",
         any(move |Path(token): Path<String>, mut request: Request| {

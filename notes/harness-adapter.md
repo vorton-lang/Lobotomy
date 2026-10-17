@@ -50,7 +50,7 @@ Codex（消息经 stdin，位置参数为 -）
   续用：codex exec resume <id> --json ...（其余参数相同）
 ```
 
-- 参数由 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs) 与 [codex.rs](../backend/crates/harness/src/codex.rs) 拼出。方括号中的参数可以省略：模型与推理强度来自用户为 role 在这个 harness 上的选择，没有选择时不传，用 CLI 的默认值。测试可以在后端的 CLI 配置（`host.rs` 的 `Cli`）上设一个推理强度，给没有选择的 role 用。
+- 参数由 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs) 与 [codex.rs](../backend/crates/harness/src/codex.rs) 拼出。方括号中的参数可以省略：模型与推理强度来自用户为 role 在这个 harness 上的选择，没有选择时不传，用 CLI 的默认值。测试可以在 CLI 配置（`agent/src/harness.rs` 的 `Cli`）上设一个推理强度，给没有选择的 role 用。
 - **模型与推理强度由用户按 role 选择**（用户确认，2026-10-13）。设置中每个 role 一行，harness 旁边是模型和推理强度（frontend.md §7.8）。
   - 每个 role 在每个 harness 上各存一份选择（data-model.md §9.1 的 `role_model`）。依据：模型名属于 harness，role 换到另一个 harness 再换回来时，原来的选择还在。
   - 每个 turn 启动时读取选择。改选择不换会话：正在运行的 turn 不受影响，下一个 turn 用新选择 resume 同一个会话。
@@ -238,7 +238,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 - 原生中断：每个 harness 进程以 `CREATE_NO_WINDOW` 启动，拥有自己的控制台。中断时，一个短命的辅助进程 attach 到目标控制台并发送 Ctrl+C。控制台是进程级状态，所以不在后端进程内 attach。辅助进程是后端程序自身：`lobotomyd ctrl-c <pid>`。
 - 已知缺口：后端如果恰好在创建进程与加入 Job 之间崩溃，会留下一个挂起、从未运行的进程。这个窗口极短，暂不处理。
 
-**统一的启动函数**（[lobotomyd/src/launch.rs](../backend/crates/lobotomyd/src/launch.rs)，[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）：后端启动的所有进程都经过它，包括 role 的 turn 和额度检查。
+**统一的启动函数**（[agent/src/launch.rs](../backend/crates/agent/src/launch.rs)，[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）：后端启动的所有进程都经过它，包括 role 的 turn 和额度检查。
 
 - 每个进程用裁剪过的环境（§1.6），有自己的 Job 或进程组。
 - 进程在开始运行时就读取 stderr，然后才写 stdin。这样进程在读输入之前往 stderr 写很多内容，也不会因管道写满而卡住（#10）。

@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use lobotomy_agent::ignore_rejection;
+use lobotomy_agent::runner::{self, db, launch, launch_registered, reconcile, runtime};
 use lobotomy_core::ledger::ledger_lines;
 use lobotomy_core::manager::{Cursor, ScheduleManagerTurn, cursors};
 use lobotomy_core::task::queued_messages;
@@ -25,8 +27,6 @@ use crate::gui::{self, project_attention};
 use crate::host::Host;
 use crate::instance::Instance;
 use crate::projects::Projects;
-use crate::runner::{self, db, launch, runtime};
-use crate::scheduler::{ignore_rejection, launch_registered, reconcile};
 
 /// Her instance's id: what the GUI's requests and pushes name instead of a project id, and her
 /// segment of the MCP path (frontend.md §3 rule 8; harness-adapter.md §2). Project ids are

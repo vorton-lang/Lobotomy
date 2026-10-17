@@ -18,14 +18,20 @@ Angela 的 CLI（每个 turn 一个进程）──MCP /mcp/angela/{token}──�
 **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：`store` crate（jj 私有存储）、采集、验证、预览、展示分支采用与试用终端随 worker 层的替换退出。新方向的分层见 [tech-plan.md](tech-plan.md) §1，worker 接口见 [worker-interface.md](worker-interface.md)。
 
 - 一个后端进程管理所有项目和 Angela（data-model.md §10，frontend.md §1）。Angela 打不开时，项目照常运行。
+- agent 驱动是单独的 crate `lobotomy-agent`（tech-plan.md §7 第 1 步）。后端用它运行项目中 role 与 Angela 的 turn；worker 宿主将来也用它运行执行者。它的模块：
+  - `instance.rs`：运行 turn、保存对话记录的实例：数据库、文件库、运行中的 turn 与它们的实时条目。runner、GUI 的推送和对话记录的读取对项目实例与 Angela 相同。
+  - `runner.rs`：运行一个 turn，以及恢复与对账未结束的 turn。
+  - `mcp.rs`：每个 turn 一个 URL 的 MCP 路由，以及执行者的工具。
+  - `launch.rs`、`capability.rs`：所有 CLI 进程都经过它们启动，带裁剪过的环境（harness-adapter.md §1.6、§1.8）。
+  - `harness.rs`：怎样启动各 harness 的 CLI，以及模型目录与额度检查。
+  - 实例的拥有者实现 `AgentHost`：CLI 在哪里运行、role 的指令、权限模式、额度被拒时封住什么。后端的实现是 `host.rs` 的 `Host`。
 - lobotomyd 的模块：
   - `host.rs`：跨项目的状态。
-  - `instance.rs`：运行 turn、保存对话记录的实例，是项目实例与 Angela 共有的部分：数据库、文件库、运行中的 turn 与它们的实时条目。runner、GUI 的推送和对话记录的读取对两者相同。
+  - `instance.rs`：后端的实例，即 `lobotomy-agent` 的实例配上后端的 `Host`。
   - `project.rs`：一个项目实例，现在只包着它的 `Instance`。
   - `projects.rs`：从登记中打开项目、新建并接入项目、记下打不开的项目，以及停止时逐个停下项目。
   - `angela.rs`：Angela 的实例与调度器。调度器观察各项目，按规则为她登记 turn，规则见 manager-actions.md §6"Manager 什么时候运行"；她的数据位置见 data-model.md §10.6。
-  - `mcp`：MCP 服务。`mod.rs` 是项目中 role 的工具，`angela.rs` 是 Angela 的工具。
-  - `launch.rs`：后端启动的所有进程都经过它（harness-adapter.md §1.8）。
+  - `mcp`：后端的 MCP 路由。`mod.rs` 把执行者的工具挂到各项目上，`angela.rs` 是 Angela 的工具。
 - role 与 Angela 的 CLI 每个 turn 启动一次，结束即退出（harness-adapter.md §1.1）。
 
 ## 2. 代码布局
@@ -34,7 +40,8 @@ Angela 的 CLI（每个 turn 一个进程）──MCP /mcp/angela/{token}──�
 backend/                 Rust workspace
   crates/core            业务对象、SQLite schema 与迁移、命令层（事务、幂等、事件序号）、GUI 的读模型（view）、host.db
   crates/harness         Claude 与 Codex 的 adapter：参数、事件解析；平台层（Windows 的 Job、控制台、句柄，Linux 的进程组）
-  crates/lobotomyd       后端进程：host、项目实例与 Angela、调度器、turn runner、GUI WebSocket、MCP HTTP
+  crates/agent           agent 驱动：实例、turn runner、启动与能力裁剪、每个 turn 的 MCP 路由与执行者的工具
+  crates/lobotomyd       后端进程：host、项目实例与 Angela、调度器、GUI WebSocket、MCP HTTP
     examples/            export-gui-types.rs：从 Rust 类型导出 GUI 的 TypeScript 类型（需 ts-rs feature）
     tests/fixtures       假 Codex、假 Claude（fake-*.mjs）
 frontend/                Electron + React + TypeScript

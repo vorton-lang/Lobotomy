@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use lobotomy_agent::runner::{self, db};
 use lobotomy_core::host::{ProjectEntry, ProjectState};
 use lobotomy_core::id::{new_id, now_ms};
 use lobotomy_core::project::{Onboard, load_project, peek_project};
@@ -17,8 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::host::Host;
 use crate::project::Project;
-use crate::runner::db;
-use crate::{gui, runner, scheduler};
+use crate::{gui, scheduler};
 
 /// One open project at work: its scheduler, and the watcher that tells GUIs what changed.
 pub struct Running {
@@ -32,7 +32,7 @@ pub struct Running {
 impl Running {
     /// Reconciles the turns the last run left (data-model.md §3.3) and starts scheduling.
     pub async fn start(project: Arc<Project>) -> anyhow::Result<Self> {
-        scheduler::recover(&project).await?;
+        runner::recover(&project).await?;
         let watching = CancellationToken::new();
         let watcher = tokio::spawn(gui::watch(project.instance.clone(), watching.clone()));
         let scheduling = CancellationToken::new();

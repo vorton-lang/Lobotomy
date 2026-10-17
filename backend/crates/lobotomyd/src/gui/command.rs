@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
+use lobotomy_agent::runner::db;
 use lobotomy_core::role::SetRoleModel;
 use lobotomy_core::task::{
     Abandon, Accept, CreateTask, EditCriteria, MoveInQueue, Reopen, SendBack, SendMessage, SetPaused,
@@ -19,7 +20,6 @@ use crate::host::Host;
 use crate::instance::Instance;
 use crate::project::Project;
 use crate::projects::Projects;
-use crate::runner::db;
 
 #[derive(Deserialize)]
 pub struct CommandParams {
@@ -169,7 +169,7 @@ async fn turn_actions(instance: &Instance, name: &str, args: Value) -> anyhow::R
     match name {
         name if name == INTERRUPT.name => {
             let TurnParams { turn_id } = INTERRUPT.decode(args)?;
-            crate::runner::interrupt(instance, &turn_id).await?;
+            lobotomy_agent::runner::interrupt(instance, &turn_id).await?;
             INTERRUPT.encode(())
         }
         // "终止残留进程" (data-model.md §3.3): only the CLI of an unknown turn that still runs.

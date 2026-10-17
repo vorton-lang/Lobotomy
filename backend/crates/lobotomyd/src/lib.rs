@@ -1,17 +1,15 @@
 //! The Lobotomy backend: one process for all projects of a host directory and for Angela
 //! (data-model.md §10), and the services roles and the GUI call: MCP at `/mcp/{project}/{token}`
-//! and `/mcp/angela/{token}`, the GUI at `/gui`.
+//! and `/mcp/angela/{token}`, the GUI at `/gui`. The agent driver that runs the roles' turns is
+//! the `lobotomy-agent` crate.
 
 pub mod angela;
-pub mod capability;
 pub mod gui;
 pub mod host;
 pub mod instance;
-pub mod launch;
 pub mod mcp;
 pub mod project;
 pub mod projects;
-pub mod runner;
 pub mod scheduler;
 
 use std::net::SocketAddr;

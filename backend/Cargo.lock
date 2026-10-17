@@ -642,6 +642,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "lobotomy-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures",
+ "http",
+ "lobotomy-core",
+ "lobotomy-harness",
+ "rmcp",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "ts-rs",
+]
+
+[[package]]
 name = "lobotomy-core"
 version = "0.1.0"
 dependencies = [
@@ -677,6 +698,7 @@ dependencies = [
  "axum",
  "futures",
  "http",
+ "lobotomy-agent",
  "lobotomy-core",
  "lobotomy-harness",
  "rmcp",

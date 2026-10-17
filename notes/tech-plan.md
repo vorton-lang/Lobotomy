@@ -55,7 +55,7 @@
 - **worker 和记忆（用户，2026-10-17，从 #22 吸收）**：
   - worker 不读图。必需的约束在创建任务时随任务输入带全；缺信息时，worker 报 blocked 提问，或由 Angela 补一条消息。理由：worker 是外部的、可替换的，开放查图会把图的 schema 变成对外接口；而且库是全局的，工作和生活都在里面，不应暴露给第三方 worker。
   - 代码库的知识（怎么跑、关键入口、踩过的坑）写在仓库自己的 AGENTS.md、notes 等文件里，和代码一样走 PR。图管事情和理解；需要时按「来源 + 路径 + 版本」引用仓库文档，不复制进图。
-  - CLI 自带的记忆保持关闭。现在 Lobotomy 已给所有角色设了 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`（`lobotomyd/src/capability.rs`）。Claude Code 的 auto memory 记的是用户偏好、纠正、代码推不出的项目决定和外部资料位置，正是图的内容；它按 git 仓库分目录，每个 clone 各一份，开着只会让各 worker 的记忆互相分叉。官方文档没有给开关它对效果影响的数据，本项目也没有实测。
+  - CLI 自带的记忆保持关闭。现在 Lobotomy 已给所有角色设了 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`（`agent/src/capability.rs`）。Claude Code 的 auto memory 记的是用户偏好、纠正、代码推不出的项目决定和外部资料位置，正是图的内容；它按 git 仓库分目录，每个 clone 各一份，开着只会让各 worker 的记忆互相分叉。官方文档没有给开关它对效果影响的数据，本项目也没有实测。
 
 ### 2.3 环境：默认 L0 + L1
 

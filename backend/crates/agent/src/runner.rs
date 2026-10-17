@@ -3,7 +3,7 @@
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,9 +11,10 @@ use anyhow::Context;
 use futures::FutureExt as _;
 use lobotomy_core::id::now_ms;
 use lobotomy_core::item::{NewItem, externalize, record_item};
-use lobotomy_core::role::{Role, load_role};
+use lobotomy_core::role::load_role;
 use lobotomy_core::turn::{
-    EndTurn, Failure, FailureKind, InputDelivered, Outcome, SessionIdentified, Turn, TurnLaunched, load_turn,
+    EndTurn, Failure, FailureKind, InputDelivered, MarkUnfinishedUnknown, Outcome, SessionIdentified, Turn,
+    TurnLaunched, TurnState, load_turn, turns_in_state,
 };
 use lobotomy_core::{Caller, Command, Db, Error};
 use lobotomy_harness::event::{Event, Item, ItemKind};
@@ -23,16 +24,14 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
 
+use crate::AgentHost;
 use crate::instance::{Instance, LiveItem, LiveTurn, RunningTurn};
 use crate::launch;
 use crate::mcp::command_id_in;
 
-const WORKER_INSTRUCTIONS: &str = include_str!("prompts/worker.md");
-const MANAGER_INSTRUCTIONS: &str = include_str!("prompts/manager.md");
-
 /// Runs a db call on the blocking pool.
-pub async fn db<T: Send + 'static>(
-    instance: &Instance,
+pub async fn db<H, T: Send + 'static>(
+    instance: &Instance<H>,
     f: impl FnOnce(&Db) -> lobotomy_core::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
     let db = instance.db.clone();
@@ -40,7 +39,7 @@ pub async fn db<T: Send + 'static>(
 }
 
 /// Runs a runtime command on the blocking pool.
-pub async fn runtime<C>(instance: &Instance, cmd: C) -> anyhow::Result<C::Output>
+pub async fn runtime<H, C>(instance: &Instance<H>, cmd: C) -> anyhow::Result<C::Output>
 where
     C: Command + Send + 'static,
     C::Output: Send + 'static,
@@ -51,7 +50,7 @@ where
 /// Turns a panic in `f` into an error, so the bookkeeping after a runner or a job still happens:
 /// otherwise a panicked turn stays in `running` for good, and shutdown waits its whole grace
 /// period for it (#16).
-pub(crate) async fn catch_panic<T>(f: impl Future<Output = anyhow::Result<T>>) -> anyhow::Result<T> {
+pub async fn catch_panic<T>(f: impl Future<Output = anyhow::Result<T>>) -> anyhow::Result<T> {
     match AssertUnwindSafe(f).catch_unwind().await {
         Ok(result) => result,
         Err(panic) => {
@@ -66,7 +65,7 @@ pub(crate) async fn catch_panic<T>(f: impl Future<Output = anyhow::Result<T>>) -
 }
 
 /// Starts a runner for a registered turn unless one is running already.
-pub fn launch(instance: &Arc<Instance>, turn_id: String) {
+pub fn launch<H: AgentHost>(instance: &Arc<Instance<H>>, turn_id: String) {
     let stop = CancellationToken::new();
     let mut running = instance.running.lock().unwrap();
     if running.contains_key(&turn_id) {
@@ -103,7 +102,7 @@ pub fn launch(instance: &Arc<Instance>, turn_id: String) {
 
 /// Asks the turn's CLI to stop (harness-adapter.md §1.3 rule 6). The turn ends as interrupted
 /// once the CLI exits.
-pub async fn interrupt(instance: &Instance, turn_id: &str) -> anyhow::Result<()> {
+pub async fn interrupt<H: AgentHost>(instance: &Instance<H>, turn_id: &str) -> anyhow::Result<()> {
     let pid = {
         let mut running = instance.running.lock().unwrap();
         let turn =
@@ -111,13 +110,13 @@ pub async fn interrupt(instance: &Instance, turn_id: &str) -> anyhow::Result<()>
         turn.interrupt_requested = true;
         turn.pid.ok_or_else(|| Error::rejected("not_started", "the CLI has not started yet"))?
     };
-    process::interrupt(pid, &instance.host.harness.interrupt_helper).await?;
+    process::interrupt(pid, &instance.host.harness().interrupt_helper).await?;
     Ok(())
 }
 
 /// Interrupts every turn the instance runs and waits for them until `deadline`, as quitting does
 /// (harness-adapter.md §1.8).
-pub async fn interrupt_all(instance: &Instance, deadline: Instant) {
+pub async fn interrupt_all<H: AgentHost>(instance: &Instance<H>, deadline: Instant) {
     let running: Vec<String> = instance.running.lock().unwrap().keys().cloned().collect();
     for turn_id in running {
         if let Err(e) = interrupt(instance, &turn_id).await {
@@ -129,20 +128,40 @@ pub async fn interrupt_all(instance: &Instance, deadline: Instant) {
     }
 }
 
-/// The role's instructions, by its kind (roles-and-tasks.md §1.1).
-fn instructions(role: &Role) -> String {
-    let text = if role.kind == "manager" { MANAGER_INSTRUCTIONS } else { WORKER_INSTRUCTIONS };
-    text.replace("{name}", &role.name)
+/// Turns that were registered or running when the instance closed become unknown
+/// (data-model.md §3.2). Call once before scheduling.
+pub async fn recover<H>(instance: &Instance<H>) -> anyhow::Result<()> {
+    let unknown = runtime(instance, MarkUnfinishedUnknown {}).await?;
+    if !unknown.is_empty() {
+        tracing::info!(turns = ?unknown, "turns left unfinished by the last run are unknown until reconciled");
+    }
+    Ok(())
 }
 
-/// Where the turn's CLI runs: an empty directory of the role's own. The manager's is her
-/// instance's `work` (data-model.md §10.6); a project's roles each have one under theirs. Roles
-/// get no copy of the repository until the worker layer is replaced (#86).
-fn working_dir(instance: &Instance, role: &Role) -> anyhow::Result<PathBuf> {
-    let work = instance.data_dir.join("work");
-    let dir = if role.kind == "manager" { work } else { work.join(&role.name) };
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    Ok(dir)
+/// Turns registered by a user command, such as continue, still need a runner.
+pub async fn launch_registered<H: AgentHost>(instance: &Arc<Instance<H>>) -> anyhow::Result<()> {
+    for turn in db(instance, |db| db.read(|c| turns_in_state(c, TurnState::Registered))).await? {
+        if !instance.host.is_blocked(&turn.harness)? {
+            launch(instance, turn.id);
+        }
+    }
+    Ok(())
+}
+
+/// Ends unknown turns whose CLI has exited (data-model.md §3.3). A CLI that still runs keeps its
+/// turn unknown; the runtime never kills it on its own.
+pub async fn reconcile<H>(instance: &Instance<H>) -> anyhow::Result<()> {
+    for turn in db(instance, |db| db.read(|c| turns_in_state(c, TurnState::Unknown))).await? {
+        let alive = match (turn.pid, turn.process_start) {
+            (Some(pid), Some(start)) => process::is_running(pid as u32, start),
+            // No pid: the CLI never ran. It is recorded before the process is resumed.
+            _ => false,
+        };
+        if !alive {
+            runtime(instance, EndTurn { turn_id: turn.id, outcome: Outcome::Interrupted, failure: None }).await?;
+        }
+    }
+    Ok(())
 }
 
 /// What the runner saw in the CLI's output.
@@ -178,21 +197,24 @@ fn unstarted(kind: FailureKind, message: String) -> Option<Failure> {
     Some(Failure { unstarted: true, ..Failure::new(kind, message) })
 }
 
-async fn end(instance: &Instance, turn_id: &str, outcome: Outcome, failure: Option<Failure>) -> anyhow::Result<()> {
+async fn end<H: AgentHost>(
+    instance: &Instance<H>,
+    turn_id: &str,
+    outcome: Outcome,
+    failure: Option<Failure>,
+) -> anyhow::Result<()> {
     // A quota rejection blocks the whole domain, not just this role (data-model.md §8.3). Block it
     // before the turn ends: whoever sees the ended turn, the scheduler included, sees the block.
     if let Some(failure) = failure.as_ref().filter(|f| f.kind == FailureKind::Quota) {
         let id = turn_id.to_owned();
         let harness = db(instance, move |db| db.read(|c| load_turn(c, &id))).await?.harness;
-        if instance.host.db.block(&harness, failure.resets_at, &failure.message, now_ms())? {
-            tracing::warn!(harness, message = failure.message, "quota domain blocked");
-        }
+        instance.host.quota_rejected(&harness, failure)?;
     }
     runtime(instance, EndTurn { turn_id: turn_id.to_owned(), outcome, failure }).await?;
     Ok(())
 }
 
-async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -> anyhow::Result<()> {
+async fn run<H: AgentHost>(instance: &Arc<Instance<H>>, turn_id: &str, stop: CancellationToken) -> anyhow::Result<()> {
     let id = turn_id.to_owned();
     let turn = db(instance, move |db| db.read(|c| load_turn(c, &id))).await?;
     let role_name = turn.role.clone();
@@ -203,11 +225,12 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
         return end(instance, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
     };
 
-    let cwd = working_dir(instance, &role)?;
+    let cwd = instance.host.working_dir(instance, &role)?;
     let turns_dir = instance.data_dir.join("turns");
     std::fs::create_dir_all(&turns_dir).with_context(|| format!("creating {}", turns_dir.display()))?;
-    let cli = instance.host.harness.cli(harness);
+    let cli = instance.host.harness().cli(harness);
     let permission = instance.host.permission(harness)?;
+    let instructions = instance.host.instructions(&role);
     let mcp_url = instance.mcp_url(&turn.token);
     // The user's choice for the role on this harness (harness-adapter.md §1.2); tests set an
     // effort on the CLI for roles that have none.
@@ -227,7 +250,7 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
                 model: role.model.clone(),
                 effort,
                 permission,
-                instructions: instructions(&role),
+                instructions,
                 mcp_config: path.clone(),
             };
             (args.to_args(), Some(TurnFile(path)))
@@ -238,7 +261,7 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
                 model: role.model.clone(),
                 reasoning_effort: effort,
                 permission,
-                developer_instructions: instructions(&role),
+                developer_instructions: instructions,
                 mcp_url,
                 disabled_skills: codex::user_skills(),
             };
@@ -294,8 +317,8 @@ async fn run(instance: &Arc<Instance>, turn_id: &str, stop: CancellationToken) -
 
 /// Lets the CLI run to its end. Returns the outcome, the failure, and whether the raw output can
 /// be deleted (data-model.md §7.4).
-async fn drive(
-    instance: &Arc<Instance>,
+async fn drive<H: AgentHost>(
+    instance: &Arc<Instance<H>>,
     harness: Harness,
     turn: &Turn,
     spawned: &mut Spawned,
@@ -401,7 +424,12 @@ async fn stderr_excerpt(path: &Path, token: &str) -> std::io::Result<String> {
     Ok(text.trim_end().lines().take(EXCERPT_LINES).collect::<Vec<_>>().join("\n"))
 }
 
-async fn observe(instance: &Arc<Instance>, turn: &Turn, event: Event, seen: &mut Observed) -> anyhow::Result<()> {
+async fn observe<H: AgentHost>(
+    instance: &Arc<Instance<H>>,
+    turn: &Turn,
+    event: Event,
+    seen: &mut Observed,
+) -> anyhow::Result<()> {
     match event {
         Event::SessionStarted { native_id } => {
             if turn.native_id.as_deref() != Some(native_id.as_str()) {
@@ -448,7 +476,7 @@ async fn observe(instance: &Arc<Instance>, turn: &Turn, event: Event, seen: &mut
 /// Stores a completed harness item. A call to a Lobotomy tool keeps only a reference to its
 /// command record, which already holds the arguments (data-model.md §7.2). A reply that names a
 /// command of another instance, as Angela's reads of a project's events do, is kept whole.
-async fn store_harness_item(instance: &Arc<Instance>, turn: &Turn, item: Item) -> anyhow::Result<()> {
+async fn store_harness_item<H: AgentHost>(instance: &Arc<Instance<H>>, turn: &Turn, item: Item) -> anyhow::Result<()> {
     let mut content = item.content;
     let mut command_id = None;
     if item.kind == ItemKind::McpCall && content["server"] == MCP_SERVER {
@@ -479,8 +507,8 @@ fn command_recorded(conn: &rusqlite::Connection, id: &str) -> lobotomy_core::Res
     }
 }
 
-async fn store(
-    instance: &Arc<Instance>,
+async fn store<H: AgentHost>(
+    instance: &Arc<Instance<H>>,
     turn: &Turn,
     native_id: Option<String>,
     kind: &str,
@@ -489,8 +517,8 @@ async fn store(
     store_with(instance, turn, native_id, kind, content, None).await
 }
 
-async fn store_with(
-    instance: &Arc<Instance>,
+async fn store_with<H: AgentHost>(
+    instance: &Arc<Instance<H>>,
     turn: &Turn,
     native_id: Option<String>,
     kind: &str,
