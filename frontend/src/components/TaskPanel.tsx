@@ -69,7 +69,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           </>
         )}
         {closed ? (
-          <button onClick={() => run('reopen', { task_id: task.id })}>重开</button>
+          // A worker's closed task does not reopen; a new task starts over.
+          !worker && <button onClick={() => run('reopen', { task_id: task.id })}>重开</button>
         ) : (
           <>
             {worker ? (

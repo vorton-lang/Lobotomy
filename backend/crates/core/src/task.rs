@@ -331,6 +331,32 @@ pub fn undelivered_user_messages(conn: &Connection, task_id: &str) -> Result<Vec
     messages(conn, "task_id = ?1 AND state = 'queued' AND source = 'user'", task_id)
 }
 
+/// The user's messages to the task that its executor never got, once accepting may let them go:
+/// a message the user sent must not slip away unseen, so the user lets go of exactly those there
+/// are, or sends the task back with them. Only the user lets the user's words go; the manager
+/// sends the task back with them, or asks (#14). A worker's task is checked the same way before
+/// its change is merged.
+pub fn letting_go(conn: &Connection, task_id: &str, caller: &Caller, dropping: &[String]) -> Result<Vec<Message>> {
+    let undelivered = undelivered_user_messages(conn, task_id)?;
+    if !undelivered.is_empty() && !matches!(caller, Caller::User) {
+        return Err(Error::rejected(
+            "undelivered_messages",
+            format!("the executor never got {} message(s) of the user; only the user lets them go", undelivered.len()),
+        ));
+    }
+    let mut pending: Vec<&str> = undelivered.iter().map(|m| m.id.as_str()).collect();
+    let mut letting_go: Vec<&str> = dropping.iter().map(String::as_str).collect();
+    pending.sort_unstable();
+    letting_go.sort_unstable();
+    if pending != letting_go {
+        return Err(Error::rejected(
+            "undelivered_messages",
+            format!("the executor never got {} message(s): {}", pending.len(), pending.join(", ")),
+        ));
+    }
+    Ok(undelivered)
+}
+
 /// A closed task's queued messages are not delivered: its executor no longer works on it
 /// (data-model.md §4.2, #14). The runtime's own, such as a criteria update, lose their point too.
 pub(crate) fn drop_queued(cx: &mut Cx<'_>, task_id: &str) -> Result<()> {
@@ -934,6 +960,11 @@ impl Command for Reopen {
         if !task.phase.is_closed() {
             return Err(Error::rejected("not_closed", format!("task {} is {}", task.id, task.phase.as_str())));
         }
+        // A worker's closed task stays closed in the worker too; a failed or stopped one is never
+        // closed and changes its criteria instead (tech-plan.md §7 step 1).
+        if crate::worker::worker_task(cx.tx, &task.id)?.is_some() {
+            return Err(Error::rejected("worker_task_closed", "worker 的任务关闭后不能重开，请新建一个任务"));
+        }
         record_decision(cx, "reopen", Some(&task.id), caller, json!({}))?;
         let pos = next_queue_pos(cx, &task.executor)?;
         cx.tx.execute(
@@ -980,30 +1011,7 @@ impl Command for Accept {
                 format!("criteria are at version {}, not {}", task.criteria_version, self.criteria_version),
             ));
         }
-        // A message the user sent that the executor never got must not slip away unseen: the
-        // user lets go of exactly those there are, or sends the task back with them.
-        let undelivered = undelivered_user_messages(cx.tx, &task.id)?;
-        // Only the user lets the user's words go; the manager sends the task back with them, or
-        // asks.
-        if !undelivered.is_empty() && !matches!(caller, Caller::User) {
-            return Err(Error::rejected(
-                "undelivered_messages",
-                format!(
-                    "the executor never got {} message(s) of the user; only the user lets them go",
-                    undelivered.len()
-                ),
-            ));
-        }
-        let mut pending: Vec<&str> = undelivered.iter().map(|m| m.id.as_str()).collect();
-        let mut letting_go: Vec<&str> = self.dropping.iter().map(String::as_str).collect();
-        pending.sort_unstable();
-        letting_go.sort_unstable();
-        if pending != letting_go {
-            return Err(Error::rejected(
-                "undelivered_messages",
-                format!("the executor never got {} message(s): {}", pending.len(), pending.join(", ")),
-            ));
-        }
+        let undelivered = letting_go(cx.tx, &task.id, caller, &self.dropping)?;
         let detail = json!({
             "criteria_version": self.criteria_version,
             "dropped_messages": dropped_detail(&undelivered),

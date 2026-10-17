@@ -6,7 +6,7 @@ mod common;
 use common::*;
 use lobotomy_core::Caller;
 use lobotomy_core::role::SyncWorkerRoles;
-use lobotomy_core::task::{CreateTask, Phase, load_task};
+use lobotomy_core::task::{CreateTask, Phase, Reopen, load_task};
 use lobotomy_core::view::manager::settled;
 use lobotomy_core::worker::{ApplyWorkerEvent, ApplyWorkerSnapshot, CloseWorkerTask, WorkerTaskCreated, worker_task};
 use lobotomy_worker_protocol::event::{Artifact, ArtifactKind, AttemptState, Event, EventBody, TaskSnapshot};
@@ -111,4 +111,7 @@ fn the_worker_events_move_the_task_once_each_and_the_snapshot_wins() {
     };
     db.execute(&Caller::User, &close).unwrap();
     assert_eq!(db.read(|c| load_task(c, &task)).unwrap().phase, Phase::Done);
+    // The worker's attempt stays closed, so the task does not reopen.
+    let reopen = Reopen { request_id: "reopen".into(), task_id: task.clone() };
+    assert_eq!(rejection(db.execute(&Caller::User, &reopen)), "worker_task_closed");
 }

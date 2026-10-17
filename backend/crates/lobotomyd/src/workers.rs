@@ -597,7 +597,10 @@ impl Workers {
     }
 
     /// Accepts a worker's delivery: its change is merged at the version read, where it touches
-    /// protected paths only with the user's authority, and the task closes.
+    /// protected paths only with the user's authority, and the task closes. The user's messages
+    /// the worker never got hold it as they hold an acceptance: `dropping` must name exactly
+    /// those, and only the user may let them go (#14).
+    #[allow(clippy::too_many_arguments)]
     pub async fn adopt(
         &self,
         project: &Project,
@@ -605,6 +608,7 @@ impl Workers {
         worker: &WorkerTask,
         task_id: &str,
         criteria_version: i64,
+        dropping: Vec<String>,
         authority: Authority,
     ) -> anyhow::Result<String> {
         let task = task(project, task_id).await?;
@@ -615,6 +619,8 @@ impl Workers {
             )
             .into());
         }
+        let (id, by) = (task_id.to_owned(), caller.clone());
+        db(project, move |db| db.read(|c| lobotomy_core::task::letting_go(c, &id, &by, &dropping))).await?;
         if !matches!(worker.status.state, AttemptState::Delivered | AttemptState::Adopted) {
             bail!("worker 还没有交付（{:?}）", worker.status.state);
         }

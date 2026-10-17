@@ -437,7 +437,8 @@ impl AngelaTools {
             if let Some(worker) = worker_of(&project, &args.task_id).await? {
                 let authority = authority(&reach, args.authorization).await?;
                 let workers = workers(&reach)?;
-                return workers.adopt(&project, caller, &worker, &args.task_id, args.criteria_version, authority).await;
+                let (task_id, version) = (&args.task_id, args.criteria_version);
+                return workers.adopt(&project, caller, &worker, task_id, version, Vec::new(), authority).await;
             }
             let cmd = Accept {
                 request_id: new_id("req"),

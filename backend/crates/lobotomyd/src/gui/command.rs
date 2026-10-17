@@ -178,7 +178,8 @@ async fn worker_command(project: &Arc<Project>, name: &str, args: &Value) -> any
         n if n == Accept::NAME => {
             let accept: Accept = serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
             let caller = Caller::User;
-            workers.adopt(project, caller, worker, task_id, accept.criteria_version, Authority::User).await?;
+            let (version, dropping) = (accept.criteria_version, accept.dropping);
+            workers.adopt(project, caller, worker, task_id, version, dropping, Authority::User).await?;
             Value::Null
         }
         n if n == SendBack::NAME => {
