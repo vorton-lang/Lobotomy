@@ -116,7 +116,9 @@ impl Tasks {
         let tasks = tokio::task::spawn_blocking(move || host.store.read(store::tasks)).await??;
         for task in tasks {
             let finished = task.closed.is_some() && task.status.state.is_final();
-            if !finished && let Err(e) = self.ensure_open(&task.id).await {
+            if finished {
+                cleanup_workspace(self.host.task_dir(&task.id)).await;
+            } else if let Err(e) = self.ensure_open(&task.id).await {
                 tracing::error!(task = task.id, error = format!("{e:#}"), "could not open the task");
             }
         }
@@ -694,6 +696,26 @@ async fn run(tasks: Arc<Tasks>, task_id: String, instance: Arc<TaskInstance>, st
             Ok(true) => {
                 tracing::info!(task = task_id, "task finished");
                 tasks.open.lock().unwrap().remove(&task_id);
+                instance.tasks.close();
+                instance.tasks.wait().await;
+                let mut instance = instance;
+                loop {
+                    match Arc::try_unwrap(instance) {
+                        Ok(instance) => {
+                            // MCP requests can hold the database independently of the instance.
+                            while Arc::strong_count(&instance.db) > 1 {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
+                            drop(instance);
+                            break;
+                        }
+                        Err(shared) => {
+                            instance = shared;
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    }
+                }
+                cleanup_workspace(tasks.host.task_dir(&task_id)).await;
                 return;
             }
             Ok(false) => {}
@@ -703,6 +725,22 @@ async fn run(tasks: Arc<Tasks>, task_id: String, instance: Arc<TaskInstance>, st
             _ = instance.wake.notified() => {}
             _ = tokio::time::sleep(POLL) => {}
             _ = stop.cancelled() => return,
+        }
+    }
+}
+
+/// Best effort: a lingering Windows file handle must not take down the host.
+async fn cleanup_workspace(path: std::path::PathBuf) {
+    for retry in 0..5 {
+        let target = path.clone();
+        let result = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(target)).await;
+        match result {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => return,
+            result if retry == 4 => {
+                tracing::warn!(path = %path.display(), error = ?result, "could not clean up the task workspace");
+            }
+            _ => tokio::time::sleep(Duration::from_millis(100 * (retry + 1))).await,
         }
     }
 }

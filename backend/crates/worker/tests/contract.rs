@@ -197,3 +197,63 @@ async fn a_delivery_is_taken_back_into_the_mirror() {
     assert!(versions.contains(&next.version.as_str()), "{versions:?}");
     worker.quit().await;
 }
+
+/// Closing removes the whole workspace only after the attempt has finished.
+#[tokio::test]
+async fn closed_task_workspaces_are_removed_after_settling() {
+    let dir = tempfile::tempdir().unwrap();
+    let upstream = upstream(dir.path());
+    let root = root(&dir);
+    let mut worker = Worker::start(&root).await;
+    worker.subscribe(BTreeMap::new()).await;
+    for (task, outcome) in [("accepted", CloseOutcome::Adopted), ("abandoned", CloseOutcome::Abandoned)] {
+        let (words, state) = match outcome {
+            CloseOutcome::Adopted => ("FAKE:done", AttemptState::Delivered),
+            CloseOutcome::Abandoned => ("FAKE:sleep", AttemptState::Working),
+        };
+        worker.call::<CreateTask>(&create(task, words)).await.unwrap();
+        worker.state(task, state).await;
+        let workspace = root.join("tasks").join(task);
+        git(&workspace, &["clone", "--quiet", upstream.to_str().unwrap(), "a1"]);
+        std::fs::create_dir_all(workspace.join("a1.tmp")).unwrap();
+        std::fs::write(workspace.join("gitconfig"), "temporary").unwrap();
+        assert!(workspace.join("lobotomy.db").exists());
+        worker.call::<Close>(&CloseParams { task_id: task.into(), outcome }).await.unwrap();
+        tokio::time::timeout(WAIT, async {
+            while workspace.exists() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("closed workspace was not removed");
+    }
+    worker.quit().await;
+}
+
+/// Recovery cleans finished leftovers while preserving tasks that can still continue.
+#[tokio::test]
+async fn recovery_cleans_finished_workspaces_and_keeps_open_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = root(&dir);
+    let mut worker = Worker::start(&root).await;
+    worker.subscribe(BTreeMap::new()).await;
+    worker.call::<CreateTask>(&create("closed", "FAKE:done")).await.unwrap();
+    worker.state("closed", AttemptState::Delivered).await;
+    worker.call::<Close>(&CloseParams { task_id: "closed".into(), outcome: CloseOutcome::Adopted }).await.unwrap();
+    worker.call::<CreateTask>(&create("open", "FAKE:done")).await.unwrap();
+    worker.state("open", AttemptState::Delivered).await;
+    worker.quit().await;
+    // Reproduce a finished workspace left behind by an earlier host.
+    let leftover = root.join("tasks").join("closed");
+    std::fs::create_dir_all(leftover.join("a1")).unwrap();
+    std::fs::write(leftover.join("lobotomy.db"), "leftover").unwrap();
+    let open = root.join("tasks").join("open");
+    std::fs::write(open.join("keep"), "still needed").unwrap();
+    let mut worker = Worker::start(&root).await;
+    let snapshot = worker.subscribe(BTreeMap::new()).await;
+    assert_eq!(snapshot.tasks.len(), 2);
+    assert!(!leftover.exists());
+    assert!(open.join("lobotomy.db").exists());
+    assert_eq!(std::fs::read_to_string(open.join("keep")).unwrap(), "still needed");
+    worker.quit().await;
+}
