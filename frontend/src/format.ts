@@ -24,6 +24,7 @@ import type {
   TaskView,
   Turn,
 } from './api/types';
+import type { AttemptState } from './api/generated';
 import type { ThreadState } from './store';
 
 export const PHASE_LABEL: Record<Phase, string> = {
@@ -330,6 +331,28 @@ export function roleActivity(role: RoleView, task: TaskView | undefined, now: nu
   if (task) return PHASE_LABEL[task.phase];
   return '空闲';
 }
+
+/**
+ * What a worker does now, for its line in the Workboard. A worker runs no turns in the project
+ * and may work on several tasks at once, so this reads its tasks' attempts (tech-plan.md §7
+ * step 1), not the role's turns.
+ */
+export function workerActivity(tasks: TaskView[]): { look: Look; text: string } {
+  const count = (states: AttemptState[]) =>
+    tasks.filter((t) => !isClosed(t.phase) && t.worker && states.includes(t.worker.status.state)).length;
+  const moving = count(['submitted', 'preparing', 'working']);
+  const waiting = count(['blocked', 'failed', 'unknown']);
+  const delivered = count(['delivered']);
+  const parts = [
+    moving && `在做 ${moving} 件`,
+    waiting && `${waiting} 件停下等你`,
+    delivered && `${delivered} 件等你验收`,
+  ].filter(Boolean);
+  const look: Look = waiting || delivered ? 'wait' : moving ? 'run' : 'idle';
+  return { look, text: parts.length > 0 ? parts.join(' · ') : '空闲' };
+}
+
+const isClosed = (phase: Phase) => phase === 'done' || phase === 'abandoned';
 
 /** Where the task stands, in one line: which round, and what it waits for. */
 export function taskNow(phase: Phase, round: number | undefined): string {

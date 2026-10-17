@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import type { RoleView, TaskView } from '../api/types';
-import { harnessName, PHASE_LABEL, PHASE_LOOK, roleActivity, roleLook } from '../format';
+import { harnessName, PHASE_LABEL, PHASE_LOOK, roleActivity, roleLook, workerActivity } from '../format';
 import { run, selectTask, useMainRole, useStore } from '../store';
 import { ICON, useNow } from './common';
 import { NewTask } from './NewTask';
@@ -29,7 +29,7 @@ export function Workboard() {
       </h3>
       {roles.map((role) => (
         <div key={role.name} className="role-group">
-          <RoleLine role={role} task={tasks.find((t) => t.id === role.task_id)} />
+          <RoleLine role={role} tasks={tasks} />
           {active
             .filter((t) => t.executor === role.name)
             .map((t) => (
@@ -57,10 +57,12 @@ export function Workboard() {
   );
 }
 
-function RoleLine({ role, task }: { role: RoleView; task: TaskView | undefined }) {
+function RoleLine({ role, tasks }: { role: RoleView; tasks: TaskView[] }) {
+  const task = tasks.find((t) => t.id === role.task_id);
   const running = role.unfinished?.state === 'running';
   const now = useNow(running);
   const quiet = useQuiet(running ? role.unfinished!.id : undefined);
+  const worker = role.remote ? workerActivity(tasks.filter((t) => t.executor === role.name)) : null;
   return (
     <div className="role-line">
       <RoleAvatar name={role.name} />
@@ -68,10 +70,14 @@ function RoleLine({ role, task }: { role: RoleView; task: TaskView | undefined }
       <span className="badge" title="这个角色使用的 harness，写在 workers.toml 中">
         {harnessName(role.harness)}
       </span>
-      <StatusText look={roleLook(role, task)}>
-        {roleActivity(role, task, now)}
-        {quiet && ` · ${quiet}`}
-      </StatusText>
+      {worker ? (
+        <StatusText look={worker.look}>{worker.text}</StatusText>
+      ) : (
+        <StatusText look={roleLook(role, task)}>
+          {roleActivity(role, task, now)}
+          {quiet && ` · ${quiet}`}
+        </StatusText>
+      )}
     </div>
   );
 }

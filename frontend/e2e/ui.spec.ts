@@ -326,6 +326,28 @@ test('a message the executor never got waits for the user at acceptance', async 
   await expect(panel.locator('.phase')).toHaveText('已完成');
 });
 
+// A worker runs no turns in the project, so its line reads its tasks' attempts; it showed 空闲
+// while its task was in CI (found in use, 2026-10-17).
+test('a worker on a task is not shown idle', async ({ page }) => {
+  const worker: WorkerTask = {
+    worker: 'Malkuth',
+    spec_version: 1,
+    attempt_id: 'a1',
+    seq: 1,
+    status: { state: 'working', blocked: null, reason: null, question: null },
+    artifacts: [],
+    evidence: [],
+  };
+  await openMocked(page, {
+    snapshot: {
+      roles: [{ ...role(null), remote: true }],
+      tasks: [{ ...task('w1', '改一处', 'executing'), worker }],
+      attention: [],
+    },
+  });
+  await expect(page.locator('.role-line')).toContainText('在做 1 件');
+});
+
 // A worker's task (tech-plan.md §7 step 1): the panel shows the worker's pull request, its checks
 // and its account; accepting it merges.
 test('a worker task shows its pull request and checks, and accepting merges it', async ({ page }) => {
