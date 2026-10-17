@@ -13,7 +13,7 @@ fn an_event_is_flat_with_its_kind() {
         seq: 3,
         body: EventBody::StateChanged {
             state: AttemptState::Blocked,
-            blocked: Some(Blocked { need: Need::Input, question_id: "q".into() }),
+            blocked: Some(Blocked { need: Need::Input, question_id: Some("q".into()) }),
             reason: None,
         },
     };

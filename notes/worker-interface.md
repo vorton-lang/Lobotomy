@@ -68,6 +68,7 @@ turn 和 native session 留在 worker 内部。对外只以不透明 ID 出现�
 | `subscribe(after_seq)` | 首帧给全部 task 的权威快照，之后补发 seq 之后的事件 | 事件流 |
 
 - 任务说明无效，或要求了 worker 没有声明的能力时，`create_task` 当场返回错误，不创建 attempt。开始执行后的失败一律记为 `failed` 并写明原因。不设 `rejected` 状态。
+  - **语义更新**（用户确认，2026-10-17，第 1 步第 4 组开工前）：turn 异常结束不算 attempt 失败。turn 被 `stop(turn)` 打断、CLI 失败或额度被拒时，attempt 停在 `blocked`，`need` 为 `resume`，写明原因，不带问题。编排层用 `send_message` 续接；worker 宿主沿用现有的"继续"语义起新 turn：同一会话、同一工作区，harness 没开始过的 turn 原样重发（data-model.md §3.4、§9.2）。运行时不自动续接，额度失败也一样。`failed` 只用于 attempt 级的失败，例如预算用完、环境准备不了。
 - 可选能力：`read_log(task_id, attempt_id, cursor)` 按需读完整日志，供排查用。
 - worker → 编排层只有一种请求：`put_blob(hash, chunk)`，按内容哈希分块上传非代码交付物，内容存进 Lobotomy 的文件库（§6）。
 - 不设"暂停"原语。依据：实验和调研都显示，暂停在各家实现里都不可靠；需要时由编排层停止，之后再续接。
@@ -75,7 +76,7 @@ turn 和 native session 留在 worker 内部。对外只以不透明 ID 出现�
 ## 4. 状态（attempt 级）
 
 ```
-submitted → preparing → working ⇄ blocked{needs_input | needs_auth, question_id}
+submitted → preparing → working ⇄ blocked{needs_input | needs_auth | resume, question_id?}
                            ↓  ↑（审查意见：续接会话追加消息）
                         delivered（有交付物，证据满足 done_when，空闲等审查）
 终态：adopted / abandoned / failed / canceled
@@ -192,6 +193,7 @@ evidence = { required = ["ci-ok"] }
 - **非代码交付物**：用 `put_blob` 按内容哈希分块上传，小报告内联，不接受 worker 本地路径（§6）。
 - **能力扩展**：核心能力跟着协议版本走；扩展用 `x-<作者>.<名字>`，不认识的忽略（§8）。
 - **`mismatch_flagged` 是核心事件**，不放进扩展（§5；用户，2026-10-17）。
+- **turn 异常结束时 attempt 停在 `blocked`（`need` 为 `resume`），用 `send_message` 续接**；`failed` 只用于 attempt 级的失败（§3；用户，2026-10-17）。
 
 **待决**
 - **`progress` 的粒度和频率**：暂时没有想法，做到时再考察（用户，2026-10-16）。

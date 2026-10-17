@@ -90,7 +90,8 @@ impl AttemptState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Blocked {
     pub need: Need,
-    pub question_id: String,
+    /// The question to answer, for `needs_input`.
+    pub question_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +100,11 @@ pub enum Need {
     Input,
     #[serde(rename = "needs_auth")]
     Auth,
+    /// The last turn was interrupted or failed, its quota refused included; the state's `reason`
+    /// says why. A message goes on in the same session and workspace. Nothing goes on by itself
+    /// (§3).
+    #[serde(rename = "resume")]
+    Resume,
 }
 
 /// What became of a message (§5).
