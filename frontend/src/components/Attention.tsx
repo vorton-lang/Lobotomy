@@ -77,12 +77,13 @@ function HoldCard({ role, hold }: { role: string; hold: Hold }) {
         <p>
           {role} 的上一个 turn {abnormalEnd(hold.turn)}，它停下等你决定。
         </p>
+        {/* Only the current setting is known: it may have changed since the turn failed, and
+            continuing starts the CLI with it. */}
         {failure?.kind === 'permission' && harness && (
           <p>
-            这个环境的管理设置不允许 {name} 以「{PERMISSION_LABEL[harness.permission]}」运行。
             {switchable
-              ? '可以改用自动审批：在沙箱里工作，超出沙箱的操作由自动审核决定。'
-              : '可以在 ⚙ 设置里换一种权限模式，或请管理员调整。'}
+              ? `这个环境的管理设置不允许 ${name} 以「完全放开」运行。可以改用自动审批：在沙箱里工作，超出沙箱的操作由自动审核决定。`
+              : `这个环境的管理设置不允许 ${name} 以当时的权限模式运行。现在的设置是「${PERMISSION_LABEL[harness.permission]}」，继续时按它重新启动；仍被拒绝时，请管理员调整。`}
           </p>
         )}
         {failure?.unstarted && <p className="muted">{name} 没有收到那次的内容；继续时会原样重新发送。</p>}

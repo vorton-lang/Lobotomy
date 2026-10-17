@@ -258,7 +258,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 ### 1.9 权限模式
 
-每个 harness 有一项权限设置（#13，用户定）。设置属于本机（data-model.md §10），所有项目共用。Codex 与 Claude 分开设置：同一个环境可能允许一个完全放开，而不允许另一个。依据：#13 的测试环境中，管理员通过 Codex 的 requirements 不允许完全放开，Codex 一启动就退出。
+每个 harness 有一项权限设置（#13，用户定）。设置属于本机（data-model.md §10），用于后端运行的 role，也就是 Angela。worker 不读这项设置：它的权限模式写在 `workers.toml` 条目的 `agent.permission` 中，不写时是完全放开（实现时的选择）。Codex 与 Claude 分开设置：同一个环境可能允许一个完全放开，而不允许另一个。依据：#13 的测试环境中，管理员通过 Codex 的 requirements 不允许完全放开，Codex 一启动就退出。
 
 | 模式 | 什么时候用 | Codex | Claude（自动审批未在受管环境中实测） |
 |---|---|---|---|

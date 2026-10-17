@@ -9,7 +9,7 @@ import { ArrowDown } from 'lucide-react';
 import type { CommandRecord, Message } from '../api/types';
 import { buildRows, clock, sourceLabel, turnOutcome, type Row } from '../format';
 import { clearHighlight, highlight } from '../highlight';
-import { loadOlder, matchRowKey, setFollowing, useStore } from '../store';
+import { loadOlder, mainRole, matchRowKey, setFollowing, useStore } from '../store';
 import { ICON, Markdown } from './common';
 import { ItemView, LiveItemView, RunningView } from './ItemView';
 import { ForwardTags, ReplyLine } from './Reply';
@@ -21,6 +21,10 @@ export function Thread() {
   const thread = useStore((s) => s.thread);
   const live = useStore((s) => s.live);
   const tasks = useStore((s) => s.snapshot?.tasks);
+  // A project's executors are the workers of `workers.toml`; without one there is no thread to read.
+  const noWorker = useStore((s) => s.snapshot !== null && !mainRole(s.snapshot));
+  const project = useStore((s) => s.project);
+  const projectName = useStore((s) => s.host?.projects.find((p) => p.id === s.project)?.name);
   const rows = useMemo(() => buildRows(thread, live), [thread, live]);
   const list = useRef<VListHandle>(null);
   const wheel = useRef<{ offset: number; direction: number } | null>(null);
@@ -106,11 +110,25 @@ export function Thread() {
     }
   };
 
+  if (noWorker) {
+    return (
+      <div className="thread empty">
+        <p>这个项目还没有 worker，任务没有人执行。</p>
+        <p className="muted">
+          在 host 目录的 workers.toml 中加一个 project = "{projectName}" 的 worker 条目，重启 Lobotomy 后生效。
+        </p>
+      </div>
+    );
+  }
   if (!thread.loaded) return <div className="thread empty">正在加载对话…</div>;
   if (rows.length === 0) {
     return (
       <div className="thread empty">
-        <p>还没有对话。在右侧建一个任务，或者直接给 {thread.role} 发消息。</p>
+        <p>
+          {project === null
+            ? `还没有对话。给 ${thread.role} 发一条消息。`
+            : `还没有对话。在右侧建一个任务交给 ${thread.role}。`}
+        </p>
       </div>
     );
   }

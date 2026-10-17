@@ -181,6 +181,13 @@ test('double-clicking a new task submits the draft once while its reply waits', 
   expect(backend.sent).toHaveLength(1);
 });
 
+// A project without a worker has no thread to read; it said "正在加载对话…" for good (#94).
+test('a project without a worker says how to add one', async ({ page }) => {
+  await openMocked(page, { snapshot: { roles: [], tasks: [], attention: [] } });
+  await expect(page.locator('.thread.empty')).toContainText('这个项目还没有 worker');
+  await expect(page.locator('.thread.empty')).toContainText('project = "project"');
+});
+
 // A scroll before the viewport is measured must not look like the user reading back. Later
 // pages must keep their last message visible, without even a temporary loss of following.
 test('incoming pages keep following while the viewport is first measured', async ({ page }) => {

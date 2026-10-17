@@ -128,11 +128,13 @@ const permissionNote = (permission: Permission, harness: string) =>
     ? '不审批，不用沙箱。'
     : `在沙箱中工作，越界的操作由 ${harness} 自动审核。管理员不允许完全放开时用这一项。`;
 
-/** Each harness's permission mode, for every project (harness-adapter.md §1.9). */
+/** Each harness's permission mode for Angela; workers have theirs in `workers.toml` (harness-adapter.md §1.9). */
 function Permissions({ harnesses }: { harnesses: HarnessView[] }) {
   return (
     <>
-      <Header title="权限">本机所有项目共用，下一个 turn 生效。</Header>
+      <Header title="权限">
+        Angela 用这项设置，下一个 turn 生效。worker 的权限写在 workers.toml 的 agent.permission 中。
+      </Header>
       {harnesses.map((h) => {
         const name = harnessName(h.harness);
         return (
