@@ -66,7 +66,7 @@ function RoleLine({ role, task }: { role: RoleView; task: TaskView | undefined }
     <div className="role-line">
       <RoleAvatar name={role.name} />
       <RoleName name={role.name} />
-      <span className="badge" title="这个角色使用的 harness，可在 ⚙ 设置中切换">
+      <span className="badge" title="这个角色使用的 harness，写在 workers.toml 中">
         {harnessName(role.harness)}
       </span>
       <StatusText look={roleLook(role, task)}>

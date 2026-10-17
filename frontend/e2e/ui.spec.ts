@@ -274,8 +274,6 @@ test('a message the executor never got waits for the user at acceptance', async 
   const backend = await openMocked(page, state);
   const card = page.locator('.attention .card').filter({ hasText: '等你验收' });
   await expect(card).toContainText('还有 1 条你发的消息没交给执行者');
-  // The composer says the same: closing the task does not deliver them (#15).
-  await expect(page.getByLabel('消息')).toHaveAttribute('placeholder', /退回后交给 Malkuth；直接验收则不再投递/);
 
   await card.getByRole('button', { name: '查看并验收' }).click();
   const panel = page.getByRole('region', { name: '补充要求的任务', exact: true });
@@ -360,69 +358,4 @@ test('a worker task shows its pull request and checks, and accepting merges it',
   await expect
     .poll(() => backend.sent.find((s) => s.name === 'accept')?.args)
     .toMatchObject({ task_id: 'w1', criteria_version: 1 });
-});
-
-// Delivery rendering uses the existing mock backend; m1.spec.ts keeps the real create/accept chain.
-test('delivery descriptions distinguish pending, older and invalidated rounds', async ({ page }, testInfo) => {
-  await page.setViewportSize({ width: 1400, height: 860 });
-  const view = task('delivery', '查看交付内容', 'accepting');
-  await openMocked(page, {
-    snapshot: {
-      roles: [role(view.id)],
-      tasks: [view],
-      attention: [{ kind: 'accept', task_id: view.id, title: view.title }],
-    },
-    details: { [view.id]: detail(view) },
-  });
-  await page
-    .locator('.attention .card')
-    .filter({ hasText: '等你验收' })
-    .getByRole('button', { name: '查看并验收' })
-    .click();
-  const panel = page.getByRole('region', { name: '查看交付内容', exact: true });
-  await expect(panel.getByRole('heading', { name: '本轮交付（第 1 轮）' })).toBeVisible();
-  const delivery = panel.getByRole('region', { name: '交付说明' });
-  const update = async (state: 'pending' | 'old' | 'new' | 'invalidated') =>
-    page.evaluate(async (state) => {
-      const module = '/src/store.ts';
-      const { useStore } = await import(module);
-      const detail = structuredClone(useStore.getState().taskDetail);
-      const first = detail.attempts[0];
-      first.done_summary =
-        '预览入口：[示例页面](https://example.com)\n\n本地文件：`dist/report.html`\n\n体验前运行 `npm run dev`，重点检查页面内容。';
-      first.end_reason = state === 'pending' ? null : 'candidate';
-      detail.attempts =
-        state === 'old' || state === 'new' || state === 'invalidated'
-          ? [
-              first,
-              {
-                ...first,
-                id: 'second',
-                seq: 2,
-                end_reason: null,
-                done_summary: state === 'new' ? '第二轮成果：`output.txt`' : null,
-              },
-            ]
-          : [first];
-      useStore.setState({ taskDetail: detail });
-    }, state);
-
-  await update('pending');
-  await expect(delivery).toContainText('成果尚未固定');
-  await expect(delivery.getByRole('link', { name: '示例页面' })).toHaveAttribute('href', 'https://example.com/');
-  await expect(delivery.locator('code', { hasText: 'npm run dev' })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('delivery-desktop.png') });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(delivery).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('delivery-mobile.png') });
-  await update('old');
-  await expect(delivery).toContainText('上一轮交付说明（第 1 轮）');
-  await expect(delivery).toContainText('本轮还没有交付说明');
-  await update('new');
-  await expect(delivery).toContainText('本轮交付（第 2 轮）');
-  await expect(delivery).toContainText('第二轮成果');
-  await expect(delivery).not.toContainText('示例页面');
-  await update('invalidated');
-  await expect(delivery).not.toContainText('第二轮成果');
-  await expect(delivery).toContainText('上一轮交付说明');
 });

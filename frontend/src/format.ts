@@ -4,7 +4,6 @@
 import type {
   Action,
   AttachmentView,
-  Attempt,
   Attention,
   BlobRef,
   CommandRecord,
@@ -336,17 +335,6 @@ export function roleActivity(role: RoleView, task: TaskView | undefined, now: nu
   return '空闲';
 }
 
-/**
- * Where a message to the role goes, said before it is sent. While the role works on a task, the
- * message belongs to it; outside execution it waits for the task to return to execution, and
- * accepting the task lets it go (data-model.md §4.2, #14, #15).
- */
-export function composerHint(role: string, task: TaskView | undefined): string {
-  if (!task) return `发给 ${role}（不属于任何任务）`;
-  if (task.phase === 'executing') return `发给 ${role} · 任务「${task.title}」`;
-  return `任务「${task.title}」等你验收。消息先排队，退回后交给 ${role}；直接验收则不再投递`;
-}
-
 /** Where the task stands, in one line: which round, and what it waits for. */
 export function taskNow(phase: Phase, round: number | undefined): string {
   switch (phase) {
@@ -570,17 +558,4 @@ export function timeline(detail: TaskDetail): TimelineEntry[] {
     add(a.ended_at, 1, a.end_reason === 'candidate' ? `第 ${a.seq} 轮交出候选成果` : `第 ${a.seq} 轮结束`);
   }
   return entries.sort((a, b) => a.at - b.at || a.rank - b.rank).map(({ at, text }) => ({ at, text }));
-}
-
-// A done report arrives before its turn ends and the attempt hands in its candidate. Keep that
-// distinction visible, and never present a previous round's report as the current delivery.
-export function deliveryReport(attempts: Attempt[]) {
-  const report = attempts.findLast((attempt) => !!attempt.done_summary?.trim());
-  if (!report) return null;
-  return {
-    text: report.done_summary!,
-    round: report.seq,
-    earlier: report.id !== attempts.at(-1)?.id,
-    pending: report.end_reason !== 'candidate',
-  };
 }

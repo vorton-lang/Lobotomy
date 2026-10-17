@@ -289,17 +289,13 @@ function AngelaPage() {
   );
 }
 
+/** The project's workers have their harness and model in `workers.toml`, not here (tech-plan.md §7). */
 function ProjectGeneral({ project }: { project: string }) {
   const snapshot = usePageSnapshot();
   const name = useStore((s) => s.host?.projects.find((p) => p.id === project)?.name ?? '');
-  const harnesses = useStore((s) => s.host?.harnesses) ?? [];
   return (
     <>
       <Header title={name}>{snapshot?.project?.repo_path}</Header>
-      <h3 className="settings-section">角色</h3>
-      {snapshot?.roles.map((role) => (
-        <RoleRuntime key={role.name} target={project} role={role} harnesses={harnesses} />
-      ))}
       <h3 className="settings-section">存储</h3>
       <Storage project={project} />
       <Archive project={project} name={name} />

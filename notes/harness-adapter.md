@@ -52,6 +52,7 @@ Codex（消息经 stdin，位置参数为 -）
 
 - 参数由 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs) 与 [codex.rs](../backend/crates/harness/src/codex.rs) 拼出。方括号中的参数可以省略：模型与推理强度来自用户为 role 在这个 harness 上的选择，没有选择时不传，用 CLI 的默认值。测试可以在 CLI 配置（`agent/src/harness.rs` 的 `Cli`）上设一个推理强度，给没有选择的 role 用。
 - **模型与推理强度由用户按 role 选择**（用户确认，2026-10-13）。设置中每个 role 一行，harness 旁边是模型和推理强度（frontend.md §7.8）。
+  - **语义更新**（#86，用户，2026-10-17）：设置中只剩 Angela 这一行。worker 的 harness 和模型由用户写在 `workers.toml` 中（tech-plan.md §7 第 7 组）。
   - 每个 role 在每个 harness 上各存一份选择（data-model.md §9.1 的 `role_model`）。依据：模型名属于 harness，role 换到另一个 harness 再换回来时，原来的选择还在。
   - 每个 turn 启动时读取选择。改选择不换会话：正在运行的 turn 不受影响，下一个 turn 用新选择 resume 同一个会话。
   - 可选的模型：Claude 是 CLI 的别名 `fable`、`opus`、`sonnet`、`haiku`。Claude Code 没有列出模型的命令，帮助文本举了前三个。推理强度是 low、medium、high、xhigh、max（Claude Code 2.1.283 帮助文本）。Codex 的模型来自 `codex debug models` 输出的目录：只列 `visibility` 为 `list` 的模型，每个带支持的推理强度和默认强度。
@@ -343,7 +344,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 进行中的工作在 GUI 中按任务查看，界面见 [frontend.md](frontend.md)：
 
 - Workboard 列出 role 的当前活动与进行中的任务。任务行打开任务面板（frontend.md §7.6）。
-- 任务面板按轮显示交付说明（frontend.md §7.4）。
+- 任务面板显示 worker 的交付：PR、检查结果和交付说明（frontend.md §7.4）。
 
 ## 5. 运行时与 Manager 的分工
 

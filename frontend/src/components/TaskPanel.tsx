@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import type { TaskDetail } from '../api/types';
 import type { AttemptState, WorkerTask } from '../api/generated';
-import { ACTION_LABEL, clock, deliveryReport, PHASE_LABEL, PHASE_LOOK, taskNow, timeline } from '../format';
+import { ACTION_LABEL, clock, PHASE_LABEL, PHASE_LOOK, taskNow, timeline } from '../format';
 import { run, selectTask, useStore } from '../store';
 import { ICON, Markdown, Modal } from './common';
 import { Sash, useWidth } from './Sash';
@@ -33,7 +33,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const loaded = detail?.task.id === taskId ? detail : null;
   const criteria = loaded?.criteria.at(-1);
   const latest = loaded?.attempts.at(-1);
-  const delivery = loaded && deliveryReport(loaded.attempts);
   const acceptable = task.phase === 'accepting';
   // A worker runs it (tech-plan.md §7 step 1): its state, pull request and checks come from the worker.
   const worker = task.worker;
@@ -120,24 +119,6 @@ export function TaskPanel({ taskId }: { taskId: string }) {
             </section>
           )}
           {worker && <WorkerSection worker={worker} />}
-          {!worker && (
-            <section className={`delivery${delivery?.earlier ? ' earlier' : ''}`} aria-label="交付说明">
-              <h3>
-                {delivery?.earlier
-                  ? `上一轮交付说明（第 ${delivery.round} 轮）`
-                  : `本轮交付${latest ? `（第 ${latest.seq} 轮）` : ''}`}
-              </h3>
-              {delivery?.earlier && <p className="muted">本轮还没有交付说明，以下是旧轮说明。</p>}
-              {delivery ? (
-                <>
-                  {delivery.pending && <p className="muted">执行者已提交说明，成果尚未固定。</p>}
-                  <Markdown key={`${delivery.round}:${delivery.text}`} text={delivery.text} />
-                </>
-              ) : (
-                <p className="muted">本轮还没有交付说明。</p>
-              )}
-            </section>
-          )}
           {loaded.task.assignment ? (
             // Angela's task: the user's words she quoted, then her own (roles-and-tasks.md §4).
             <>

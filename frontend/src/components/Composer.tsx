@@ -1,26 +1,25 @@
-// Messages to the main role. While it works on a task, a message belongs to that task; the hint
-// says where it goes (`composerHint`).
+// Messages to Angela on 「全部」. A project's workers get messages through their tasks: the cards of
+// "等你决定" and the task panel.
 
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { composerHint, harnessName } from '../format';
+import { harnessName } from '../format';
 import { act, setFollowing, setReplyTo, useCommand, useMainRole, useStore } from '../store';
 import { ICON } from './common';
 
 export function Composer() {
   const [text, setText] = useState('');
   const role = useMainRole();
-  const task = useStore((s) => s.snapshot?.tasks.find((t) => t.id === role?.task_id));
   const running = role?.unfinished?.state === 'running' ? role.unfinished : null;
   // What the message replies to, chosen on one of Angela's replies (manager-actions.md §1.1).
-  const replyTo = useStore((s) => (role?.kind === 'manager' ? s.replyTo : null));
+  const replyTo = useStore((s) => s.replyTo);
 
   const { submit, busy } = useCommand('send_message');
   if (!role) return null;
   const send = async () => {
     const body = text.trim();
     if (!body) return;
-    const sent = await submit({ role: role.name, task_id: task?.id ?? null, body, reply_to: replyTo?.id ?? null });
+    const sent = await submit({ role: role.name, task_id: null, body, reply_to: replyTo?.id ?? null });
     if (sent === undefined) return;
     setText('');
     setReplyTo(null);
@@ -43,7 +42,7 @@ export function Composer() {
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder={composerHint(role.name, task)}
+        placeholder={`发给 ${role.name}`}
         aria-label="消息"
         rows={3}
         onKeyDown={(e) => {

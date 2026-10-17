@@ -37,6 +37,11 @@ const snapshotOf = (id: string): Snapshot => ({
 
 const angela: AngelaStatus = { error: null, attention: [], busy: false };
 
+const claudeModels: HarnessView['models'] = [
+  { id: 'claude-fast', label: 'Claude-Fast', efforts: ['low', 'medium', 'high'], default_effort: 'low' },
+  { id: 'claude-deep', label: 'Claude-Deep', efforts: ['low', 'medium', 'high', 'xhigh'], default_effort: 'medium' },
+];
+
 const codexModels: HarnessView['models'] = [
   { id: 'gpt-fast', label: 'GPT-Fast', efforts: ['low', 'medium', 'high'], default_effort: 'low' },
   { id: 'gpt-deep', label: 'GPT-Deep', efforts: ['low', 'medium', 'high', 'xhigh'], default_effort: 'medium' },
@@ -197,6 +202,7 @@ test('the settings are a page of their own, wherever the window is', async ({ pa
       attention: [],
       harnesses: [
         { harness: 'codex', permission: 'auto_review', models: codexModels, efforts: ['low', 'medium', 'high'] },
+        { harness: 'claude', permission: 'full', models: claudeModels, efforts: ['low', 'medium', 'high'] },
       ],
       angela,
     },
@@ -215,21 +221,24 @@ test('the settings are a page of their own, wherever the window is', async ({ pa
   const nav = settings.getByRole('navigation', { name: '设置分类' });
   await nav.getByRole('button', { name: 'Angela' }).click();
   await expect(settings.getByRole('radiogroup', { name: 'Angela 使用的 harness' })).toBeVisible();
+  // The model and the effort, as the harness lists them (harness-adapter.md §1.2).
+  const effort = settings.getByLabel('Angela 在 Claude 上的推理强度');
+  await expect(effort.locator('option')).toHaveText(['默认强度', 'low', 'medium', 'high']);
+  await settings.getByLabel('Angela 在 Claude 上的模型').selectOption('claude-deep');
+  await effort.selectOption('high');
+  expect(sent.map(([name, { role, harness, model, effort }]) => [name, role, harness, model, effort])).toEqual([
+    ['set_role_model', 'Angela', 'claude', 'claude-deep', null],
+    ['set_role_model', 'Angela', 'claude', null, 'high'],
+  ]);
+  // A project's page lists no roles: its workers' harness and model are in workers.toml.
   await nav.locator('.settings-nav-group').filter({ hasText: 'beta' }).getByRole('button', { name: '常规' }).click();
-  await expect(settings.getByRole('radiogroup', { name: 'Malkuth 使用的 harness' })).toBeVisible();
+  // The repository path comes with beta's snapshot.
+  await expect(settings.locator('.settings-header')).toContainText('C:\\code\\beta');
+  await expect(settings.getByRole('radiogroup', { name: /使用的 harness/ })).toHaveCount(0);
   expect(backend.asked.filter((a) => a.method === 'snapshot').map((a) => a.project)).toEqual([
     'angela',
     'angela',
     'beta',
-  ]);
-  // The model and the effort, as the harness lists them (harness-adapter.md §1.2).
-  const effort = settings.getByLabel('Malkuth 在 Codex 上的推理强度');
-  await expect(effort.locator('option')).toHaveText(['默认强度', 'low', 'medium', 'high']);
-  await settings.getByLabel('Malkuth 在 Codex 上的模型').selectOption('gpt-deep');
-  await effort.selectOption('high');
-  expect(sent.map(([name, { role, harness, model, effort }]) => [name, role, harness, model, effort])).toEqual([
-    ['set_role_model', 'Malkuth', 'codex', 'gpt-deep', null],
-    ['set_role_model', 'Malkuth', 'codex', null, 'high'],
   ]);
 
   await settings.getByRole('button', { name: '返回', exact: true }).click();

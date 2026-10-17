@@ -122,7 +122,6 @@ export function App() {
               <>
                 <section className="conversation">
                   <Thread />
-                  <Composer />
                   {searching && <SearchBar />}
                   {selectedTask && <TaskPanel taskId={selectedTask} />}
                 </section>
