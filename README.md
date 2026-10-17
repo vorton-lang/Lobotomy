@@ -51,6 +51,7 @@
 - [UI/UX plan](notes/ui-ux-plan.md)：界面改进专项的原则、视觉方向与分阶段计划
 - [Performance baseline](notes/perf-baseline.md)：GUI 性能基线的测法与参考数据
 - [Ideas](notes/ideas.md)：暂不实现的小功能
+- [Maintaining](notes/maintaining.md)：维护小组的共识：碰到待验收的改动、CI 失败、罕见故障这类情况时的做法与注意点
 - 技术路线：[#5](https://github.com/vorton-lang/Lobotomy/issues/5) 存储与权威来源的权衡，[#6](https://github.com/vorton-lang/Lobotomy/issues/6) 推荐实现（SQLite + jj + Rust 后端 + Electron 前端；jj 私有存储已随 #86 删除）
 
 调研与背景（`notes/research/`）：
