@@ -395,7 +395,7 @@ Codex 被拒时的形式未知，暂不处理。
 | ledger_evidence | (entry_id, 序号) | 依据的用户原话：来源消息 ID、说话时间、原文 | 决定与约束至少一条（manager-actions.md §3.2） |
 | project_cursor | project_id | Angela 读到的事件序号 | 只在 Angela 的数据库中使用（§10.6 跨库操作第 4 条） |
 
-**语义更新**（#86，用户确认，2026-10-17）：迁移 0021 删除了 `verification`、`check_run`、`publication`、`outbox`、`display_observation`、`display_adoption`，原来在验证中的任务改为等待验收。`workspace`、`capture`、`project_config` 三张表还被别的表引用，与 project、task、attempt、role、turn 中属于私有存储的列一起留在表结构中，不再使用，等表结构整体替换时去掉。
+**语义更新**（#86，用户确认，2026-10-17）：迁移 0021 删除了 `verification`、`check_run`、`publication`、`outbox`、`display_observation`、`display_adoption`，原来在验证中的任务改为等待验收。`workspace`、`capture`、`project_config` 三张表还被别的表引用，与 project、task、attempt、role、turn 中属于私有存储的列一起留在表结构中，不再使用，等表结构整体替换时去掉。迁移 0022 已删除这三张表和这些列（tech-plan.md §7 第 1 步的第 1 组）；`task.phase` 的约束仍含 `verifying`，随第 1 步改任务阶段时去掉。
 
 **host.db**（所有项目共享，§10.2）
 

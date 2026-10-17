@@ -9,6 +9,6 @@ export type ReadArgs<M extends ReadMethod> =
 export type CommandName = keyof Commands;
 export type CommandParams<C extends CommandName> = Commands[C]['params'];
 export type CommandResult<C extends CommandName> = Commands[C]['result'];
-// Distribute over unions (e.g. NewTask chooses create_task or adopt_outside_changes).
+// Distribute over a union of command names, so each keeps its own params.
 export type CommandArgs<C extends CommandName> = C extends CommandName ? Omit<CommandParams<C>, 'request_id'> : never;
 export type CommandRequest<C extends CommandName> = { name: C; args: CommandParams<C>; project?: string };

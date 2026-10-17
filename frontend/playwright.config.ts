@@ -7,7 +7,7 @@ import { devOrigin } from './dev-server.mjs';
 export default defineConfig({
   testDir: 'e2e',
   timeout: 120_000,
-  // A step of the organization (writing a slot, a turn, a capture, a verification) takes seconds.
+  // A step of the organization, such as a role's turn with the fake CLI, takes seconds.
   expect: { timeout: 30_000 },
   // Fixtures own their host, project, repository and backend; independent scenarios can run
   // together, including scenarios in the same file. Keep the limit small for CI and Electron.

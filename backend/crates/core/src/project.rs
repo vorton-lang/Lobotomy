@@ -50,12 +50,8 @@ impl Command for Onboard {
         if let Some(project) = load_project(cx.tx)? {
             return Err(Error::rejected("already_onboarded", format!("connected to {}", project.repo_path)));
         }
-        // The other columns belonged to the private store, which is gone (#86); they stay empty
-        // until the schema is replaced.
         cx.tx.execute(
-            "INSERT INTO project (id, repo_path, branch, author_name, author_email, integration, integration_rev,
-                                  previewed, created_at)
-             VALUES (?1, ?2, '', '', '', '', 0, '', ?3)",
+            "INSERT INTO project (id, repo_path, created_at) VALUES (?1, ?2, ?3)",
             params![self.project_id, self.repo_path, cx.now],
         )?;
         cx.emit("project.onboarded", &self.project_id, json!({ "repo_path": self.repo_path }))?;
