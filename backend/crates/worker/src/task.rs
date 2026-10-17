@@ -1374,7 +1374,9 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
 mod tests {
     use super::*;
 
-    /// CI caught shutdown retaining the owner a finishing loop was waiting to release.
+    /// Regression for 16477d9: Windows CI run 39038283832, job 117412447911,
+    /// a_task_is_delivered_reworked_and_closed_and_retries_change_nothing timed out
+    /// in Worker::quit: shutdown retained the owner the finishing loop needed released.
     #[tokio::test]
     async fn shutdown_releases_its_instance_before_waiting_for_a_finished_loop() {
         let dir = tempfile::tempdir().unwrap();
