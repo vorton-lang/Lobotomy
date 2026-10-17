@@ -98,6 +98,7 @@ submitted → preparing → working ⇄ blocked{needs_input | needs_auth, questi
 | `progress` | 一行"最新动作"，供界面折叠显示；不唤醒 Angela。粒度和频率到实现时再定（§12） |
 | `artifact_published` | `artifact_id`、版本、`supersedes`、显示信息（标题、PR 链接、改动规模） |
 | `evidence_updated` | 绑定的 `(artifact_id, 版本)`、名称、`pending/passed/failed`、来源、链接 |
+| `mismatch_flagged` | agent 认为编排层的解读与用户原话不一致，写明哪里不一致、按哪个理解在做（现有的 `flag_mismatch`，manager-actions.md §2.3）。编排层直接显示给用户，不经 Angela 转述 |
 | `resources`（宿主级） | 运行中的 attempt、内存与磁盘、额度余量与重置时间（拿不到就标 unknown） |
 
 ## 6. 交付物与证据
@@ -167,7 +168,7 @@ evidence = { required = ["ci-ok"] }
 | 现有 | 去向 |
 |---|---|
 | `harness` crate（claude、codex、process） | 自带电池的 agent 驱动 |
-| `core` 中的 turn、message、question 语义 | 迁进 worker 宿主内部；对外以 task 级状态和投递回执出现 |
+| `core` 中的 turn、message、question 语义 | 迁进 worker 宿主内部；对外以 task 级状态和投递回执出现。**语义更新**（tech-plan.md §7，用户确认，2026-10-17）：不是迁走，而是共用。Angela 也用这套语义，所以 agent 驱动抽成共用的 crate，后端和 worker 宿主各用一份 |
 | MCP 中 role 的工具（`org_report` 等） | 改由 worker 宿主提供给自己的 agent |
 | `store` crate、采集、验证、预览、展示分支采用 | 退出，已于 2026-10-17 删除（tech-plan.md §6）；由环境的交付、证据和采用取代 |
 | 额度域（quota） | 分两处：worker 报告额度余量，编排层负责调度 |
@@ -183,6 +184,7 @@ evidence = { required = ["ci-ok"] }
 - **传输**：自带电池从一开始就跑在独立进程里（§10）。
 - **非代码交付物**：用 `put_blob` 按内容哈希分块上传，小报告内联，不接受 worker 本地路径（§6）。
 - **能力扩展**：核心能力跟着协议版本走；扩展用 `x-<作者>.<名字>`，不认识的忽略（§8）。
+- **`mismatch_flagged` 是核心事件**，不放进扩展（§5；用户，2026-10-17）。
 
 **待决**
 - **`progress` 的粒度和频率**：暂时没有想法，做到时再考察（用户，2026-10-16）。

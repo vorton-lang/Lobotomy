@@ -428,7 +428,7 @@
    - 端口冲突；
    - 整机内存。
    结果决定并发上限，以及要不要上服务器。
-1. **worker 层替换**：任务阶段改为 PR 流程，删除第 6 节"退出"一行，放开 push 和 gh。这一步卸下的维护面最大，也是并行 worker 的前提。其中删除已于 2026-10-17 完成，见 §6。
+1. **worker 层替换**：任务阶段改为 PR 流程，删除第 6 节"退出"一行，放开 push 和 gh。这一步卸下的维护面最大，也是并行 worker 的前提。其中删除已于 2026-10-17 完成，见 §6。实施计划见本节末尾。
 2. **图与事件**：账本迁移，Angela 的图工具，待处理事件表。验收由 #22 的最小验收改写（用户，2026-10-17）：
    1. 换会话后，仍能取回早期"本任务不换分配器"的原话和作用范围；下一个任务不把它当成永久规则。
    2. 用户把 A 改成 B 后，旧 turn 迟到的取代被拒，重试不重复写入；引用 A 的活跃任务出现"依据已变"，Angela 被唤醒。
@@ -439,6 +439,53 @@
 3. **界面**：会话、工作台和事情列表，接上 UI 计划 P2 剩下的项目。
 
 第 2、3 步在第 1 步之后可以并行。旧设计的 M4 验收不再单独进行，第 0 步就是新方向的第一次实际检验。
+
+### 第 1 步的实施计划（用户确认，2026-10-17）
+
+**完成的标志**：Angela（`deepseek-flash`）向 Lobotomy 仓库派出 2–3 件真实任务。每件任务走完这条链：
+
+1. worker 在自己的 clone 里工作。
+2. agent 退出后，环境用 bot 身份推送并开 PR。
+3. CI 失败时，环境在预算内交回 agent 修。
+4. Angela 按版本合并。
+
+中途重启后端或 worker 宿主、停止任务，之后都能接着走。这相当于把第 0 步的实验搬进 Lobotomy 里跑一遍。
+
+**复用方式**：现在 Angela 和执行者共用 turn、消息、问题这套机制：`RegisterTurn`、runner、按 token 路由的 MCP 都是共用的，`question` 表同时承载执行者的提问和 Angela 的 `ask_user`。所以 agent 驱动抽成一个共用的 crate：后端用它驱动 Angela，worker 宿主用它驱动执行者。worker 宿主的每个 task 用一个 instance 目录，复用 core 的库。这对应 §8 已定的"Angela 使用通用的 agent 驱动"。
+
+**提交组**：每组本地测试通过后推送到 main。
+
+| # | 内容 | 依赖 | 本地测试 |
+|---|---|---|---|
+| 1 | 清理残留：schema 中没有用的表和列（`capture`、`workspace`、`project_config`、`attempt.code_start` 等），过时的注释和死代码 | — | core |
+| 2 | 抽出 agent 驱动 crate `lobotomy-agent`：lobotomyd 的 runner、launch、capability、reconcile，harness 的配置、探测和模型目录，执行者的 MCP 工具（`org_report`、`flag_mismatch`）。纯重构，行为不变 | — | 现有的 backend 测试 |
+| 3 | 协议 crate：worker-interface.md §2–§5 的类型，stdio 上的 JSON-RPC，协议版本与 `hello` | — | 序列化 |
+| 4 | worker 宿主骨架，新的可执行文件 `lobotomy-worker`：`create_task`、`send_message`、`stop`、`subscribe`、`close`；事件按 task 编 seq；宿主重启后，进程未确认退出的 attempt 记为 `unknown`。这一组的环境只是普通文件夹 | 2、3 | 契约测试：用现有的假 CLI 经 stdio 走一遍，覆盖幂等、重连后先给快照再补发、停止确认、迟到结果 |
+| 5 | 本地文件夹环境加 git：每个仓库一个 bare 镜像；每个 attempt 一个 clone，origin 指向镜像；L1 隔离（TMP、`GIT_CONFIG_GLOBAL`、`GIT_CONFIG_NOSYSTEM`、清空凭据助手、空的 `GH_CONFIG_DIR`、端口段、内存上限）；agent 的进程树确认退出后，环境把分支取回镜像，发布 `change` 交付物 | 4 | 用本地 bare 仓库当上游 |
+| 6 | forge，只做 GitHub：App 签发 token；从镜像推送，开或更新 PR；轮询 checks，生成来源为 `environment` 的证据；CI 失败的内循环（worker-interface.md §6）；`adopt` 用带 SHA 的合并接口 | 5 | 假 forge 做契约测试；真 GitHub 手动验证 |
+| 7 | 编排层接入：TOML 的 worker 配置；后端启动并看管 worker 宿主进程；任务与 worker task 对应，交付物和证据入库；改接 Angela 的工具（见下表）；worker 的提问和 mismatch 转给 Angela；`delivered`、`blocked`、`failed`、`unknown` 唤醒 Angela；去掉项目调度器直接运行执行者的路径；合并碰到用户指定的路径时按 §4.6 检查授权 | 4–6 | backend |
+| 8 | 界面最小改动：任务面板显示 worker 状态、PR 链接和证据，提供合并、退回修改、打断、取消；重新生成 GUI 类型。新界面留到第 3 步 | 7 | 相关 e2e |
+| 9 | Angela 接 DeepSeek：按 role 设置 provider 的环境变量 | — | environment |
+
+1、3、9 互不依赖，可以先做或穿插着做。主线是 2 → 4 → 5 → 6 → 7 → 8。全部完成后做一次实际验收。由 agent 按顺序实现，不并行派给 worker，因为改动集中在同一批文件上。
+
+**Angela 工具的改接**：
+
+| 现有 | 改为 |
+|---|---|
+| `assign` | `create_task` |
+| `send_to_role` | `send_message` |
+| `send_back` | `send_message`，按审查返工处理（§8"审查返工"） |
+| `accept` | `adopt`，然后 `close` |
+| `abandon` | `stop(attempt)`，然后 `close` |
+| `set_paused` | `stop(turn)` |
+| 改完成条件 | `revise` |
+
+**第 1 步的范围**：
+
+- **数据库**：保留按项目分库，编排层的任务记录先放在项目库里。§8 已定的全局库在第 2 步做，免得这一步同时改两样。
+- **不做**：远端的 WebSocket 传输；非代码交付物（`put_blob`）；steer；扩展键；独立发布的一致性测试包（内部的契约测试照写）；额度的完整拆分。
+- **额度只做最小的一版**：worker 报告额度被拒后，编排层暂停向这个 harness 派任务。恢复沿用 data-model.md §8，由用户手动触发。
 
 ## 8. 已定与待决
 
@@ -464,6 +511,7 @@
 - **对话中的卡片**（2026-10-17）：六种类型，卡片显示当前状态，授权绑定版本，事实由运行时生成，"需要你"只数要你卡，见 §5。
 - **图的读写分离**（2026-10-17）：写入侧是一组表达变化的操作，读取侧是编译出的视图，历史由变化记录编译出来，见 §4.1。
 - **#22 的吸收**（2026-10-17）：引用与"依据已变"、作用范围、幂等、历史版本、证据保留见 §4.1；worker 不读图、代码库知识写在仓库里、CLI 自带记忆保持关闭见 §2.2；授权见 §4.6；第 2 步的验收见 §7。
+- **第 1 步的实施计划**（2026-10-17）：抽出 Angela 与 worker 宿主共用的 agent 驱动；先保留按项目分库；协议补 `mismatch_flagged` 事件；远端传输、非代码交付物等推后。见 §7 末尾。
 - **worker 接口是最大的难点**：它是一个很大的对外接口，分成 agent 和环境两部分抽象。bot、CI、权限这些全部挡在接口内侧，编排层看不到。接口要设计完善，另写一份设计稿，见 [worker-interface.md](worker-interface.md)。
 
 **待决**
