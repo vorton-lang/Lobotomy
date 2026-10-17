@@ -719,6 +719,3 @@ impl Workers {
         self.refresh(project, &worker.worker).await
     }
 }
-
-#[cfg(test)]
-mod tests;

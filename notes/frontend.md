@@ -315,7 +315,7 @@ GUI 的 10 个读方法、22 个命令的参数和结果，以及全部 6 种推
 
 本地按改动选择测试，见 [AGENTS.md](../AGENTS.md)"测试：改什么跑什么"。
 
-**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：只保留回归测试，没有拦住过问题的测试已经退役（AGENTS.md"测试的目的"）。下面写的是退役后留下的测试。
+**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：只保留回归测试，没有拦住过问题的测试已经退役（tech-plan.md §8）。下面写的是退役后留下的测试。
 
 - vitest 测试：任务记录的时间顺序，长文本的截取，回复的预览，问题与回复的区分（#17），异常结束的名称，卡片的 key；流式 Markdown 的补齐与完成后的切换，本地文件的链接；乱序返回的快照和 Thread 读请求不覆盖较新的状态（#28、#85）。
 - Playwright 测试分两种。Windows 上用本机 Edge，其他平台用 Playwright 自带的 Chromium。两个 worker 并行运行；排查时可以用 `--workers=1`。
