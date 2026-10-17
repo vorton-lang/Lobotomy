@@ -466,6 +466,8 @@ export type Row =
   | { key: string; kind: 'input'; turn: Turn; note: string }
   /** `fold`: a done report that the turn's last message sums up again; its body starts folded (#18). */
   | { key: string; kind: 'item'; item: Item; fold: boolean }
+  /** A turn's steps between what it says: its tool calls, commands and thinking, in one row. */
+  | { key: string; kind: 'steps'; items: Item[] }
   /** `last`: the running turn's newest item, under which a quiet turn says so. */
   | { key: string; kind: 'live'; turnId: string; itemId: string; item: LiveItem; last: boolean }
   | { key: string; kind: 'running'; turnId: string; role: string; since: number }
@@ -473,7 +475,9 @@ export type Row =
 
 /**
  * The thread as rows: each turn opens with a divider and the messages it delivered, then its
- * items. Items of turns still running follow, then messages waiting for a turn.
+ * items. The steps between two things the turn says share one row, keyed by the first, so that
+ * the row stays as steps join it. Items of turns still running follow, then messages waiting for
+ * a turn.
  */
 export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): Row[] {
   const rows: Row[] = [];
@@ -498,7 +502,13 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
       }
     }
     if (item.kind === 'input') continue;
-    rows.push({ key: `item-${item.id}`, kind: 'item', item, fold: folded.has(item.id) });
+    if (!isStep(item, thread.commands)) {
+      rows.push({ key: `item-${item.id}`, kind: 'item', item, fold: folded.has(item.id) });
+      continue;
+    }
+    const last = rows.at(-1);
+    if (last?.kind === 'steps' && last.items[0].turn_id === item.turn_id) last.items.push(item);
+    else rows.push({ key: `item-${item.id}`, kind: 'steps', items: [item] });
   }
   for (const [turnId, turn] of Object.entries(live)) {
     if (turn.role !== thread.role) continue;
@@ -511,6 +521,75 @@ export function buildRows(thread: ThreadState, live: Record<string, LiveTurn>): 
   }
   for (const message of thread.queued) rows.push({ key: `queued-${message.id}`, kind: 'queued', message });
   return rows;
+}
+
+/** How the turn worked, not what it says: a reply, a report or an error is not a step. */
+function isStep(item: Item, commands: Record<string, CommandRecord>): boolean {
+  if (item.kind === 'agent_message' || item.kind === 'error') return false;
+  return item.kind !== 'mcp_call' || !asReport(item.command_id ? commands[item.command_id] : undefined);
+}
+
+/** A tool call's name: Lobotomy's tools by their own, others with their server. */
+export function toolName(content: Record<string, unknown>): string {
+  return content.server === 'lobotomy' ? textOf(content.tool) : `${textOf(content.server)}.${textOf(content.tool)}`;
+}
+
+/**
+ * Steps in a line, as Claude Code sums up its tool calls: what was thought, called, run, changed
+ * and searched, and how many failed.
+ */
+export function stepsSummary(items: Item[]): { text: string; failed: number } {
+  const tools = new Map<string, number>();
+  let thinking = 0;
+  let commands = 0;
+  let files = 0;
+  let searches = 0;
+  let todos = 0;
+  let other = 0;
+  let failed = 0;
+  const call = (name: string) => tools.set(name, (tools.get(name) ?? 0) + 1);
+  for (const item of items) {
+    const c = jsonObject(item.content);
+    switch (item.kind) {
+      case 'reasoning':
+        thinking++;
+        break;
+      case 'mcp_call':
+        call(toolName(c));
+        if (c.error_text != null) failed++;
+        break;
+      case 'tool_call':
+        call(textOf(c.tool));
+        if (c.status === 'failed') failed++;
+        break;
+      case 'command':
+        commands++;
+        if (typeof c.exit_code === 'number' && c.exit_code !== 0) failed++;
+        break;
+      case 'file_change':
+        files += jsonArray(c.changes).length;
+        break;
+      case 'web_search':
+        searches++;
+        break;
+      case 'todo_list':
+        todos++;
+        break;
+      default:
+        other++;
+    }
+  }
+  const names = [...tools].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name));
+  const parts = [
+    thinking > 0 && '思考',
+    names.length > 0 && `调用 ${names.slice(0, 4).join('、')}${names.length > 4 ? ` 等 ${names.length} 种` : ''}`,
+    commands > 0 && `运行 ${commands} 条命令`,
+    files > 0 && `改了 ${files} 个文件`,
+    searches > 0 && `搜索 ${searches} 次`,
+    todos > 0 && '更新待办',
+    other > 0 && `其他 ${other} 项`,
+  ];
+  return { text: parts.filter(Boolean).join('，'), failed };
 }
 
 /**

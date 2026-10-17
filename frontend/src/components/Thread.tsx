@@ -11,7 +11,7 @@ import { buildRows, clock, sourceLabel, turnOutcome, type Row } from '../format'
 import { clearHighlight, highlight } from '../highlight';
 import { loadOlder, mainRole, matchRowKey, setFollowing, useStore } from '../store';
 import { ICON, Markdown } from './common';
-import { ItemView, LiveItemView, RunningView } from './ItemView';
+import { ItemView, LiveItemView, RunningView, StepsView } from './ItemView';
 import { ForwardTags, ReplyLine } from './Reply';
 import { Author, QuietNote } from './Status';
 
@@ -53,9 +53,16 @@ export function Thread() {
     setPrepending(false);
   }, [oldest]);
 
-  // Search: scroll to the current match once its page is loaded, and mark the matches.
+  // Search: scroll to the current match once its page is loaded, and mark the matches. A step
+  // matched is in the row of its steps.
   const search = useStore((s) => s.search);
-  const target = search && search.current >= 0 ? matchRowKey(search.matches[search.current]) : null;
+  const stepRows = useMemo(() => {
+    const of = new Map<string, string>();
+    for (const row of rows) if (row.kind === 'steps') for (const item of row.items) of.set(`item-${item.id}`, row.key);
+    return of;
+  }, [rows]);
+  const matched = search && search.current >= 0 ? matchRowKey(search.matches[search.current]) : null;
+  const target = matched && (stepRows.get(matched) ?? matched);
   const handledJump = useRef(0);
   const toOpen = useRef<string | null>(null);
   useEffect(() => {
@@ -203,6 +210,8 @@ function RowView({
       return <MessageView source={row.message.source} body={row.message.body} message={row.message} queued />;
     case 'item':
       return <ItemView item={row.item} role={role} commands={commands} fold={row.fold} />;
+    case 'steps':
+      return <StepsView items={row.items} role={role} commands={commands} />;
     case 'live':
       return (
         <>

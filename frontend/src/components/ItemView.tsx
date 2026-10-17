@@ -10,7 +10,9 @@ import {
   elapsed,
   previewLine,
   REPORT_LABEL,
+  stepsSummary,
   textOf,
+  toolName,
   toolSubject,
   voidReport,
 } from '../format';
@@ -87,7 +89,7 @@ export function ItemView({
       const c = content;
       return (
         <details className="item">
-          <summary>调用 {c.server === 'lobotomy' ? textOf(c.tool) : `${textOf(c.server)}.${textOf(c.tool)}`}</summary>
+          <summary>调用 {toolName(c)}</summary>
           <div className="muted">
             {textOf(c.server)}.{textOf(c.tool)}
           </div>
@@ -123,6 +125,34 @@ export function ItemView({
         </details>
       );
   }
+}
+
+/**
+ * A turn's steps between two things it says, in one line, as Claude Code shows its tool calls; a
+ * single step shows as itself. Opened, each step shows as it would alone.
+ */
+export function StepsView({
+  items,
+  role,
+  commands,
+}: {
+  items: Item[];
+  role: string;
+  commands: Record<string, CommandRecord>;
+}) {
+  if (items.length === 1) return <ItemView item={items[0]} role={role} commands={commands} />;
+  const { text, failed } = stepsSummary(items);
+  return (
+    <details className="item steps">
+      <summary>
+        {text}
+        {failed > 0 && <span className="error"> · {failed} 个失败</span>}
+      </summary>
+      {items.map((item) => (
+        <ItemView key={item.id} item={item} role={role} commands={commands} />
+      ))}
+    </details>
+  );
 }
 
 /**

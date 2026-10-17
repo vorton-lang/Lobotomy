@@ -818,6 +818,12 @@ button.project-item.selected:hover:not(:disabled) {
 .item.command.failed {
   border-left-color: var(--fail-line);
 }
+/* A turn's steps take one line between what it says. */
+.item.steps > summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .running {
   color: var(--run);
 }

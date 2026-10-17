@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { Attempt, Attention, Failure, RoleView, TaskDetail, TaskView, Turn } from './api/types';
+import type { Attempt, Attention, Failure, Item, RoleView, TaskDetail, TaskView, Turn } from './api/types';
 import {
   abnormalEnd,
   attentionKey,
+  buildRows,
   continueNote,
   firstLines,
   fits,
   lastLines,
   previewLine,
   roleActivity,
+  stepsSummary,
   timeline,
   turnOutcome,
 } from './format';
+import type { ThreadState } from './store';
 
 const turn = (id: string, input = '【来自 你】\n做点事'): Turn => ({
   id,
@@ -31,6 +34,50 @@ const turn = (id: string, input = '【来自 你】\n做点事'): Turn => ({
   registered_at: 1,
   started_at: 1,
   ended_at: 2,
+});
+
+// Angela's tool calls each took a row, and her replies drifted far apart (found in use, 2026-10-18).
+describe('buildRows', () => {
+  const item = (id: string, seq: number, kind: Item['kind'], content: Item['content']): Item => ({
+    id,
+    seq,
+    turn_id: 't1',
+    command_id: null,
+    created_at: seq,
+    kind,
+    content,
+  });
+  const call = (id: string, seq: number, tool: string, failed = false) =>
+    item(id, seq, 'mcp_call', { server: 'lobotomy', tool, error_text: failed ? '被拒绝' : null });
+
+  it("puts a turn's steps between its replies in one row, summed up in a line", () => {
+    const thread: ThreadState = {
+      role: 'Angela',
+      items: [
+        item('i1', 1, 'reasoning', { text: '先看看' }),
+        call('i2', 2, 'read_project'),
+        call('i3', 3, 'read_task'),
+        call('i4', 4, 'read_task', true),
+        item('i5', 5, 'agent_message', { text: '派出去了' }),
+        call('i6', 6, 'assign'),
+      ],
+      turns: { t1: turn('t1') },
+      messages: [],
+      commands: {},
+      queued: [],
+      hasMore: false,
+      loaded: true,
+    };
+    const rows = buildRows(thread, {});
+    expect(rows.map((r) => `${r.kind}:${r.key}`)).toEqual([
+      'turn:turn-t1',
+      'steps:item-i1',
+      'item:item-i5',
+      'steps:item-i6',
+    ]);
+    const steps = rows[1].kind === 'steps' ? rows[1].items : [];
+    expect(stepsSummary(steps)).toEqual({ text: '思考，调用 read_project、read_task ×2', failed: 1 });
+  });
 });
 
 describe('continueNote', () => {
