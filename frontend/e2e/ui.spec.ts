@@ -4,6 +4,7 @@
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
 import { devOrigin } from '../dev-server.mjs';
 import type { CommandRecord, Item, LogEvent, Message, Push, Snapshot, TaskDetail, Turn } from '../src/api/types';
+import type { WorkerTask } from '../src/api/generated';
 import { PROJECT, detail, hostSnapshot, role, task } from './mocked';
 
 const origin = process.env.LOBOTOMY_TEST_URL ?? devOrigin;
@@ -289,6 +290,76 @@ test('a message the executor never got waits for the user at acceptance', async 
       dropping: ['m1'],
     });
   await expect(panel.locator('.phase')).toHaveText('已完成');
+});
+
+// A worker's task (tech-plan.md §7 step 1): the panel shows the worker's pull request, its checks
+// and its account; accepting it merges.
+test('a worker task shows its pull request and checks, and accepting merges it', async ({ page }) => {
+  const version = 'abcdef1234567890';
+  const worker: WorkerTask = {
+    worker: 'lobotomy-codex',
+    spec_version: 1,
+    attempt_id: 'a1',
+    seq: 5,
+    status: { state: 'delivered', blocked: null, reason: null, question: null },
+    artifacts: [
+      {
+        artifact_id: 'a1:change',
+        version,
+        kind: 'change',
+        supersedes: null,
+        title: '加一个 new.txt',
+        url: 'https://example.test/o/r/pull/7',
+        size: { files: 1, additions: 3, deletions: 0 },
+        text: null,
+        files: ['new.txt'],
+      },
+      {
+        artifact_id: 'a1:report',
+        version: 'r1',
+        kind: 'report',
+        supersedes: null,
+        title: '交付说明',
+        url: null,
+        size: null,
+        text: '加了 new.txt，CI 通过',
+        files: [],
+      },
+    ],
+    evidence: [
+      {
+        artifact_id: 'a1:change',
+        version,
+        name: 'ci-ok',
+        status: 'passed',
+        source: 'environment',
+        url: 'https://example.test/runs/7',
+      },
+    ],
+  };
+  const view = { ...task('w1', '加一个 new.txt', 'accepting'), executor: 'lobotomy-codex', worker };
+  const backend = await openMocked(page, {
+    snapshot: { roles: [role(null)], tasks: [view], attention: [{ kind: 'accept', task_id: 'w1', title: view.title }] },
+    details: { w1: detail(view) },
+  });
+  await page
+    .locator('.attention .card')
+    .filter({ hasText: '等你验收' })
+    .getByRole('button', { name: '查看并验收' })
+    .click();
+  const panel = page.getByRole('region', { name: '加一个 new.txt', exact: true });
+  const delivery = panel.getByRole('region', { name: 'worker 的交付' });
+  await expect(delivery.getByRole('link', { name: '加一个 new.txt' })).toHaveAttribute(
+    'href',
+    'https://example.test/o/r/pull/7',
+  );
+  await expect(delivery).toContainText('通过：ci-ok');
+  await expect(delivery).toContainText('加了 new.txt，CI 通过');
+  await expect(panel.locator('.now')).toContainText('lobotomy-codex：已交付');
+  await panel.getByRole('button', { name: '合并', exact: true }).click();
+  await expect
+    .poll(() => backend.sent.find((s) => s.name === 'accept')?.args)
+    .toMatchObject({ task_id: 'w1', criteria_version: 1 });
 });
 
 // Delivery rendering uses the existing mock backend; m1.spec.ts keeps the real create/accept chain.

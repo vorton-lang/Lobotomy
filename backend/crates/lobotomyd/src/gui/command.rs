@@ -20,6 +20,7 @@ use crate::host::Host;
 use crate::instance::Instance;
 use crate::project::Project;
 use crate::projects::Projects;
+use crate::workers::{Authority, worker_of};
 
 #[derive(Deserialize)]
 pub struct CommandParams {
@@ -144,6 +145,9 @@ macro_rules! project_commands {
 
 /// Runs a command of one project.
 pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: CommandParams) -> anyhow::Result<Value> {
+    if let Some(done) = worker_command(project, &name, &args).await? {
+        return Ok(done);
+    }
     macro_rules! user_commands {
         ($($ty:ty),* $(,)?) => {
             $(if name == <$ty as Command>::NAME { return user::<$ty>(project, args).await; })*
@@ -151,6 +155,68 @@ pub async fn run(project: &Arc<Project>, CommandParams { name, args, .. }: Comma
     }
     project_commands!(user_commands);
     turn_actions(project, &name, args).await
+}
+
+/// The user's commands on a task a worker runs go to the worker (tech-plan.md §7 step 1): accepting
+/// merges its change, a send-back or a message goes to it, pausing interrupts its turn, abandoning
+/// stops it, and new criteria start a new attempt. `None` for any other command or task.
+async fn worker_command(project: &Arc<Project>, name: &str, args: &Value) -> anyhow::Result<Option<Value>> {
+    let Some(workers) = project.host.workers.get() else { return Ok(None) };
+    let Some(task_id) = args.get("task_id").and_then(Value::as_str) else { return Ok(None) };
+    let Some(worker) = worker_of(project, task_id).await? else { return Ok(None) };
+    let worker = &worker;
+    // A message to the worker is recorded in the project, then sent.
+    let send = |body: String| async move {
+        let message = SendMessage {
+            request_id: lobotomy_core::id::new_id("req"),
+            role: worker.worker.clone(),
+            task_id: Some(task_id.to_owned()),
+            body,
+            reply_to: None,
+        };
+        let created = db(project, move |db| db.execute(&Caller::User, &message)).await?;
+        workers.forward(project, worker, task_id, &created.id).await?;
+        anyhow::Ok(created)
+    };
+    Ok(Some(match name {
+        n if n == Accept::NAME => {
+            let accept: Accept = serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
+            let caller = Caller::User;
+            workers.adopt(project, caller, worker, task_id, accept.criteria_version, Authority::User).await?;
+            Value::Null
+        }
+        n if n == SendBack::NAME => {
+            let back: SendBack = serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
+            send(back.reason).await?;
+            Value::Null
+        }
+        n if n == SendMessage::NAME => {
+            let message: SendMessage =
+                serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
+            serde_json::to_value(send(message.body).await?)?
+        }
+        n if n == Abandon::NAME => {
+            let abandon: Abandon = serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
+            workers.abandon(project, Caller::User, worker, task_id, abandon.reason).await?;
+            Value::Null
+        }
+        n if n == SetPaused::NAME => {
+            let pause: SetPaused = serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
+            if !pause.paused {
+                return Err(Error::rejected("worker_resumes_on_message", "发一条消息，worker 就接着做").into());
+            }
+            workers.interrupt(worker, task_id).await?;
+            Value::Null
+        }
+        n if n == EditCriteria::NAME => {
+            let edit: EditCriteria =
+                serde_json::from_value(args.clone()).with_context(|| format!("arguments of {n}"))?;
+            let edited = db(project, move |db| db.execute(&Caller::User, &edit)).await?;
+            workers.revise(project, worker, task_id).await?;
+            serde_json::to_value(edited)?
+        }
+        _ => return Ok(None),
+    }))
 }
 
 /// Runs a command about Angela (data-model.md §10.6): her messages and turns. She has no tasks.

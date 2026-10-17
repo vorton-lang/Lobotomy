@@ -16,7 +16,7 @@ use axum::{
     routing::any,
 };
 use lobotomy_agent::mcp::{TurnToken, turn_token};
-use lobotomy_agent::runner::{db, runtime};
+use lobotomy_agent::runner::db;
 use lobotomy_core::Caller;
 use lobotomy_core::host::ProjectState;
 use lobotomy_core::id::new_id;
@@ -31,10 +31,7 @@ use lobotomy_core::turn::{TurnState, turn_by_token};
 use lobotomy_core::view::attachment::{Attachment, attachment};
 use lobotomy_core::view::manager::{events_read, project_read, task_read};
 use lobotomy_core::view::{last_event, overview};
-use lobotomy_core::worker::{CloseWorkerTask, MessageForwarded, WorkerTask, worker_task};
 use lobotomy_harness::{Harness, MCP_SERVER};
-use lobotomy_worker_protocol::event::AttemptState;
-use lobotomy_worker_protocol::ops::{self, CloseOutcome};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -52,6 +49,7 @@ use crate::gui::project_attention;
 use crate::instance::Instance;
 use crate::project::Project;
 use crate::projects::Projects;
+use crate::workers::{Authority, Workers, worker_of};
 
 /// What her tools read: her instance, for her turn, and the projects.
 #[derive(Clone)]
@@ -412,7 +410,7 @@ impl AngelaTools {
             if let Some(task_id) = task_id
                 && let Some(worker) = worker_of(&project, &task_id).await?
             {
-                forward(&reach, &project, &worker, &task_id, &created.id).await?;
+                workers(&reach)?.forward(&project, &worker, &task_id, &created.id).await?;
                 return Ok(format!("已转给 worker {}（{}）。", worker.worker, created.id));
             }
             Ok(format!("已放进收件箱（{}）；它下一个 turn 收到。", created.id))
@@ -430,7 +428,9 @@ impl AngelaTools {
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |reach, project, caller| async move {
             if let Some(worker) = worker_of(&project, &args.task_id).await? {
-                return adopt(&reach, &project, caller, worker, args).await;
+                let authority = authority(&reach, args.authorization).await?;
+                let workers = workers(&reach)?;
+                return workers.adopt(&project, caller, &worker, &args.task_id, args.criteria_version, authority).await;
             }
             let cmd = Accept {
                 request_id: new_id("req"),
@@ -463,7 +463,7 @@ impl AngelaTools {
                     interpretation: args.reason,
                 };
                 let created = db(&project, move |db| db.execute(&caller, &cmd)).await?;
-                forward(&reach, &project, &worker, &args.task_id, &created.id).await?;
+                workers(&reach)?.forward(&project, &worker, &args.task_id, &created.id).await?;
                 return Ok("已把意见交给 worker，它接着改。".to_owned());
             }
             let cmd = SendBack { request_id: new_id("req"), task_id: args.task_id, reason: args.reason };
@@ -481,15 +481,7 @@ impl AngelaTools {
     ) -> Result<CallToolResult, ErrorData> {
         act(&context, &args.project_id.clone(), |reach, project, caller| async move {
             if let Some(worker) = worker_of(&project, &args.task_id).await? {
-                let close = ops::CloseParams { task_id: args.task_id.clone(), outcome: CloseOutcome::Abandoned };
-                workers(&reach)?.call::<ops::Close>(&worker.worker, &close).await?;
-                let cmd = CloseWorkerTask {
-                    request_id: new_id("req"),
-                    task_id: args.task_id,
-                    outcome: CloseOutcome::Abandoned,
-                    reason: args.reason,
-                };
-                db(&project, move |db| db.execute(&caller, &cmd)).await?;
+                workers(&reach)?.abandon(&project, caller, &worker, &args.task_id, args.reason).await?;
                 return Ok("已放弃；worker 停下它的工作，PR 会被关掉。".to_owned());
             }
             let cmd = Abandon { request_id: new_id("req"), task_id: args.task_id, reason: args.reason };
@@ -633,8 +625,7 @@ impl AngelaTools {
                 if !args.paused {
                     anyhow::bail!("worker 的任务不用恢复：给它发一条消息（send_to_role），它就接着做");
                 }
-                let stop = ops::StopParams { task_id: args.task_id, level: ops::StopLevel::Turn };
-                workers(&reach)?.call::<ops::Stop>(&worker.worker, &stop).await?;
+                workers(&reach)?.interrupt(&worker, &args.task_id).await?;
                 return Ok("已打断 worker 当前的 turn；它停下等你，发消息让它继续。".to_owned());
             }
             let paused = args.paused;
@@ -980,110 +971,21 @@ async fn list_projects(reach: &Reach) -> anyhow::Result<Value> {
 }
 
 /// The backend's workers.
-fn workers(reach: &Reach) -> anyhow::Result<Arc<crate::workers::Workers>> {
+fn workers(reach: &Reach) -> anyhow::Result<Arc<Workers>> {
     reach.angela.host.workers.get().cloned().context("the backend runs no workers")
 }
 
-/// What the worker said of a task, if a worker runs it (tech-plan.md §7 step 1).
-async fn worker_of(project: &Project, task_id: &str) -> anyhow::Result<Option<WorkerTask>> {
-    let id = task_id.to_owned();
-    db(project, move |db| db.read(|c| worker_task(c, &id))).await
-}
-
-/// Sends the project's message `message_id` to the task's worker (worker-interface.md §3
-/// `send_message`); it answers the worker's open question, if there is one. The message stays in
-/// the project as the record, out of the role's inbox.
-async fn forward(
-    reach: &Reach,
-    project: &Project,
-    worker: &WorkerTask,
-    task_id: &str,
-    message_id: &str,
-) -> anyhow::Result<()> {
-    let id = message_id.to_owned();
-    let body: String = db(project, move |db| {
-        db.read(|c| Ok(c.query_row("SELECT body FROM message WHERE id = ?1", [&id], |r| r.get(0))?))
+/// The authority she names for adopting a change on protected paths: the user's message, checked
+/// to be the user's in her database (tech-plan.md §4.6).
+async fn authority(reach: &Reach, message: Option<String>) -> anyhow::Result<Authority> {
+    let Some(message) = message else { return Ok(Authority::None) };
+    let id = message.clone();
+    let source: Option<String> = db(&reach.angela, move |db| {
+        db.read(|c| Ok(c.query_row("SELECT source FROM message WHERE id = ?1", [&id], |r| r.get(0)).optional()?))
     })
     .await?;
-    let params = ops::SendMessageParams {
-        task_id: task_id.to_owned(),
-        message_id: message_id.to_owned(),
-        body,
-        refs: Vec::new(),
-        question_id: worker.status.question.as_ref().map(|q| q.question_id.clone()),
-    };
-    workers(reach)?.call::<ops::SendMessage>(&worker.worker, &params).await?;
-    runtime(project, MessageForwarded { message_id: message_id.to_owned() }).await
-}
-
-/// Accepting a worker's delivery: its change is merged at the version she read, with the user's
-/// authorization where it touches the paths that need it (tech-plan.md §4.6), and the task closes.
-async fn adopt(
-    reach: &Reach,
-    project: &Project,
-    caller: Caller,
-    worker: WorkerTask,
-    args: AcceptArgs,
-) -> anyhow::Result<String> {
-    let task = crate::workers::task(project, &args.task_id).await?;
-    if task.criteria_version != args.criteria_version {
-        return Err(lobotomy_core::Error::rejected(
-            "stale_criteria",
-            format!("criteria are at version {}, not {}", task.criteria_version, args.criteria_version),
-        )
-        .into());
+    if source.as_deref() != Some("user") {
+        anyhow::bail!("{message} 不是用户发来的消息，不能作为授权");
     }
-    if !matches!(worker.status.state, AttemptState::Delivered | AttemptState::Adopted) {
-        anyhow::bail!("worker 还没有交付（{:?}）", worker.status.state);
-    }
-    let workers = workers(reach)?;
-    let entry = workers.entry(&worker.worker).context("这个 worker 不在配置里")?;
-    let mut merged = None;
-    if let Some(change) = worker.change() {
-        let protected = entry.needs_authorization(&change.files);
-        if !protected.is_empty() {
-            let Some(message) = args.authorization.clone() else {
-                anyhow::bail!(
-                    "改动碰到需要用户授权的路径：{}。先问用户；用户同意后，把他那条消息的 ID 填进 authorization",
-                    protected.join("、")
-                );
-            };
-            let id = message.clone();
-            let source: Option<String> = db(&reach.angela, move |db| {
-                db.read(|c| {
-                    Ok(c.query_row("SELECT source FROM message WHERE id = ?1", [&id], |r| r.get(0)).optional()?)
-                })
-            })
-            .await?;
-            if source.as_deref() != Some("user") {
-                anyhow::bail!("{message} 不是用户发来的消息，不能作为授权");
-            }
-        }
-        let params = ops::AdoptParams {
-            task_id: args.task_id.clone(),
-            artifact_id: change.artifact_id.clone(),
-            version: change.version.clone(),
-        };
-        match workers.call::<ops::Adopt>(&worker.worker, &params).await? {
-            ops::AdoptOutcome::Adopted => merged = Some(change.version.clone()),
-            ops::AdoptOutcome::Rejected { reason, detail } => anyhow::bail!("没有合并（{reason:?}）：{detail}"),
-        }
-    }
-    let close = ops::CloseParams { task_id: args.task_id.clone(), outcome: ops::CloseOutcome::Adopted };
-    workers.call::<ops::Close>(&worker.worker, &close).await?;
-    let reason = match &args.authorization {
-        Some(message) => format!("用户授权：{message}"),
-        None => String::new(),
-    };
-    let cmd = CloseWorkerTask {
-        request_id: new_id("req"),
-        task_id: args.task_id,
-        outcome: ops::CloseOutcome::Adopted,
-        reason,
-    };
-    db(project, move |db| db.execute(&caller, &cmd)).await?;
-    Ok(match merged {
-        Some(version) => format!("已合并（{}）并关闭任务。", &version[..version.len().min(10)]),
-        None => "已采用交付并关闭任务。".to_owned(),
-    })
+    Ok(Authority::Message(message))
 }

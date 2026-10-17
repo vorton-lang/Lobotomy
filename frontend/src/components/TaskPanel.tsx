@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import type { TaskDetail } from '../api/types';
+import type { AttemptState, WorkerTask } from '../api/generated';
 import { ACTION_LABEL, clock, deliveryReport, PHASE_LABEL, PHASE_LOOK, taskNow, timeline } from '../format';
 import { run, selectTask, useStore } from '../store';
 import { ICON, Markdown, Modal } from './common';
@@ -34,6 +35,8 @@ export function TaskPanel({ taskId }: { taskId: string }) {
   const latest = loaded?.attempts.at(-1);
   const delivery = loaded && deliveryReport(loaded.attempts);
   const acceptable = task.phase === 'accepting';
+  // A worker runs it (tech-plan.md §7 step 1): its state, pull request and checks come from the worker.
+  const worker = task.worker;
   // Messages the executor never got hold acceptance until the user decides about them (#14).
   const undelivered = loaded?.undelivered_messages ?? [];
 
@@ -61,7 +64,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         {acceptable && loaded && undelivered.length === 0 && (
           <>
             <button className="primary" onClick={() => accept([])}>
-              验收
+              {worker?.artifacts.some((a) => a.kind === 'change') ? '合并' : '验收'}
             </button>
             <button onClick={() => setSendingBack('')}>退回…</button>
           </>
@@ -70,9 +73,13 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           <button onClick={() => run('reopen', { task_id: task.id })}>重开</button>
         ) : (
           <>
-            <button onClick={() => run('set_paused', { task_id: task.id, paused: !task.paused })}>
-              {task.paused ? '恢复' : '暂停'}
-            </button>
+            {worker ? (
+              <button onClick={() => run('set_paused', { task_id: task.id, paused: true })}>打断</button>
+            ) : (
+              <button onClick={() => run('set_paused', { task_id: task.id, paused: !task.paused })}>
+                {task.paused ? '恢复' : '暂停'}
+              </button>
+            )}
             <button onClick={() => run('abandon', { task_id: task.id, reason: '用户放弃' })}>放弃</button>
           </>
         )}
@@ -94,7 +101,7 @@ export function TaskPanel({ taskId }: { taskId: string }) {
         <p className="muted">正在加载…</p>
       ) : (
         <div className="panel-body">
-          <p className="now">{taskNow(task.phase, latest?.seq)}</p>
+          <p className="now">{worker ? workerNow(worker) : taskNow(task.phase, latest?.seq)}</p>
           {acceptable && undelivered.length > 0 && (
             <section className="card warn undelivered">
               <h3>还有 {undelivered.length} 条消息没有交给执行者</h3>
@@ -112,22 +119,25 @@ export function TaskPanel({ taskId }: { taskId: string }) {
               </div>
             </section>
           )}
-          <section className={`delivery${delivery?.earlier ? ' earlier' : ''}`} aria-label="交付说明">
-            <h3>
-              {delivery?.earlier
-                ? `上一轮交付说明（第 ${delivery.round} 轮）`
-                : `本轮交付${latest ? `（第 ${latest.seq} 轮）` : ''}`}
-            </h3>
-            {delivery?.earlier && <p className="muted">本轮还没有交付说明，以下是旧轮说明。</p>}
-            {delivery ? (
-              <>
-                {delivery.pending && <p className="muted">执行者已提交说明，成果尚未固定。</p>}
-                <Markdown key={`${delivery.round}:${delivery.text}`} text={delivery.text} />
-              </>
-            ) : (
-              <p className="muted">本轮还没有交付说明。</p>
-            )}
-          </section>
+          {worker && <WorkerSection worker={worker} />}
+          {!worker && (
+            <section className={`delivery${delivery?.earlier ? ' earlier' : ''}`} aria-label="交付说明">
+              <h3>
+                {delivery?.earlier
+                  ? `上一轮交付说明（第 ${delivery.round} 轮）`
+                  : `本轮交付${latest ? `（第 ${latest.seq} 轮）` : ''}`}
+              </h3>
+              {delivery?.earlier && <p className="muted">本轮还没有交付说明，以下是旧轮说明。</p>}
+              {delivery ? (
+                <>
+                  {delivery.pending && <p className="muted">执行者已提交说明，成果尚未固定。</p>}
+                  <Markdown key={`${delivery.round}:${delivery.text}`} text={delivery.text} />
+                </>
+              ) : (
+                <p className="muted">本轮还没有交付说明。</p>
+              )}
+            </section>
+          )}
           {loaded.task.assignment ? (
             // Angela's task: the user's words she quoted, then her own (roles-and-tasks.md §4).
             <>
@@ -176,6 +186,71 @@ export function TaskPanel({ taskId }: { taskId: string }) {
           onClose={() => setEditing(false)}
         />
       )}
+    </section>
+  );
+}
+
+const WORKER_STATE: Record<AttemptState, string> = {
+  submitted: '已交给 worker',
+  preparing: '准备工作区',
+  working: '在做',
+  blocked: '停下等你',
+  delivered: '已交付',
+  adopted: '已合并',
+  abandoned: '已放弃',
+  failed: '失败',
+  canceled: '已停止',
+  unknown: '失联',
+};
+
+function workerNow(worker: WorkerTask): string {
+  const { state, reason, question } = worker.status;
+  const why = question?.body ?? reason;
+  return `${worker.worker}：${WORKER_STATE[state]}${why ? `（${why}）` : ''}`;
+}
+
+/** What the worker delivered: the change and where to review it, its checks, and its account. */
+function WorkerSection({ worker }: { worker: WorkerTask }) {
+  const change = worker.artifacts.find((a) => a.kind === 'change');
+  const report = worker.artifacts.find((a) => a.kind === 'report');
+  const checks = change ? worker.evidence.filter((e) => e.version === change.version) : [];
+  return (
+    <section className="delivery worker" aria-label="worker 的交付">
+      <h3>交付</h3>
+      {change ? (
+        <p>
+          {change.url ? (
+            <a href={change.url} target="_blank" rel="noreferrer">
+              {change.title}
+            </a>
+          ) : (
+            change.title
+          )}{' '}
+          <span className="muted">
+            {change.version.slice(0, 10)}
+            {change.size && ` · ${change.size.files} 个文件 +${change.size.additions} −${change.size.deletions}`}
+          </span>
+        </p>
+      ) : (
+        <p className="muted">还没有改动。</p>
+      )}
+      {checks.length > 0 && (
+        <ul className="checks">
+          {checks.map((e) => (
+            <li key={e.name}>
+              {e.status === 'passed' ? '通过' : e.status === 'failed' ? '失败' : '进行中'}：
+              {e.url ? (
+                <a href={e.url} target="_blank" rel="noreferrer">
+                  {e.name}
+                </a>
+              ) : (
+                e.name
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {report?.text && <Markdown key={report.version} text={report.text} />}
     </section>
   );
 }

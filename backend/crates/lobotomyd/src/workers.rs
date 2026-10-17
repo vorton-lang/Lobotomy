@@ -24,10 +24,14 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use lobotomy_agent::runner::{db, runtime};
+use lobotomy_core::Caller;
 use lobotomy_core::role::SyncWorkerRoles;
 use lobotomy_core::task::{Action, Task, criteria_text, load_task};
-use lobotomy_core::worker::{ApplyWorkerEvent, ApplyWorkerSnapshot, WorkerTaskCreated, worker_seqs};
-use lobotomy_worker_protocol::event::{EVENT, Event, RESOURCES, Resources};
+use lobotomy_core::worker::{
+    ApplyWorkerEvent, ApplyWorkerSnapshot, CloseWorkerTask, MessageForwarded, WorkerTask, WorkerTaskCreated,
+    WorkerTaskRevised, worker_seqs, worker_task,
+};
+use lobotomy_worker_protocol::event::{AttemptState, EVENT, Event, RESOURCES, Resources};
 use lobotomy_worker_protocol::ops::{self, Budget, CreateTaskParams, Hello, HelloParams, Subscribe, SubscribeParams};
 use lobotomy_worker_protocol::rpc::{self, Id, Message, Request, Response};
 use lobotomy_worker_protocol::{Method, PROTOCOL_VERSION};
@@ -492,4 +496,165 @@ fn spec(entry: &Entry, task: &Task, criteria: &str) -> ops::TaskSpec {
 pub async fn task(project: &Project, task_id: &str) -> anyhow::Result<Task> {
     let id = task_id.to_owned();
     db(project, move |db| db.read(|c| load_task(c, &id))).await
+}
+
+/// Who stands behind adopting a change that touches the paths needing the user's authorization
+/// (tech-plan.md §4.6).
+pub enum Authority {
+    /// The user, in the GUI.
+    User,
+    /// The user's message the manager names, checked to be the user's.
+    Message(String),
+    /// Nobody: such a change is refused.
+    None,
+}
+
+/// What the worker said of a task, if a worker runs it (tech-plan.md §7 step 1).
+pub async fn worker_of(project: &Project, task_id: &str) -> anyhow::Result<Option<WorkerTask>> {
+    let id = task_id.to_owned();
+    db(project, move |db| db.read(|c| worker_task(c, &id))).await
+}
+
+impl Workers {
+    /// Sends the project's message `message_id` to the task's worker (worker-interface.md §3
+    /// `send_message`); it answers the worker's open question, if there is one. The message stays
+    /// in the project as the record, out of the role's inbox.
+    pub async fn forward(
+        &self,
+        project: &Project,
+        worker: &WorkerTask,
+        task_id: &str,
+        message_id: &str,
+    ) -> anyhow::Result<()> {
+        let id = message_id.to_owned();
+        let body: String = db(project, move |db| {
+            db.read(|c| Ok(c.query_row("SELECT body FROM message WHERE id = ?1", [&id], |r| r.get(0))?))
+        })
+        .await?;
+        let params = ops::SendMessageParams {
+            task_id: task_id.to_owned(),
+            message_id: message_id.to_owned(),
+            body,
+            refs: Vec::new(),
+            question_id: worker.status.question.as_ref().map(|q| q.question_id.clone()),
+        };
+        self.call::<ops::SendMessage>(&worker.worker, &params).await?;
+        runtime(project, MessageForwarded { message_id: message_id.to_owned() }).await
+    }
+
+    /// Accepts a worker's delivery: its change is merged at the version read, where it touches
+    /// protected paths only with the user's authority, and the task closes.
+    pub async fn adopt(
+        &self,
+        project: &Project,
+        caller: Caller,
+        worker: &WorkerTask,
+        task_id: &str,
+        criteria_version: i64,
+        authority: Authority,
+    ) -> anyhow::Result<String> {
+        let task = task(project, task_id).await?;
+        if task.criteria_version != criteria_version {
+            return Err(lobotomy_core::Error::rejected(
+                "stale_criteria",
+                format!("criteria are at version {}, not {criteria_version}", task.criteria_version),
+            )
+            .into());
+        }
+        if !matches!(worker.status.state, AttemptState::Delivered | AttemptState::Adopted) {
+            bail!("worker 还没有交付（{:?}）", worker.status.state);
+        }
+        let entry = self.entry(&worker.worker).context("这个 worker 不在配置里")?;
+        let mut merged = None;
+        if let Some(change) = worker.change() {
+            let protected = entry.needs_authorization(&change.files);
+            if !protected.is_empty() && matches!(authority, Authority::None) {
+                bail!(
+                    "改动碰到需要用户授权的路径：{}。先问用户；用户同意后，把他那条消息的 ID 填进 authorization",
+                    protected.join("、")
+                );
+            }
+            let params = ops::AdoptParams {
+                task_id: task_id.to_owned(),
+                artifact_id: change.artifact_id.clone(),
+                version: change.version.clone(),
+            };
+            match self.call::<ops::Adopt>(&worker.worker, &params).await? {
+                ops::AdoptOutcome::Adopted => merged = Some(change.version.clone()),
+                ops::AdoptOutcome::Rejected { reason, detail } => bail!("没有合并（{reason:?}）：{detail}"),
+            }
+        }
+        let close = ops::CloseParams { task_id: task_id.to_owned(), outcome: ops::CloseOutcome::Adopted };
+        self.call::<ops::Close>(&worker.worker, &close).await?;
+        let reason = match authority {
+            Authority::Message(message) => format!("用户授权：{message}"),
+            _ => String::new(),
+        };
+        let cmd = CloseWorkerTask {
+            request_id: lobotomy_core::id::new_id("req"),
+            task_id: task_id.to_owned(),
+            outcome: ops::CloseOutcome::Adopted,
+            reason,
+        };
+        db(project, move |db| db.execute(&caller, &cmd)).await?;
+        Ok(match merged {
+            Some(version) => format!("已合并（{}）并关闭任务。", &version[..version.len().min(10)]),
+            None => "已采用交付并关闭任务。".to_owned(),
+        })
+    }
+
+    /// Abandons a worker's task: the worker stops, its pull request closes, and the task closes.
+    pub async fn abandon(
+        &self,
+        project: &Project,
+        caller: Caller,
+        worker: &WorkerTask,
+        task_id: &str,
+        reason: String,
+    ) -> anyhow::Result<()> {
+        let close = ops::CloseParams { task_id: task_id.to_owned(), outcome: ops::CloseOutcome::Abandoned };
+        self.call::<ops::Close>(&worker.worker, &close).await?;
+        let cmd = CloseWorkerTask {
+            request_id: lobotomy_core::id::new_id("req"),
+            task_id: task_id.to_owned(),
+            outcome: ops::CloseOutcome::Abandoned,
+            reason,
+        };
+        db(project, move |db| db.execute(&caller, &cmd)).await?;
+        Ok(())
+    }
+
+    /// Interrupts the worker's running turn; the attempt then waits for a message.
+    pub async fn interrupt(&self, worker: &WorkerTask, task_id: &str) -> anyhow::Result<()> {
+        let stop = ops::StopParams { task_id: task_id.to_owned(), level: ops::StopLevel::Turn };
+        self.call::<ops::Stop>(&worker.worker, &stop).await?;
+        Ok(())
+    }
+
+    /// The task's criteria changed: the worker starts a new attempt on the new spec
+    /// (worker-interface.md §3 `revise`).
+    pub async fn revise(&self, project: &Project, worker: &WorkerTask, task_id: &str) -> anyhow::Result<()> {
+        let entry = self.entry(&worker.worker).context("这个 worker 不在配置里")?;
+        let id = task_id.to_owned();
+        let (task, criteria) = db(project, move |db| {
+            db.read(|c| {
+                let task = load_task(c, &id)?;
+                let criteria = criteria_text(c, &id, task.criteria_version)?;
+                Ok((task, criteria))
+            })
+        })
+        .await?;
+        let params = CreateTaskParams {
+            task_id: task.id.clone(),
+            spec_version: task.criteria_version as u32,
+            spec: spec(entry, &task, &criteria),
+        };
+        let revised = self.call::<ops::Revise>(&worker.worker, &params).await?;
+        let cmd = WorkerTaskRevised {
+            task_id: task.id.clone(),
+            spec_version: task.criteria_version,
+            attempt_id: revised.attempt_id,
+        };
+        runtime(project, cmd).await
+    }
 }
