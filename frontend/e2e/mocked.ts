@@ -29,6 +29,7 @@ export const role = (taskId: string | null): RoleView => ({
   harness: 'codex',
   model: null,
   effort: null,
+  remote: false,
   task_id: taskId,
   unfinished: null,
   last_turn: null,
@@ -56,6 +57,7 @@ export const task = (id: string, title: string, phase: TaskView['phase'], undeli
   attempt_open: phase === 'executing',
   undelivered_messages: undelivered,
   reply_queued: undelivered > 0,
+  worker: null,
 });
 
 /** A task whose first round handed in its candidate. */

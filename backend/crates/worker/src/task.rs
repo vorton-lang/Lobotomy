@@ -180,7 +180,7 @@ impl Tasks {
     /// Sends stored events to the subscriber, if any.
     fn publish(&self, events: Vec<Event>) {
         for event in events {
-            let _ = self.host.outgoing.send(Outgoing::Event(event));
+            let _ = self.host.outgoing.send(Outgoing::Event(Box::new(event)));
         }
     }
 
@@ -823,6 +823,7 @@ async fn take_delivery(
                 url: opened.as_ref().map(|pr| pr.url.clone()),
                 size: Some(delivered.size),
                 text: None,
+                files: delivered.files,
             });
         }
     }
@@ -836,6 +837,7 @@ async fn take_delivery(
             url: None,
             size: None,
             text: Some(summary.clone()),
+            files: Vec::new(),
         });
     }
     let current = {

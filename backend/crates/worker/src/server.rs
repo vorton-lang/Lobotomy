@@ -179,7 +179,7 @@ async fn forward(
     }
     loop {
         let events = match receiver.recv().await {
-            Ok(Outgoing::Event(event)) => vec![event],
+            Ok(Outgoing::Event(event)) => vec![*event],
             Ok(Outgoing::Resources(resources)) => {
                 if out.send(note(RESOURCES, &resources)).await.is_err() {
                     return;

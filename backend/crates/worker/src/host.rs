@@ -36,7 +36,7 @@ pub struct Config {
 /// What goes to the subscriber, once stored.
 #[derive(Clone, Debug)]
 pub enum Outgoing {
-    Event(Event),
+    Event(Box<Event>),
     Resources(Resources),
 }
 

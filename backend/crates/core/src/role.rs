@@ -22,13 +22,22 @@ pub struct Role {
     pub model: Option<String>,
     /// The reasoning effort chosen likewise.
     pub effort: Option<String>,
+    /// A worker plays it, outside the backend (tech-plan.md §7 step 1): its tasks go to the worker.
+    pub remote: bool,
 }
 
-const ROLE_SELECT: &str = "SELECT r.name, r.kind, r.harness, m.model, m.effort FROM role r
+const ROLE_SELECT: &str = "SELECT r.name, r.kind, r.harness, m.model, m.effort, r.remote FROM role r
                            LEFT JOIN role_model m ON m.role = r.name AND m.harness = r.harness";
 
 fn role_from_row(r: &Row<'_>) -> rusqlite::Result<Role> {
-    Ok(Role { name: r.get(0)?, kind: r.get(1)?, harness: r.get(2)?, model: r.get(3)?, effort: r.get(4)? })
+    Ok(Role {
+        name: r.get(0)?,
+        kind: r.get(1)?,
+        harness: r.get(2)?,
+        model: r.get(3)?,
+        effort: r.get(4)?,
+        remote: r.get::<_, i64>(5)? != 0,
+    })
 }
 
 pub fn load_role(conn: &Connection, name: &str) -> Result<Role> {
@@ -92,4 +101,47 @@ fn is_cli_value(value: &str) -> bool {
         && value.len() <= 100
         && !value.starts_with('-')
         && value.chars().all(|c| c.is_ascii_alphanumeric() || "._-:[]/".contains(c))
+}
+
+/// The project's workers, as the host's configuration lists them (tech-plan.md §7 step 1): each
+/// gets a remote role of its name; a remote role no longer listed stops taking tasks.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncWorkerRoles {
+    /// Each worker's name and harness.
+    pub workers: Vec<(String, String)>,
+}
+
+impl Command for SyncWorkerRoles {
+    const NAME: &'static str = "sync_worker_roles";
+    type Output = ();
+
+    fn apply(&self, caller: &Caller, cx: &mut Cx<'_>) -> Result<()> {
+        caller.require_runtime()?;
+        let listed: Vec<&str> = self.workers.iter().map(|(name, _)| name.as_str()).collect();
+        for role in list_roles(cx.tx)?.into_iter().filter(|r| r.remote && !listed.contains(&r.name.as_str())) {
+            cx.tx.execute("UPDATE role SET remote = 0 WHERE name = ?1", [&role.name])?;
+            cx.emit("role.worker_removed", &role.name, json!({}))?;
+        }
+        for (name, harness) in &self.workers {
+            if !HARNESSES.contains(&harness.as_str()) {
+                return Err(Error::rejected("unknown_harness", format!("unknown harness {harness}")));
+            }
+            let current = cx
+                .tx
+                .query_row("SELECT harness, remote FROM role WHERE name = ?1", [name], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0))
+                })
+                .optional()?;
+            if current.as_ref().is_some_and(|(h, remote)| h == harness && *remote) {
+                continue;
+            }
+            cx.tx.execute(
+                "INSERT INTO role (name, kind, harness, remote) VALUES (?1, 'worker', ?2, 1)
+                 ON CONFLICT (name) DO UPDATE SET harness = excluded.harness, remote = 1",
+                params![name, harness],
+            )?;
+            cx.emit("role.worker_added", name, json!({ "harness": harness }))?;
+        }
+        Ok(())
+    }
 }

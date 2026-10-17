@@ -481,6 +481,14 @@
 | `set_paused` | `stop(turn)` |
 | 改完成条件 | `revise` |
 
+**第 7 组的做法**（2026-10-17）：
+- 项目库保留 `task` 行，存标题、原话、解读和阶段。新加 worker 任务、交付物和证据三张表。worker 的每个事件由一条运行时命令写进这些表，同时推进任务阶段，并写进项目的事件日志：delivered 对应等验收；其余状态都对应执行中，包括 failed 和 canceled。任务只在编排层关闭时才变成完成或放弃（`close`），这样失败或被停的任务还能改需求重来。所以 GUI、Angela 的读取工具和"全员在等你"的判断大体照旧。（实现时调整，2026-10-17：方案里原写 failed、canceled 对应放弃。）
+- worker 写在 host 目录的 `workers.toml` 里，格式沿用 worker-interface.md §8。每个 worker 条目显式写明所属的项目名（用户，2026-10-17）。后端为每个条目启动一个 worker 宿主。
+- 项目里原来的执行者 role 不再运行，Angela 按名字指派 worker。
+- 唤醒 Angela：worker 进入 `delivered`、`blocked`、`failed`、`unknown`，或报了 `mismatch_flagged`。`working` 和证据变化不唤醒她。
+- 授权（§4.6）：`workers.toml` 里列出需要用户授权的路径。交付物带上改动的路径；改动碰到这些路径时，采用的工具必须带用户消息的 ID 作为授权。
+- worker 的过程（agent 做了什么、跑了哪些命令），第 1 步不在界面上显示，留给第 3 步的"查看过程"和协议的 `read_log`（用户，2026-10-17）。
+
 **第 1 步的范围**：
 
 - **数据库**：保留按项目分库，编排层的任务记录先放在项目库里。§8 已定的全局库在第 2 步做，免得这一步同时改两样。

@@ -1179,6 +1179,7 @@ dependencies = [
 name = "lobotomy-core"
 version = "0.1.0"
 dependencies = [
+ "lobotomy-worker-protocol",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1233,6 +1234,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "ts-rs",
 ]
 
 [[package]]

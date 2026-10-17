@@ -254,7 +254,9 @@ fn upgrading_recovers_boundaries_from_events_and_keeps_unknown_history_open() {
         // Restore the prior schema, including the old task mirror, without losing its data.
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
-            "CREATE TABLE capture (id TEXT PRIMARY KEY); CREATE TABLE workspace (id TEXT PRIMARY KEY);
+            "DROP TABLE worker_task; DROP TABLE worker_artifact; DROP TABLE worker_evidence;
+            ALTER TABLE role DROP COLUMN remote;
+            CREATE TABLE capture (id TEXT PRIMARY KEY); CREATE TABLE workspace (id TEXT PRIMARY KEY);
             CREATE TABLE project_config (version INTEGER PRIMARY KEY);
             ALTER TABLE attempt ADD COLUMN code_start TEXT; ALTER TABLE attempt ADD COLUMN candidate_id TEXT;
             ALTER TABLE attempt ADD COLUMN conflicts TEXT; ALTER TABLE attempt ADD COLUMN trial TEXT;

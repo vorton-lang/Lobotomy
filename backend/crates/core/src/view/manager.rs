@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Attention, Overview, last_event};
+use super::{Attention, Overview, TaskView, last_event};
 use crate::error::Result;
 use crate::report::{OrgReport, ReportEffect};
 use crate::task::{Assignment, AttemptEnd, Phase, Task, list_attempts, load_task, undelivered_user_messages};
@@ -59,10 +59,36 @@ pub struct TaskLine {
     pub criteria_version: i64,
     pub created_at: i64,
     pub closed_at: Option<i64>,
+    /// For a task a worker runs: the worker and how its attempt stands.
+    pub worker: Option<WorkerLine>,
+}
+
+/// A worker task in a line: the attempt's state and why, and its change, if any.
+#[derive(Serialize)]
+pub struct WorkerLine {
+    pub worker: String,
+    pub state: lobotomy_worker_protocol::event::AttemptState,
+    pub reason: Option<String>,
+    /// The change's current version and where to see it, such as its pull request.
+    pub change_version: Option<String>,
+    pub change_url: Option<String>,
+}
+
+impl WorkerLine {
+    fn of(w: &crate::worker::WorkerTask) -> Self {
+        let change = w.change();
+        Self {
+            worker: w.worker.clone(),
+            state: w.status.state,
+            reason: w.status.reason.clone(),
+            change_version: change.map(|c| c.version.clone()),
+            change_url: change.and_then(|c| c.url.clone()),
+        }
+    }
 }
 
 impl TaskLine {
-    fn of(task: &Task) -> Self {
+    fn of(task: &Task, worker: Option<&crate::worker::WorkerTask>) -> Self {
         Self {
             id: task.id.clone(),
             title: task.title.clone(),
@@ -70,10 +96,14 @@ impl TaskLine {
             phase: task.phase,
             paused: task.paused,
             paused_by: task.paused_by.clone(),
-            blocked_on: task.blocked_reason.clone(),
+            blocked_on: task
+                .blocked_reason
+                .clone()
+                .or_else(|| worker.and_then(|w| w.status.question.as_ref()).map(|q| q.body.clone())),
             criteria_version: task.criteria_version,
             created_at: task.created_at,
             closed_at: task.closed_at,
+            worker: worker.map(WorkerLine::of),
         }
     }
 }
@@ -128,16 +158,16 @@ pub fn project_read(overview: &Overview, attention: &[Attention]) -> ProjectRead
             queued_messages: r.queued_messages,
         })
         .collect();
-    let (closed, open): (Vec<&Task>, Vec<&Task>) =
-        overview.tasks.iter().map(|t| &t.task).partition(|t| t.phase.is_closed());
+    let (closed, open): (Vec<&TaskView>, Vec<&TaskView>) =
+        overview.tasks.iter().partition(|t| t.task.phase.is_closed());
     let mut recent = closed;
-    recent.sort_by_key(|t| std::cmp::Reverse((t.closed_at, t.created_at)));
+    recent.sort_by_key(|t| std::cmp::Reverse((t.task.closed_at, t.task.created_at)));
     let closed_not_listed = recent.len().saturating_sub(CLOSED_LISTED);
     recent.truncate(CLOSED_LISTED);
     ProjectRead {
         as_of: overview.seq,
         roles,
-        tasks: open.into_iter().chain(recent).map(TaskLine::of).collect(),
+        tasks: open.into_iter().chain(recent).map(|t| TaskLine::of(&t.task, t.worker.as_ref())).collect(),
         closed_not_listed,
         waiting: attention.iter().map(waiting_line).collect(),
     }
@@ -160,6 +190,8 @@ pub struct TaskRead {
     pub reports: Vec<ReportRead>,
     /// The user's messages to the task that its executor has not got (data-model.md §4.2).
     pub undelivered_messages: usize,
+    /// For a task a worker runs: its attempt, artifacts and the evidence on them.
+    pub worker: Option<crate::worker::WorkerTask>,
 }
 
 #[derive(Serialize)]
@@ -198,15 +230,17 @@ pub fn task_read(conn: &Connection, task_id: &str) -> Result<TaskRead> {
             done_summary: a.done_summary,
         })
         .collect();
+    let worker = crate::worker::worker_task(conn, task_id)?;
     Ok(TaskRead {
         as_of: last_event(conn)?,
-        line: TaskLine::of(&task),
+        line: TaskLine::of(&task, worker.as_ref()),
         body: task.body.clone(),
         assignment: task.assignment.clone(),
         criteria,
         attempts: reads,
         reports: reports(conn, task_id)?,
         undelivered_messages: undelivered_user_messages(conn, task_id)?.len(),
+        worker,
     })
 }
 
@@ -233,42 +267,27 @@ fn reports(conn: &Connection, task_id: &str) -> Result<Vec<ReportRead>> {
 
 // ---- what wakes the manager (manager-actions.md §6 "Manager 什么时候运行") ----
 
-/// Whether nothing in the project moves on without the user: no turn registered or running, and
-/// nothing the scheduler would start, a queued task or a message to deliver, for a role that does
-/// not wait for the user and whose harness is not quota-blocked (`blocked`). A role or task that
-/// waits for the user is in "等你决定" instead (manager-actions.md §6 "组织离了用户就无法推进").
+/// Whether nothing in the project moves on without the user or the manager: no turn registered or
+/// running, no worker's attempt on its way, and no queued task for a worker whose harness is not
+/// quota-blocked (`blocked`). Roles the backend itself ran no longer take tasks (tech-plan.md §7
+/// step 1). What waits for the user is in "等你决定" instead (manager-actions.md §6
+/// "组织离了用户就无法推进").
 pub fn settled(conn: &Connection, blocked: &[String]) -> Result<bool> {
     let running: bool =
         conn.query_row("SELECT EXISTS (SELECT 1 FROM turn WHERE state IN ('registered', 'running'))", [], |r| {
             r.get(0)
         })?;
-    if running {
+    if running || crate::worker::moving(conn)? {
         return Ok(false);
     }
-    for role in crate::role::list_roles(conn)? {
-        if blocked.contains(&role.harness) || crate::turn::hold(conn, &role.name)?.is_some() {
-            continue;
-        }
-        let occupant = crate::task::occupant(conn, &role.name)?;
-        // A free role starts its next queued task.
-        if occupant.is_none() && crate::task::next_queued_task(conn, &role.name)?.is_some() {
-            return Ok(false);
-        }
-        // Its messages go in its next turn while it is free or its task executes.
-        let deliverable = match &occupant {
-            None => true,
-            Some(task) => {
-                let task = load_task(conn, task)?;
-                task.phase == Phase::Executing && !task.paused
-            }
-        };
-        if deliverable && !crate::task::queued_messages(conn, &role.name)?.is_empty() {
+    for role in crate::role::list_roles(conn)?.into_iter().filter(|r| r.remote) {
+        // A queued task goes to its worker.
+        if !blocked.contains(&role.harness) && crate::task::next_queued_task(conn, &role.name)?.is_some() {
             return Ok(false);
         }
     }
     Ok(true)
 }
-
 /// How many lines of changes one project gives the manager's input; she reads the rest with
 /// `read_events`.
 pub const CHANGES_LISTED: usize = 30;
@@ -289,6 +308,9 @@ pub struct ChangesRead {
     /// Roles that said her interpretation differs from the user's words (manager-actions.md §2.3),
     /// a line each; never cut.
     pub mismatches: Vec<String>,
+    /// Worker attempts that came to a state she should look at: delivered, blocked, failed,
+    /// stopped or lost (tech-plan.md §7 step 1).
+    pub wakes: usize,
 }
 
 pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
@@ -298,6 +320,7 @@ pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
     let mut lines = Vec::new();
     let mut mismatches = Vec::new();
     let mut by_others = 0;
+    let mut wakes = 0;
     let mut seq = after;
     while seq < as_of {
         let events = super::events_after(conn, seq)?;
@@ -311,6 +334,12 @@ pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
                 mismatches.push(format!("{}{of}：{}", text("role"), text("body")));
                 continue;
             }
+            if event.kind == "worker.state_changed"
+                && let Ok(state) = serde_json::from_value(event.payload["state"].clone())
+                && crate::worker::wants_attention(state)
+            {
+                wakes += 1;
+            }
             if let Some(line) = change_line(conn, event, &titles)? {
                 lines.push(line);
                 by_others += usize::from(event.caller.as_deref() != Some("manager"));
@@ -319,7 +348,7 @@ pub fn changes_since(conn: &Connection, after: i64) -> Result<ChangesRead> {
     }
     let not_listed = lines.len().saturating_sub(CHANGES_LISTED);
     lines.truncate(CHANGES_LISTED);
-    Ok(ChangesRead { after, as_of: seq.max(after), lines, not_listed, by_others, mismatches })
+    Ok(ChangesRead { after, as_of: seq.max(after), lines, not_listed, by_others, mismatches, wakes })
 }
 
 /// Who caused a change, as the manager reads it: she is "你".
@@ -376,6 +405,23 @@ fn change_line(
             let round = e.payload.get("seq").and_then(Value::as_i64).unwrap_or_default();
             format!("{who}退回了任务 {}，开始第 {round} 轮", task(&e.entity))
         }
+        "worker.task_created" => format!("{} 接了任务 {}", text("worker"), task(&e.entity)),
+        "worker.state_changed" => {
+            let Ok(state) = serde_json::from_value(e.payload["state"].clone()) else { return Ok(None) };
+            let Some(label) = state_label(state) else { return Ok(None) };
+            let reason = e.payload.get("reason").and_then(Value::as_str).map(|r| format!("：{r}")).unwrap_or_default();
+            format!("任务 {} {label}{reason}", task(&e.entity))
+        }
+        "worker.question" => format!("任务 {} 的 worker 提问：{}", task(&e.entity), text("body")),
+        "worker.artifact" if text("kind") == "change" => {
+            let version: String = text("version").chars().take(10).collect();
+            let url = e.payload.get("url").and_then(Value::as_str).map(|u| format!("，{u}")).unwrap_or_default();
+            format!("任务 {} 交付了新版本 {version}{url}", task(&e.entity))
+        }
+        "worker.evidence" if text("status") != "pending" => {
+            let result = if text("status") == "passed" { "通过" } else { "失败" };
+            format!("任务 {} 的检查 {} {result}", task(&e.entity), text("name"))
+        }
         // What the user said to a role directly (#23 §3).
         "message.queued" if e.caller.as_deref() == Some("user") => {
             let body: String = conn.query_row("SELECT body FROM message WHERE id = ?1", [&e.entity], |r| r.get(0))?;
@@ -385,6 +431,23 @@ fn change_line(
         }
         _ => return Ok(None),
     }))
+}
+
+/// How a worker's attempt state reads in a change line; None for the states on the way, which
+/// are not news.
+fn state_label(state: lobotomy_worker_protocol::event::AttemptState) -> Option<&'static str> {
+    use lobotomy_worker_protocol::event::AttemptState as S;
+    Some(match state {
+        S::Submitted | S::Preparing => return None,
+        S::Working => "在做",
+        S::Blocked => "受阻",
+        S::Delivered => "已交付",
+        S::Adopted => "已合并",
+        S::Abandoned => "已放弃",
+        S::Failed => "失败",
+        S::Canceled => "已停止",
+        S::Unknown => "失联",
+    })
 }
 
 /// Where the manager forwarded one of the user's messages in this project (manager-actions.md §1:

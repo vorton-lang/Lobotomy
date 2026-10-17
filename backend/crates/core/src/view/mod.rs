@@ -78,6 +78,8 @@ pub struct TaskView {
     pub undelivered_messages: usize,
     /// A reply from the user or Angela waits for the executor's next turn (#17).
     pub reply_queued: bool,
+    /// For a task a worker runs: what the worker said of it (tech-plan.md §7 step 1).
+    pub worker: Option<crate::worker::WorkerTask>,
 }
 
 /// `mcp_server` is the name Lobotomy's tools have in the harness's configuration: its calls that
@@ -112,6 +114,7 @@ pub fn overview(conn: &Connection, mcp_server: &str) -> Result<Overview> {
             attempt_open: attempt.is_some_and(|a| a.ended_at.is_none()),
             undelivered_messages: undelivered_user_messages(conn, &task.id)?.len(),
             reply_queued: open.iter().any(|q| q.task_id.as_deref() == Some(&task.id) && has_reply(q)),
+            worker: crate::worker::worker_task(conn, &task.id)?,
             task,
         });
     }
@@ -242,6 +245,12 @@ pub fn attention(overview: &Overview, quota: &[Domain], still_runs: impl Fn(&Tur
         if t.phase == Phase::Accepting {
             out.push(Attention::Accept { task_id: t.id.clone(), title: t.title.clone() });
         }
+        // A worker's attempt that waits for an answer, or ended short of delivering.
+        if let Some(worker) = view.worker.as_ref().filter(|_| t.phase == Phase::Executing)
+            && let Some(reason) = worker_waits(&worker.status)
+        {
+            out.push(Attention::TaskBlocked { task_id: t.id.clone(), title: t.title.clone(), reason });
+        }
     }
     out.extend(quota.iter().filter(|d| d.is_blocked()).map(|d| Attention::Quota { domain: d.clone() }));
     out.extend(overview.questions.iter().map(|q| Attention::Question {
@@ -250,6 +259,20 @@ pub fn attention(overview: &Overview, quota: &[Domain], still_runs: impl Fn(&Tur
         asked_at: q.created_at,
     }));
     out
+}
+
+/// Why a worker's attempt waits for the user or the manager, if it does.
+pub fn worker_waits(status: &crate::worker::WorkerStatus) -> Option<String> {
+    use lobotomy_worker_protocol::event::AttemptState as S;
+    let reason = status.question.as_ref().map(|q| q.body.clone()).or_else(|| status.reason.clone()).unwrap_or_default();
+    let label = match status.state {
+        S::Blocked => return Some(reason),
+        S::Failed => "失败",
+        S::Canceled => "已停止",
+        S::Unknown => "失联",
+        _ => return None,
+    };
+    Some(if reason.is_empty() { label.to_owned() } else { format!("{label}：{reason}") })
 }
 
 // ---- what is pushed ----

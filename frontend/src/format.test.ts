@@ -130,6 +130,7 @@ const role = (patch: Partial<RoleView>): RoleView => ({
   harness: 'codex',
   model: null,
   effort: null,
+  remote: false,
   task_id: null,
   unfinished: null,
   last_turn: null,
@@ -147,6 +148,7 @@ const taskView = (phase: TaskView['phase']): TaskView => ({
   attempt_open: phase === 'executing',
   undelivered_messages: 0,
   reply_queued: false,
+  worker: null,
 });
 
 describe('roleActivity', () => {

@@ -382,7 +382,7 @@ fn require_open(task: &Task) -> Result<()> {
     Ok(())
 }
 
-fn bump_revision(cx: &Cx<'_>, task_id: &str) -> Result<()> {
+pub(crate) fn bump_revision(cx: &Cx<'_>, task_id: &str) -> Result<()> {
     cx.tx.execute("UPDATE task SET revision = revision + 1 WHERE id = ?1", [task_id])?;
     Ok(())
 }

@@ -64,6 +64,7 @@ pub enum EventBody {
 /// not final.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum AttemptState {
     Submitted,
     Preparing,
@@ -88,6 +89,7 @@ impl AttemptState {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Blocked {
     pub need: Need,
     /// The question to answer, for `needs_input`.
@@ -95,6 +97,7 @@ pub struct Blocked {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum Need {
     #[serde(rename = "needs_input")]
     Input,
@@ -123,6 +126,7 @@ pub enum Receipt {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Question {
     pub question_id: String,
     pub body: String,
@@ -132,6 +136,7 @@ pub struct Question {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum ArtifactKind {
     /// Code; its version is the head commit.
     Change,
@@ -143,6 +148,7 @@ pub enum ArtifactKind {
 
 /// A version of an artifact (§6). A new version leaves the evidence of the old ones as history.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Artifact {
     pub artifact_id: String,
     pub version: String,
@@ -156,9 +162,13 @@ pub struct Artifact {
     pub size: Option<ChangeSize>,
     /// A report's text.
     pub text: Option<String>,
+    /// The paths a change touches, for the orchestrator's authorization check (tech-plan.md §4.6).
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct ChangeSize {
     pub files: u32,
     pub additions: u32,
@@ -167,6 +177,7 @@ pub struct ChangeSize {
 
 /// One check or review result on a version of an artifact (§6).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub struct Evidence {
     pub artifact_id: String,
     pub version: String,
@@ -178,6 +189,7 @@ pub struct Evidence {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum EvidenceStatus {
     Pending,
     Passed,
@@ -188,6 +200,7 @@ pub enum EvidenceStatus {
 /// lead, and shown as such (§6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 pub enum EvidenceSource {
     Environment,
     Agent,

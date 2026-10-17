@@ -54,6 +54,8 @@ impl AttemptDirs {
 pub struct Delivered {
     pub head: String,
     pub size: ChangeSize,
+    /// The paths the change touches.
+    pub files: Vec<String>,
     /// The agent left changes uncommitted; the environment committed them.
     pub committed_leftovers: bool,
 }
@@ -160,7 +162,8 @@ impl Environment {
         let source = clone.to_string_lossy().into_owned();
         git(&self.mirror(), &["fetch", "--quiet", "--no-tags", &source, &format!("+HEAD:{keep}")], &env)?;
         let stat = git(clone, &["diff", "--shortstat", &base, &head], &env)?;
-        Ok(Some(Delivered { head, size: shortstat(&stat), committed_leftovers: leftovers }))
+        let files = git(clone, &["diff", "--name-only", &base, &head], &env)?.lines().map(str::to_owned).collect();
+        Ok(Some(Delivered { head, size: shortstat(&stat), files, committed_leftovers: leftovers }))
     }
 
     fn gitconfig(&self) -> String {

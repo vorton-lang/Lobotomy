@@ -394,6 +394,11 @@ Codex 被拒时的形式未知，暂不处理。
 | ledger_entry | entry_id | 种类（目标、阶段、决定、约束、待定、推测）、陈述、所属任务（可空）、把握（推测用）、取代的条目、写入的 turn | 只追加；一条最多被一条取代。用户范围的在 Angela 的数据库中，项目与任务范围的在项目数据库中（§10.6） |
 | ledger_evidence | (entry_id, 序号) | 依据的用户原话：来源消息 ID、说话时间、原文 | 决定与约束至少一条（manager-actions.md §3.2） |
 | project_cursor | project_id | Angela 读到的事件序号 | 只在 Angela 的数据库中使用（§10.6 跨库操作第 4 条） |
+| worker_task | task_id | 由 worker 执行的任务：worker 名、任务说明版本、当前 attempt、worker 最近说的状态（含受阻原因和开放问题）、已应用的事件序号 | 每个任务最多一行；事件按序号只应用一次，快照为准（worker-interface.md §9） |
+| worker_artifact | (task_id, artifact_id) | 交付物的当前版本，按协议的格式存 | 新版本覆盖旧版本 |
+| worker_evidence | (task_id, artifact_id, 版本, 名字) | 某个版本上的一条证据 | 版本变了，旧证据留作历史 |
+
+**语义更新**（tech-plan.md §7 第 1 步第 7 组，2026-10-17）：role 加一列 `remote`。由 worker 扮演的 role 由后端按 `workers.toml` 写入，任务交给 worker；后端自己运行的 role 不再接任务。上面三张 worker 表由迁移 0023 加入。
 
 **语义更新**（#86，用户确认，2026-10-17）：迁移 0021 删除了 `verification`、`check_run`、`publication`、`outbox`、`display_observation`、`display_adoption`，原来在验证中的任务改为等待验收。`workspace`、`capture`、`project_config` 三张表还被别的表引用，与 project、task、attempt、role、turn 中属于私有存储的列一起留在表结构中，不再使用，等表结构整体替换时去掉。迁移 0022 已删除这三张表和这些列（tech-plan.md §7 第 1 步的第 1 组）；`task.phase` 的约束仍含 `verifying`，随第 1 步改任务阶段时去掉。
 

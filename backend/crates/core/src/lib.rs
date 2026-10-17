@@ -20,6 +20,7 @@ mod sql;
 pub mod task;
 pub mod turn;
 pub mod view;
+pub mod worker;
 
 pub use command::{Caller, Command, Cx};
 pub use db::Db;

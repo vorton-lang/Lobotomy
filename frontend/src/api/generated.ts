@@ -27,6 +27,27 @@ attention: Array<Attention>,
  */
 busy: boolean, };
 
+export type Artifact = { artifact_id: string, version: string, kind: ArtifactKind,
+/**
+ * Another artifact this one replaces. Versions of the same artifact replace each other
+ * without it.
+ */
+supersedes: string | null, title: string,
+/**
+ * Where to see it, such as the pull request.
+ */
+url: string | null, size: ChangeSize | null,
+/**
+ * A report's text.
+ */
+text: string | null,
+/**
+ * The paths a change touches, for the orchestrator's authorization check (tech-plan.md §4.6).
+ */
+files: Array<string>, };
+
+export type ArtifactKind = "change" | "document" | "report";
+
 export type Assignment = { actions: Array<Action>, stop_when: string, interpretation: string, };
 
 export type AttachmentView = { project: string, project_name: string, } & ({ "kind": "task", task_id: string, title: string, executor: string, phase: Phase, paused: boolean, } | { "kind": "report", task_id: string | null, title: string | null, role: string, report_title: string, status: string, at: number,
@@ -47,6 +68,8 @@ done_summary: string | null, };
 
 export type AttemptEnd = "candidate" | "abandoned";
 
+export type AttemptState = "submitted" | "preparing" | "working" | "blocked" | "delivered" | "adopted" | "abandoned" | "failed" | "canceled" | "unknown";
+
 export type Attention = { "kind": "hold", role: string, hold: Hold, } | { "kind": "unknown_turn", role: string, turn_id: string, } | { "kind": "task_blocked", task_id: string, title: string, reason: string, } | { "kind": "stalled", role: string, task_id: string, title: string, turn_id: string, report_error: string | null, } | { "kind": "accept", task_id: string, title: string, } | { "kind": "quota", domain: Domain, } | { "kind": "question", id: string, question: string, asked_at: number, };
 
 export type BlobParams = { hash: string, };
@@ -54,6 +77,14 @@ export type BlobParams = { hash: string, };
 export type BlobRef = { blob: string, size: number, head: string, tail: string, };
 
 export type BlobText = { text: string, };
+
+export type Blocked = { need: Need,
+/**
+ * The question to answer, for `needs_input`.
+ */
+question_id: string | null, };
+
+export type ChangeSize = { files: number, additions: number, deletions: number, };
 
 export type CommandRecord = { name: string, args: JsonValue, result: JsonValue, };
 
@@ -84,6 +115,12 @@ blocked_at: number | null,
 resets_at: number | null, message: string | null, };
 
 export type EditCriteria = { request_id: string, task_id: string, expected_version: number, text: string, };
+
+export type Evidence = { artifact_id: string, version: string, name: string, status: EvidenceStatus, source: EvidenceSource, url: string | null, };
+
+export type EvidenceSource = "environment" | "agent";
+
+export type EvidenceStatus = "pending" | "passed" | "failed";
 
 export type Failure = { kind: FailureKind, message: string,
 /**
@@ -204,6 +241,8 @@ default_effort: string | null, };
 
 export type MoveInQueue = { request_id: string, task_id: string, to_index: number, };
 
+export type Need = "needs_input" | "needs_auth" | "resume";
+
 export type NewNativeSession = { request_id: string, role: string, };
 
 export type NoParams = Record<symbol, never>;
@@ -262,6 +301,8 @@ repo_path: string, state: ProjectState, registered_at: number, };
 
 export type Push = { "type": "events", project: string, events: Array<LogEvent>, } | { "type": "live", project: string, live: { [key in string]: LiveTurn }, } | { "type": "host" } | { "type": "tick" } | { "type": "resync" } | { "type": "thread", project: string, role: string, seq: number, };
 
+export type Question = { question_id: string, body: string, options: Array<string>, };
+
 export type Quote = {
 /**
  * The message's id in the manager's database.
@@ -300,7 +341,11 @@ model: string | null,
 /**
  * The reasoning effort chosen likewise.
  */
-effort: string | null, };
+effort: string | null,
+/**
+ * A worker plays it, outside the backend (tech-plan.md §7 step 1): its tasks go to the worker.
+ */
+remote: boolean, };
 
 export type SearchMatch = { kind: MatchKind, id: string, seq: number | null, };
 
@@ -379,7 +424,11 @@ undelivered_messages: number,
 /**
  * A reply from the user or Angela waits for the executor's next turn (#17).
  */
-reply_queued: boolean, id: string, title: string, body: string, executor: string, phase: Phase, paused: boolean,
+reply_queued: boolean,
+/**
+ * For a task a worker runs: what the worker said of it (tech-plan.md §7 step 1).
+ */
+worker: WorkerTask | null, id: string, title: string, body: string, executor: string, phase: Phase, paused: boolean,
 /**
  * Who paused it, as a caller scope: only the user lifts the user's pause (roles-and-tasks.md
  * §4).
@@ -441,6 +490,22 @@ export type TurnParams = { turn_id: string, };
 export type TurnRegistered = { turn_id: string, };
 
 export type TurnState = "registered" | "running" | "ended" | "unknown";
+
+export type WorkerStatus = { state: AttemptState, blocked: Blocked | null, reason: string | null, question: Question | null, };
+
+export type WorkerTask = { worker: string, spec_version: number, attempt_id: string, status: WorkerStatus,
+/**
+ * The current attempt's artifacts, at their current versions.
+ */
+artifacts: Array<Artifact>,
+/**
+ * The evidence on those versions.
+ */
+evidence: Array<Evidence>,
+/**
+ * The worker's last event applied.
+ */
+seq: number, };
 
 export type ReadMethods = {
   blob: { params: BlobParams; result: BlobText };
