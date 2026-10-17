@@ -2,9 +2,11 @@
 //! and stdout (worker-interface.md §10); it logs to stderr.
 //!
 //! `lobotomy-worker --root <dir> --harness <claude|codex> [--model <m>] [--effort <e>]
-//! [--permission <full|auto_review>]` runs it. `LOBOTOMY_CODEX` and `LOBOTOMY_CLAUDE` replace the
-//! located CLIs, as for the backend. `lobotomy-worker ctrl-c <pid>` is the helper that sends Ctrl+C
-//! to a CLI's console (harness-adapter.md §1.8).
+//! [--permission <full|auto_review>] [--upstream <url|path> [--base <branch>] [--author-name <n>]
+//! [--author-email <e>] [--port-start <n>]]` runs it. With `--upstream`, each attempt works in its
+//! own clone of that repository; without it, in a plain folder. `LOBOTOMY_CODEX` and
+//! `LOBOTOMY_CLAUDE` replace the located CLIs, as for the backend. `lobotomy-worker ctrl-c <pid>`
+//! is the helper that sends Ctrl+C to a CLI's console (harness-adapter.md §1.8).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,8 +14,13 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use lobotomy_agent::HarnessConfig;
 use lobotomy_harness::{Harness, Permission};
+use lobotomy_worker::environment::Repo;
 use lobotomy_worker::host::{Config, WorkerHost};
 use tracing_subscriber::EnvFilter;
+
+const USAGE: &str = "usage: lobotomy-worker --root <dir> --harness <claude|codex> [--model <m>] [--effort <e>] \
+    [--permission <full|auto_review>] [--upstream <url|path> [--base <branch>] [--author-name <n>] \
+    [--author-email <e>] [--port-start <n>]]";
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,31 +47,40 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn parse(args: &[String]) -> anyhow::Result<(PathBuf, Config)> {
-    let usage = "usage: lobotomy-worker --root <dir> --harness <claude|codex> [--model <m>] [--effort <e>] [--permission <full|auto_review>]";
-    let (mut root, mut harness, mut model, mut effort, mut permission) =
-        (None, None, None, None, Permission::default());
+    let mut values = std::collections::HashMap::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let mut value = || it.next().with_context(|| format!("{arg} needs a value; {usage}"));
-        match arg.as_str() {
-            "--root" => root = Some(PathBuf::from(value()?)),
-            "--harness" => {
-                let name = value()?;
-                harness = Some(Harness::parse(name).with_context(|| format!("unknown harness {name}"))?);
-            }
-            "--model" => model = Some(value()?.clone()),
-            "--effort" => effort = Some(value()?.clone()),
-            "--permission" => {
-                let name = value()?;
-                permission = Permission::parse(name).with_context(|| format!("unknown permission mode {name}"))?;
-            }
-            other => bail!("unknown argument {other}; {usage}"),
-        }
+        let name = arg.strip_prefix("--").with_context(|| format!("unknown argument {arg}; {USAGE}"))?;
+        let value = it.next().with_context(|| format!("{arg} needs a value; {USAGE}"))?;
+        values.insert(name.to_owned(), value.clone());
     }
-    let root = root.with_context(|| format!("--root is required; {usage}"))?;
-    let harness = harness.with_context(|| format!("--harness is required; {usage}"))?;
+    let mut take = |name: &str| values.remove(name);
+    let root = PathBuf::from(take("root").with_context(|| format!("--root is required; {USAGE}"))?);
+    let harness = take("harness").with_context(|| format!("--harness is required; {USAGE}"))?;
+    let harness = Harness::parse(&harness).with_context(|| format!("unknown harness {harness}"))?;
+    let permission = match take("permission") {
+        Some(name) => Permission::parse(&name).with_context(|| format!("unknown permission mode {name}"))?,
+        None => Permission::default(),
+    };
+    let (model, effort) = (take("model"), take("effort"));
+    let repo = match take("upstream") {
+        Some(upstream) => Some(Repo {
+            upstream,
+            base: take("base").unwrap_or_else(|| "main".into()),
+            author_name: take("author-name").unwrap_or_else(|| "Lobotomy Worker".into()),
+            author_email: take("author-email").unwrap_or_else(|| "worker@lobotomy.invalid".into()),
+            port_start: match take("port-start") {
+                Some(n) => n.parse().with_context(|| format!("--port-start {n} is not a port"))?,
+                None => 42000,
+            },
+        }),
+        None => None,
+    };
+    if let Some(name) = values.keys().next() {
+        bail!("unknown argument --{name}; {USAGE}");
+    }
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
-    let config = Config { harness, cli: HarnessConfig::detect()?, model, effort, permission };
+    let config = Config { harness, cli: HarnessConfig::detect()?, model, effort, permission, repo };
     Ok((root, config))
 }
 

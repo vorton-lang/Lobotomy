@@ -225,7 +225,8 @@ async fn run<H: AgentHost>(instance: &Arc<Instance<H>>, turn_id: &str, stop: Can
         return end(instance, turn_id, Outcome::Failed, unstarted(FailureKind::Other, message)).await;
     };
 
-    let cwd = instance.host.working_dir(instance, &role)?;
+    let cwd = instance.host.working_dir(instance, &turn, &role)?;
+    let extra_env = instance.host.env(instance, &turn)?;
     let turns_dir = instance.data_dir.join("turns");
     std::fs::create_dir_all(&turns_dir).with_context(|| format!("creating {}", turns_dir.display()))?;
     let cli = instance.host.harness().cli(harness);
@@ -270,7 +271,7 @@ async fn run<H: AgentHost>(instance: &Arc<Instance<H>>, turn_id: &str, stop: Can
     };
     let (program, prefix) = cli.program()?;
     let args: Vec<String> = prefix.iter().cloned().chain(args).collect();
-    let mut spawned = match launch::spawn(program, &args, &cwd, &instance.empty_gh_config_dir()) {
+    let mut spawned = match launch::spawn(program, &args, &cwd, &instance.empty_gh_config_dir(), &extra_env) {
         Ok(spawned) => spawned,
         Err(e) => {
             let message = format!("无法启动 {}（{}）：{e:#}", harness.label(), program.display());

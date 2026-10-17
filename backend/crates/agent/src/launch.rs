@@ -20,10 +20,17 @@ use tokio::task::JoinHandle;
 use crate::capability;
 
 /// Starts `program` with `args` in `cwd`, suspended: it does not run until [`run`]. `gh` is the
-/// empty config directory `gh` gets.
-pub fn spawn(program: &Path, args: &[String], cwd: &Path, gh: &Path) -> anyhow::Result<Spawned> {
+/// empty config directory `gh` gets; `extra` adds variables to the trimmed environment.
+pub fn spawn(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    gh: &Path,
+    extra: &[(String, String)],
+) -> anyhow::Result<Spawned> {
     std::fs::create_dir_all(gh).with_context(|| format!("creating {}", gh.display()))?;
-    let env = capability::env(gh);
+    let mut env = capability::env(gh);
+    env.extend(extra.iter().cloned());
     let spec = Spec { program, args, cwd, env: &env, env_remove: capability::REMOVED_VARS };
     Ok(process::spawn(&spec)?)
 }

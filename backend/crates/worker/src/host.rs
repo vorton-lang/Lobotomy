@@ -8,12 +8,13 @@ use std::sync::Mutex;
 use anyhow::Context;
 use lobotomy_agent::{AgentHost, HarnessConfig, Instance};
 use lobotomy_core::role::Role;
-use lobotomy_core::turn::Failure;
+use lobotomy_core::turn::{Failure, Turn};
 use lobotomy_harness::{Harness, Permission};
 use lobotomy_worker_protocol::event::{Event, Quota, Resources};
 use tokio::sync::broadcast;
 
-use crate::store::Store;
+use crate::environment::{AttemptDirs, Environment, Repo};
+use crate::store::{self, AttemptRow, Store};
 
 const INSTRUCTIONS: &str = include_str!("prompts/worker.md");
 
@@ -25,6 +26,8 @@ pub struct Config {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub permission: Permission,
+    /// The repository tasks work on. Without one, each task works in a plain folder.
+    pub repo: Option<Repo>,
 }
 
 /// What goes to the subscriber, once stored.
@@ -39,6 +42,7 @@ pub struct WorkerHost {
     pub root: PathBuf,
     pub config: Config,
     pub store: Store,
+    pub environment: Option<Environment>,
     /// The agent's MCP service, such as `http://127.0.0.1:4100`. Set once the server listens.
     pub mcp_base: Mutex<String>,
     pub outgoing: broadcast::Sender<Outgoing>,
@@ -50,10 +54,12 @@ impl WorkerHost {
     pub fn open(root: PathBuf, config: Config) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         let store = Store::open(&root.join("worker.db"))?;
+        let environment = config.repo.clone().map(|repo| Environment::new(&root, repo));
         Ok(Self {
             root,
             config,
             store,
+            environment,
             mcp_base: Mutex::new(String::new()),
             outgoing: broadcast::channel(1024).0,
             quota: Mutex::new(BTreeMap::new()),
@@ -117,11 +123,29 @@ impl AgentHost for WorkerHost {
         INSTRUCTIONS.replace("{name}", &role.name)
     }
 
-    /// The task's own directory. Until the environment has a repository (tech-plan.md §7 step 1,
-    /// group 5), it starts empty.
-    fn working_dir(&self, instance: &Instance<Self>, _role: &Role) -> anyhow::Result<PathBuf> {
-        let dir = instance.data_dir.join("work");
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        Ok(dir)
+    /// The clone of the turn's attempt; without a repository, a folder of the task's own.
+    fn working_dir(&self, instance: &Instance<Self>, turn: &Turn, _role: &Role) -> anyhow::Result<PathBuf> {
+        if self.environment.is_none() {
+            let dir = instance.data_dir.join("work");
+            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+            return Ok(dir);
+        }
+        let attempt = self.turn_attempt(&instance.id, turn)?;
+        Ok(AttemptDirs::new(&instance.data_dir, attempt.seq).clone)
+    }
+
+    fn env(&self, instance: &Instance<Self>, turn: &Turn) -> anyhow::Result<Vec<(String, String)>> {
+        let Some(environment) = &self.environment else { return Ok(Vec::new()) };
+        let attempt = self.turn_attempt(&instance.id, turn)?;
+        let port_base = attempt.port_base.with_context(|| format!("attempt {} is not prepared", attempt.id))?;
+        Ok(environment.agent_env(&AttemptDirs::new(&instance.data_dir, attempt.seq), port_base))
+    }
+}
+
+impl WorkerHost {
+    /// The attempt a turn of the task works on.
+    fn turn_attempt(&self, task_id: &str, turn: &Turn) -> anyhow::Result<AttemptRow> {
+        let core_task = turn.task_id.as_deref().with_context(|| format!("turn {} belongs to no attempt", turn.id))?;
+        self.store.read(|c| store::attempt_by_core(c, task_id, core_task))
     }
 }

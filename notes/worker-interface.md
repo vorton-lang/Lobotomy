@@ -180,7 +180,24 @@ evidence = { required = ["ci-ok"] }
 
 **空闲时也停在 `blocked`**（用户确认，2026-10-17）：turn 正常结束，但 agent 既没有汇报 done 也没有提问，而且没有排队的消息时，attempt 停在 `blocked`（`resume`），原因写明。理由：此时什么都不在运行，报 `working` 会把等待藏起来（§4）。会出现的情况：汇报的工具调用失败（#13 记录过一次被拒）；模型只在文字里说"做完了"或提问；只报了 `progress`；模型把命令放到后台后结束了 turn，而 print 模式下后台任务结束不会再唤醒它（harness-adapter.md §1.6 的实测）。
 
-还没做的：`progress` 事件（粒度待决，§12）；预算的执行（第 6 组随 CI 内循环一起做）；交付物、证据和 `adopt`（第 5、6 组），在此之前 `hello` 声明不支持，要求检查或开 PR 的任务在 `create_task` 时被拒。
+**本地文件夹环境加 git**（2026-10-17，第 1 步第 5 组）。启动时给了 `--upstream`，环境就按下面的方式工作；没给时，每个 task 用一个普通文件夹。
+- 每个 worker 宿主一个上游仓库的 bare 镜像。每个 attempt 准备时（状态 `preparing`），先从上游更新镜像，再从镜像 clone 一份，在分支 `lobotomy/<task>-<序号>` 上从基线开始。clone 的 origin 是镜像。
+- agent 的进程得到 L1 的变量：
+  - 自己的 `TMP`、`TEMP`、`TMPDIR`。
+  - 一份 attempt 专用的 git 配置（`GIT_CONFIG_GLOBAL`），加上 `GIT_CONFIG_NOSYSTEM=1`。这份配置里没有凭据助手，`remote.origin.pushurl` 指向一个不存在的地址，换行符按仓库原样，提交身份由宿主的参数给出。
+  - `LOBOTOMY_PORT_BASE`：从 42000 起，每个运行中的 attempt 分 10 个端口。
+- 环境在 clone 上运行的 git 命令用同一份配置，不运行 clone 里的 hook。
+- 交付：attempt 进入 `delivered` 时，agent 的进程树已经退出。环境把分支取回镜像，存在 `refs/lobotomy/<task>-<序号>` 下，发布 `change` 交付物（版本是 head SHA，附改动规模）；同时把 agent 的 done 说明发布为 `report` 交付物。审查返工后再交付，同一个交付物出新版本；没有变化的不再发布。
+- **实现时的选择**：agent 交付时如果留有未提交的改动，环境替它提交一次，提交说明写明"交付时由环境提交"，交付物标题也注明。理由：沿用原来"成果是工作目录的最终状态"的语义，不让改动丢在 clone 里。
+- 准备或取回失败时，attempt 记为 `failed`，原因写明。
+
+还没做的：
+- L1 的内存上限。
+- `close` 之后清理工作区：现在全部保留。
+- 从需要凭据的上游取镜像（第 6 组）。
+- `progress` 事件：粒度待决，见 §12。
+- 预算的执行：第 6 组随 CI 内循环一起做。
+- 证据和 `adopt`（第 6 组）。在此之前 `hello` 声明不支持，要求检查或开 PR 的任务在 `create_task` 时被拒。
 
 ## 11. 与现有实现的对应
 

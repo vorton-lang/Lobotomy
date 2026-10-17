@@ -9,13 +9,14 @@ use std::time::Duration;
 use anyhow::Context;
 use lobotomy_core::id::now_ms;
 use lobotomy_worker_protocol::event::{
-    AttemptState, Blocked, Event, EventBody, MessageStatus, Question, Receipt, TaskSnapshot,
+    Artifact, AttemptState, Blocked, Event, EventBody, MessageStatus, Question, Receipt, TaskSnapshot,
 };
 use lobotomy_worker_protocol::ops::{CloseOutcome, TaskSpec};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] =
+    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_environment.sql")];
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -64,6 +65,10 @@ pub struct AttemptRow {
     pub ending: Option<AttemptState>,
     pub ended: Option<Status>,
     pub superseded: Vec<String>,
+    /// The first of its ports, once its clone is ready.
+    pub port_base: Option<u16>,
+    /// The instance's attempt (review round) whose delivery the environment has taken.
+    pub delivered_round: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -124,7 +129,8 @@ fn task_row(r: &Row<'_>) -> rusqlite::Result<TaskRow> {
     })
 }
 
-const ATTEMPT_COLUMNS: &str = "id, task_id, seq, spec_version, core_task, ending, ended, superseded";
+const ATTEMPT_COLUMNS: &str =
+    "id, task_id, seq, spec_version, core_task, ending, ended, superseded, port_base, delivered_round";
 
 fn attempt_row(r: &Row<'_>) -> rusqlite::Result<AttemptRow> {
     Ok(AttemptRow {
@@ -140,6 +146,8 @@ fn attempt_row(r: &Row<'_>) -> rusqlite::Result<AttemptRow> {
         },
         ended: r.get::<_, Option<String>>(6)?.as_deref().map(json).transpose()?,
         superseded: json(&r.get::<_, String>(7)?)?,
+        port_base: r.get(8)?,
+        delivered_round: r.get(9)?,
     })
 }
 
@@ -200,6 +208,55 @@ pub fn attempt_for_spec(c: &Connection, task_id: &str, spec_version: u32) -> any
         attempt_row,
     )
     .optional()?)
+}
+
+/// The attempt that runs as the instance's task `core_task`.
+pub fn attempt_by_core(c: &Connection, task_id: &str, core_task: &str) -> anyhow::Result<AttemptRow> {
+    Ok(c.query_row(
+        &format!("SELECT {ATTEMPT_COLUMNS} FROM attempt WHERE task_id = ?1 AND core_task = ?2"),
+        [task_id, core_task],
+        attempt_row,
+    )?)
+}
+
+/// The attempt is ready: its clone exists. It gets the lowest port range no running attempt of
+/// this worker host has.
+pub fn set_prepared(tx: &Transaction<'_>, attempt_id: &str, start: u16, step: u16) -> anyhow::Result<u16> {
+    let mut stmt = tx.prepare("SELECT port_base FROM attempt WHERE port_base IS NOT NULL AND ended IS NULL")?;
+    let taken: Vec<u16> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let base = (0..).map(|i| start + i * step).find(|b| !taken.contains(b)).context("no port range left")?;
+    tx.execute("UPDATE attempt SET port_base = ?2 WHERE id = ?1", params![attempt_id, base])?;
+    Ok(base)
+}
+
+pub fn set_delivered_round(tx: &Transaction<'_>, attempt_id: &str, round: &str) -> anyhow::Result<()> {
+    tx.execute("UPDATE attempt SET delivered_round = ?2 WHERE id = ?1", params![attempt_id, round])?;
+    Ok(())
+}
+
+/// The latest change an earlier attempt of the task published: what a new one supersedes.
+pub fn earlier_change(c: &Connection, task_id: &str, attempt_id: &str) -> anyhow::Result<Option<String>> {
+    Ok(c.query_row(
+        "SELECT id FROM artifact WHERE task_id = ?1 AND attempt_id <> ?2 AND kind = 'change'
+         ORDER BY updated_at DESC LIMIT 1",
+        [task_id, attempt_id],
+        |r| r.get(0),
+    )
+    .optional()?)
+}
+
+/// The current version of an artifact, if it was published.
+pub fn artifact_version(c: &Connection, artifact_id: &str) -> anyhow::Result<Option<String>> {
+    Ok(c.query_row("SELECT json_extract(current, '$.version') FROM artifact WHERE id = ?1", [artifact_id], |r| {
+        r.get(0)
+    })
+    .optional()?)
+}
+
+fn artifacts(c: &Connection, attempt_id: &str) -> anyhow::Result<Vec<Artifact>> {
+    let mut stmt = c.prepare("SELECT current FROM artifact WHERE attempt_id = ?1 ORDER BY id")?;
+    let rows = stmt.query_map([attempt_id], |r| json(&r.get::<_, String>(0)?))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// The task's attempts asked to end that have not yet.
@@ -330,6 +387,14 @@ pub fn append(tx: &Transaction<'_>, task_id: &str, attempt_id: &str, body: Event
         EventBody::MessageReceipt { message_id, receipt } => {
             tx.execute("UPDATE message SET receipt = ?2 WHERE id = ?1", params![message_id, text(receipt)])?;
         }
+        EventBody::ArtifactPublished { artifact } => {
+            let kind = serde_json::to_value(artifact.kind)?.as_str().unwrap_or_default().to_owned();
+            tx.execute(
+                "INSERT INTO artifact (id, task_id, attempt_id, kind, current, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (id) DO UPDATE SET current = excluded.current, updated_at = excluded.updated_at",
+                params![artifact.artifact_id, task_id, attempt_id, kind, text(artifact), now_ms()],
+            )?;
+        }
         _ => {}
     }
     let seq: i64 =
@@ -362,6 +427,7 @@ pub fn snapshot(c: &Connection) -> anyhow::Result<Vec<TaskSnapshot>> {
             .into_iter()
             .map(|m| MessageStatus { message_id: m.id, receipt: m.receipt })
             .collect();
+        let artifacts = artifacts(c, &task.attempt_id)?;
         out.push(TaskSnapshot {
             task_id: task.id,
             spec_version: task.spec_version,
@@ -372,7 +438,7 @@ pub fn snapshot(c: &Connection) -> anyhow::Result<Vec<TaskSnapshot>> {
             closed: task.closed,
             question: task.question,
             messages,
-            artifacts: Vec::new(),
+            artifacts,
             evidence: Vec::new(),
             seq: task.seq,
         });

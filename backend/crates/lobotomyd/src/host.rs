@@ -16,7 +16,7 @@ use lobotomy_core::host::HostDb;
 use lobotomy_core::id::now_ms;
 use lobotomy_core::quota::{CheckOutcome, Domain};
 use lobotomy_core::role::Role;
-use lobotomy_core::turn::Failure;
+use lobotomy_core::turn::{Failure, Turn};
 use lobotomy_harness::{Harness, Model, Permission, claude};
 use tokio::sync::{Notify, broadcast};
 
@@ -224,7 +224,7 @@ impl AgentHost for Host {
     /// An empty directory of the role's own. The manager's is her instance's `work`
     /// (data-model.md §10.6); a project's roles each have one under theirs. Roles get no copy of
     /// the repository until the worker layer is replaced (#86).
-    fn working_dir(&self, instance: &Instance, role: &Role) -> anyhow::Result<PathBuf> {
+    fn working_dir(&self, instance: &Instance, _turn: &Turn, role: &Role) -> anyhow::Result<PathBuf> {
         let work = instance.data_dir.join("work");
         let dir = if role.kind == "manager" { work } else { work.join(&role.name) };
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;

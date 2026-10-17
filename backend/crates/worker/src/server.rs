@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use lobotomy_worker_protocol::event::{EVENT, RESOURCES};
+use lobotomy_worker_protocol::event::{ArtifactKind, EVENT, RESOURCES};
 use lobotomy_worker_protocol::ops::{
     Ack, Adopt, AgentCapabilities, Capabilities, Close, CreateTask, EnvironmentCapabilities, Hello, HelloResult,
     Revise, SendMessage, Snapshot, Stop, Subscribe,
@@ -114,6 +114,7 @@ async fn hello(tasks: &Tasks, params: lobotomy_worker_protocol::ops::HelloParams
         ));
     }
     let config = &tasks.host.config;
+    let repo = tasks.host.environment.is_some();
     Ok(HelloResult {
         protocol: PROTOCOL_VERSION.into(),
         capabilities: Capabilities {
@@ -124,11 +125,14 @@ async fn hello(tasks: &Tasks, params: lobotomy_worker_protocol::ops::HelloParams
                 steer: false,
                 interrupt: true,
             },
-            // A plain folder: no artifacts or evidence yet (tech-plan.md §7 step 1, group 4).
+            // No evidence yet: the forge comes with tech-plan.md §7 step 1, group 6.
             environment: EnvironmentCapabilities {
-                artifacts: Vec::new(),
+                artifacts: match repo {
+                    true => vec![ArtifactKind::Change, ArtifactKind::Report],
+                    false => vec![ArtifactKind::Report],
+                },
                 evidence: Vec::new(),
-                isolation: "folder".into(),
+                isolation: if repo { "local-folder" } else { "folder" }.into(),
                 platform: std::env::consts::OS.into(),
                 adopt: false,
             },

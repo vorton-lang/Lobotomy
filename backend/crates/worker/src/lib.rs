@@ -1,8 +1,8 @@
 //! The worker host that comes with Lobotomy (worker-interface.md): it takes tasks from the
-//! orchestrator over the worker protocol and runs each with the agent driver. Until the
-//! environment has a repository (tech-plan.md §7 step 1, group 5), each task works in a plain
-//! folder of its own.
+//! orchestrator over the worker protocol and runs each with the agent driver, in a clone of the
+//! repository it is given (`environment`), or else in a plain folder of the task's own.
 
+pub mod environment;
 pub mod host;
 pub mod server;
 pub mod store;

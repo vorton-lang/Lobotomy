@@ -77,7 +77,7 @@ impl HarnessConfig {
         // Apart from the quota checks' directory: the two may run at once.
         let cwd = dir.join("catalog");
         std::fs::create_dir_all(&cwd)?;
-        let mut spawned = launch::spawn(program, &args, &cwd, &dir.join("gh-empty"))?;
+        let mut spawned = launch::spawn(program, &args, &cwd, &dir.join("gh-empty"), &[])?;
         let io = launch::run(&mut spawned, b"", |stderr| tail(stderr, 4096)).await?;
         let mut stdout = String::new();
         BufReader::new(io.stdout).read_to_string(&mut stdout).await?;
@@ -101,7 +101,7 @@ impl HarnessConfig {
         let args: Vec<String> = prefix.iter().cloned().chain(args).collect();
         let cwd = dir.join("probe");
         std::fs::create_dir_all(&cwd)?;
-        let mut spawned = launch::spawn(program, &args, &cwd, &dir.join("gh-empty"))?;
+        let mut spawned = launch::spawn(program, &args, &cwd, &dir.join("gh-empty"), &[])?;
         let io = launch::run(&mut spawned, input.as_bytes(), |stderr| tail(stderr, 4096)).await?;
         let stderr_tail = io.stderr;
         let read = async {

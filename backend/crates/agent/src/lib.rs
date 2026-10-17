@@ -15,7 +15,7 @@ pub mod runner;
 use std::path::PathBuf;
 
 use lobotomy_core::role::Role;
-use lobotomy_core::turn::Failure;
+use lobotomy_core::turn::{Failure, Turn};
 use lobotomy_harness::{Harness, Permission};
 
 pub use crate::harness::{Cli, HarnessConfig};
@@ -45,8 +45,14 @@ pub trait AgentHost: Send + Sync + Sized + 'static {
     /// The role's instructions (roles-and-tasks.md §1.1).
     fn instructions(&self, role: &Role) -> String;
 
-    /// Where the role's CLI runs in `instance`, created if missing.
-    fn working_dir(&self, instance: &Instance<Self>, role: &Role) -> anyhow::Result<PathBuf>;
+    /// Where the turn's CLI runs, created if missing.
+    fn working_dir(&self, instance: &Instance<Self>, turn: &Turn, role: &Role) -> anyhow::Result<PathBuf>;
+
+    /// Variables the turn's CLI gets besides the trimmed environment (`capability`), such as its
+    /// own temporary directory.
+    fn env(&self, _instance: &Instance<Self>, _turn: &Turn) -> anyhow::Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
 }
 
 /// A rejected runtime command means its preconditions do not hold now. Anything else, a broken

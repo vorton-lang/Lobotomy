@@ -8,18 +8,22 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use lobotomy_agent::ignore_rejection;
 use lobotomy_agent::instance::Instance;
 use lobotomy_agent::runner::{self, db, launch, launch_registered, reconcile, runtime};
 use lobotomy_core::Caller;
 use lobotomy_core::question::open_questions;
 use lobotomy_core::task::{
-    Abandon, CreateTask, Phase, SendBack, SendMessage, StartAttempt, load_task, occupant, queued_messages,
+    Abandon, CreateTask, Phase, SendBack, SendMessage, StartAttempt, latest_attempt, load_task, occupant,
+    queued_messages,
 };
 use lobotomy_core::turn::{
     Continue, EndTurn, Hold, NewNativeSession, Outcome, RegisterTurn, TurnState, hold, last_turn, unfinished_turn,
 };
-use lobotomy_worker_protocol::event::{AttemptState, Blocked, Event, EventBody, Need, Question, Receipt};
+use lobotomy_worker_protocol::event::{
+    Artifact, ArtifactKind, AttemptState, Blocked, Event, EventBody, Need, Question, Receipt,
+};
 use lobotomy_worker_protocol::ops::{
     Action, AttemptRef, CloseOutcome, CloseParams, CreateTaskParams, Revised, SendMessageParams, StopLevel, StopParams,
     Stopped, TaskSpec,
@@ -29,6 +33,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::environment::{AttemptDirs, Environment, PORTS_PER_ATTEMPT};
 use crate::host::{Outgoing, WorkerHost};
 use crate::store::{self, AttemptRow, MessageRow, NewTask, Status, TaskRow};
 
@@ -547,6 +552,9 @@ async fn step(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> any
     let task = tasks.task_row(task_id).await.map_err(anyhow::Error::new)?;
     let attempt = tasks.attempt(&task.attempt_id).await.map_err(anyhow::Error::new)?;
     if attempt.ended.is_none() && attempt.ending.is_none() {
+        if tasks.host.environment.is_some() && attempt.port_base.is_none() && !prepare(tasks, &task, &attempt).await? {
+            return Ok(false);
+        }
         let core_task = attempt.core_task.clone();
         let busy = db(instance, |db| db.read(|c| occupant(c, ROLE))).await?;
         // The role still works on an earlier attempt until that one has ended.
@@ -565,6 +573,112 @@ async fn step(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> any
         tasks.read(move |c| store::ending_attempts(c, &id)).await?
     };
     Ok(task.closed.is_some() && task.status.state.is_final() && ending.is_empty())
+}
+
+/// Makes the attempt's clone before its first turn (worker-interface.md §4 `preparing`). Returns
+/// whether it is ready; an environment that cannot prepare it fails the attempt.
+async fn prepare(tasks: &Tasks, task: &TaskRow, attempt: &AttemptRow) -> anyhow::Result<bool> {
+    if task.status.state != AttemptState::Preparing {
+        let (id, attempt_id) = (task.id.clone(), attempt.id.clone());
+        let events = tasks
+            .write(move |tx| {
+                Ok(vec![store::append(tx, &id, &attempt_id, Status::of(AttemptState::Preparing).event())?])
+            })
+            .await?;
+        tasks.publish(events);
+    }
+    let host = tasks.host.clone();
+    let (task_id, seq) = (task.id.clone(), attempt.seq);
+    let prepared = tokio::task::spawn_blocking(move || {
+        let environment = host.environment.as_ref().context("no environment")?;
+        let dirs = AttemptDirs::new(&host.task_dir(&task_id), seq);
+        environment.prepare(&dirs, &Environment::branch(&task_id, seq))?;
+        anyhow::Ok(environment.repo.port_start)
+    })
+    .await?;
+    let (id, attempt_id) = (task.id.clone(), attempt.id.clone());
+    let (ready, events) = match prepared {
+        Ok(start) => {
+            tasks.write(move |tx| store::set_prepared(tx, &attempt_id, start, PORTS_PER_ATTEMPT)).await?;
+            (true, Vec::new())
+        }
+        Err(e) => {
+            tracing::error!(task = id, error = format!("{e:#}"), "could not prepare the attempt");
+            let status = Status {
+                state: AttemptState::Failed,
+                blocked: None,
+                reason: Some(format!("the environment could not prepare the attempt: {e:#}")),
+            };
+            let events = tasks
+                .write(move |tx| {
+                    store::set_ended(tx, &attempt_id, &status)?;
+                    Ok(vec![store::append(tx, &id, &attempt_id, status.event())?])
+                })
+                .await?;
+            (false, events)
+        }
+    };
+    tasks.publish(events);
+    Ok(ready)
+}
+
+/// Takes a delivery back (worker-interface.md §6): the change, kept in the mirror once the agent's
+/// processes have exited, and the agent's own account of it.
+async fn take_delivery(
+    tasks: &Tasks,
+    task: &TaskRow,
+    attempt: &AttemptRow,
+    round: &Round,
+) -> anyhow::Result<Vec<Artifact>> {
+    let mut out = Vec::new();
+    if tasks.host.environment.is_some() {
+        let host = tasks.host.clone();
+        let (task_id, seq) = (task.id.clone(), attempt.seq);
+        let delivered = tokio::task::spawn_blocking(move || {
+            let environment = host.environment.as_ref().context("no environment")?;
+            let keep = format!("refs/{}", Environment::branch(&task_id, seq));
+            environment.deliver(&AttemptDirs::new(&host.task_dir(&task_id), seq), &keep)
+        })
+        .await??;
+        if let Some(delivered) = delivered {
+            let (id, attempt_id) = (task.id.clone(), attempt.id.clone());
+            let supersedes = tasks.read(move |c| store::earlier_change(c, &id, &attempt_id)).await?;
+            let mut title = task.spec.title.clone();
+            if delivered.committed_leftovers {
+                title.push_str("（含交付时由环境提交的改动）");
+            }
+            out.push(Artifact {
+                artifact_id: format!("{}:change", attempt.id),
+                version: delivered.head,
+                kind: ArtifactKind::Change,
+                supersedes,
+                title,
+                url: None,
+                size: Some(delivered.size),
+                text: None,
+            });
+        }
+    }
+    if let Some(summary) = &round.summary {
+        out.push(Artifact {
+            artifact_id: format!("{}:report", attempt.id),
+            version: round.id.clone(),
+            kind: ArtifactKind::Report,
+            supersedes: None,
+            title: "交付说明".into(),
+            url: None,
+            size: None,
+            text: Some(summary.clone()),
+        });
+    }
+    let current = {
+        let ids: Vec<String> = out.iter().map(|a| a.artifact_id.clone()).collect();
+        tasks
+            .read(move |c| ids.iter().map(|id| store::artifact_version(c, id)).collect::<anyhow::Result<Vec<_>>>())
+            .await?
+    };
+    // A round that changed nothing publishes nothing again.
+    Ok(out.into_iter().zip(current).filter(|(a, v)| v.as_deref() != Some(a.version.as_str())).map(|(a, _)| a).collect())
 }
 
 /// Ends the attempts asked to end once no turn of theirs is left unfinished: a stop takes effect
@@ -623,6 +737,16 @@ struct Observed {
     core_seq: i64,
     /// The harness of the last turn, if it completed.
     completed_on: Option<String>,
+    /// The review round waiting for review, once the attempt is delivered.
+    round: Option<Round>,
+}
+
+/// A review round in the instance: one of its task's attempts.
+#[derive(Clone)]
+struct Round {
+    id: String,
+    /// The agent's account of its delivery: the title and body of its `done`.
+    summary: Option<String>,
 }
 
 /// Tells the orchestrator what changed in the task since it was last told: mismatches, the open
@@ -639,10 +763,38 @@ async fn observe(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> 
     if let Some(harness) = &seen.completed_on {
         tasks.host.quota_passed(harness);
     }
+    // A new delivery: its artifacts go out before the state that says it is delivered.
+    let (mut status, mut artifacts, mut delivered_round, mut ended) = (seen.status.clone(), Vec::new(), None, false);
+    if let Some(round) = seen.round.as_ref().filter(|r| attempt.delivered_round.as_deref() != Some(r.id.as_str())) {
+        match take_delivery(tasks, &task, &attempt, round).await {
+            Ok(published) => {
+                artifacts = published;
+                delivered_round = Some(round.id.clone());
+            }
+            Err(e) => {
+                tracing::error!(task = task_id, error = format!("{e:#}"), "could not take the delivery");
+                status = Status {
+                    state: AttemptState::Failed,
+                    blocked: None,
+                    reason: Some(format!("the environment could not take the delivery: {e:#}")),
+                };
+                ended = true;
+            }
+        }
+    }
     let (id, attempt_id) = (task_id.to_owned(), attempt.id.clone());
     let events = tasks
         .write(move |tx| {
             let mut events = Vec::new();
+            for artifact in artifacts {
+                events.push(store::append(tx, &id, &attempt_id, EventBody::ArtifactPublished { artifact })?);
+            }
+            if let Some(round) = &delivered_round {
+                store::set_delivered_round(tx, &attempt_id, round)?;
+            }
+            if ended {
+                store::set_ended(tx, &attempt_id, &status)?;
+            }
             for body in seen.mismatches {
                 events.push(store::append(tx, &id, &attempt_id, EventBody::MismatchFlagged { body })?);
             }
@@ -659,8 +811,8 @@ async fn observe(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> 
             for (message_id, receipt) in seen.receipts {
                 events.push(store::append(tx, &id, &attempt_id, EventBody::MessageReceipt { message_id, receipt })?);
             }
-            if seen.status != task.status {
-                events.push(store::append(tx, &id, &attempt_id, seen.status.event())?);
+            if status != task.status {
+                events.push(store::append(tx, &id, &attempt_id, status.event())?);
             }
             Ok(events)
         })
@@ -702,7 +854,14 @@ fn read_instance(
         }
     }
     let completed_on = last_turn(c, ROLE)?.filter(|t| t.outcome == Some(Outcome::Completed)).map(|t| t.harness);
-    Ok(Observed { status: derive(c, attempt)?, question, receipts, mismatches, core_seq: last, completed_on })
+    let status = derive(c, attempt)?;
+    let round = match status.state {
+        AttemptState::Delivered => {
+            latest_attempt(c, &attempt.core_task)?.map(|a| Round { id: a.id, summary: a.done_summary })
+        }
+        _ => None,
+    };
+    Ok(Observed { status, question, receipts, mismatches, core_seq: last, completed_on, round })
 }
 
 /// What became of a message in the instance.
@@ -735,7 +894,8 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
         reason: Some(reason),
     };
     Ok(match task.phase {
-        Phase::Queued => Status::of(AttemptState::Submitted),
+        // Its clone is being made, or its role still works on an earlier attempt.
+        Phase::Queued => Status::of(AttemptState::Preparing),
         Phase::Accepting => Status::of(AttemptState::Delivered),
         Phase::Done => Status::of(AttemptState::Adopted),
         Phase::Abandoned => Status::of(attempt.ending.unwrap_or(AttemptState::Abandoned)),

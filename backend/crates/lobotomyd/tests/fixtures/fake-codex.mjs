@@ -45,6 +45,7 @@ const diag = fs.existsSync('.git') ? '.git/' : '';
 const watched = [
   'GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_CONFIG_DIR',
   'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS',
+  'TMP', 'TEMP', 'TMPDIR', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'LOBOTOMY_PORT_BASE',
 ];
 fs.writeFileSync(`${diag}last-env.json`, JSON.stringify(Object.fromEntries(watched.map(k => [k, process.env[k] ?? null]))));
 const config = name => {

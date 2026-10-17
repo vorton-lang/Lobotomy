@@ -34,8 +34,13 @@ struct Worker {
 
 impl Worker {
     async fn start(root: &Path) -> Self {
+        Self::start_with(root, &[]).await
+    }
+
+    async fn start_with(root: &Path, extra: &[&str]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_lobotomy-worker"))
             .args(["--root".as_ref(), root.as_os_str(), "--harness".as_ref(), "codex".as_ref()])
+            .args(extra)
             .env("LOBOTOMY_CODEX", fixture("fake-codex.mjs"))
             .env("LOBOTOMY_CLAUDE", fixture("fake-claude.mjs"))
             .stdin(Stdio::piped())
@@ -280,5 +285,88 @@ async fn after_a_crash_the_snapshot_says_where_the_task_stands_and_later_events_
     let held = worker.state("t", AttemptState::Blocked).await;
     let EventBody::StateChanged { blocked: Some(why), .. } = held.body else { panic!("{held:?}") };
     assert_eq!(why.need, Need::Resume);
+    worker.quit().await;
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// The upstream repository: one commit on `main`.
+fn upstream(dir: &Path) -> PathBuf {
+    let repo = dir.join("upstream");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch", "main"]);
+    git(&repo, &["config", "user.name", "Test User"]);
+    git(&repo, &["config", "user.email", "user@example.com"]);
+    std::fs::write(repo.join("README.md"), "# project\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "--quiet", "-m", "initial"]);
+    repo
+}
+
+fn published(event: &Event) -> Option<&lobotomy_worker_protocol::event::Artifact> {
+    match &event.body {
+        EventBody::ArtifactPublished { artifact } => Some(artifact),
+        _ => None,
+    }
+}
+
+/// The agent works in its own clone with L1's variables and cannot push; once its processes have
+/// exited, the environment takes its work back into the mirror (worker-interface.md §6, §7).
+#[tokio::test]
+async fn a_delivery_is_taken_back_into_the_mirror() {
+    let dir = tempfile::tempdir().unwrap();
+    let upstream = upstream(dir.path());
+    let root = root(&dir);
+    let mut worker = Worker::start_with(&root, &["--upstream", upstream.to_str().unwrap()]).await;
+    worker.subscribe(BTreeMap::new()).await;
+    let attempt = worker.call::<CreateTask>(&create("t", "FAKE:done")).await.unwrap().attempt_id;
+    worker.state("t", AttemptState::Preparing).await;
+    let change = worker.event("the change", |e| published(e).is_some_and(|a| a.artifact_id.ends_with(":change"))).await;
+    let change = published(&change).unwrap().clone();
+    let report = worker.event("the report", |e| published(e).is_some_and(|a| a.artifact_id.ends_with(":report"))).await;
+    assert!(published(&report).unwrap().text.as_deref().unwrap().contains("写了 work.txt"));
+    worker.state("t", AttemptState::Delivered).await;
+
+    // The fake agent left work.txt uncommitted; the environment committed it.
+    assert_eq!(change.size.unwrap().files, 1);
+    assert!(change.title.contains("环境提交"), "{}", change.title);
+    let mirror = root.join("mirror.git");
+    assert_eq!(git(&mirror, &["rev-parse", "refs/lobotomy/t-1"]), change.version);
+    assert_eq!(git(&mirror, &["show", &format!("{}:work.txt", change.version)]), "hi");
+
+    let clone = root.join("tasks").join("t").join("a1");
+    assert_eq!(git(&clone, &["branch", "--show-current"]), "lobotomy/t-1");
+    let env: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(clone.join(".git").join("last-env.json")).unwrap()).unwrap();
+    assert_eq!(env["GIT_CONFIG_NOSYSTEM"], "1");
+    assert_eq!(env["LOBOTOMY_PORT_BASE"], "42000");
+    assert!(env["TMP"].as_str().unwrap().ends_with("a1.tmp"), "{env}");
+    // With the agent's git configuration, a push from the clone goes nowhere.
+    let push = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&clone)
+        .args(["push", "origin", "HEAD"])
+        .env("GIT_CONFIG_GLOBAL", env["GIT_CONFIG_GLOBAL"].as_str().unwrap())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(!push.status.success(), "the agent pushed to the mirror");
+
+    // Review rework: a new version of the same change.
+    worker.call::<SendMessage>(&message("t", "m1", "FAKE:done FAKE:text=again")).await.unwrap();
+    let next =
+        worker.event("the next version", |e| published(e).is_some_and(|a| a.artifact_id.ends_with(":change"))).await;
+    let next = published(&next).unwrap();
+    assert_eq!(next.artifact_id, format!("{attempt}:change"));
+    assert_ne!(next.version, change.version);
+    assert_eq!(git(&mirror, &["show", &format!("{}:work.txt", next.version)]), "again");
+    worker.state("t", AttemptState::Delivered).await;
+    let snapshot = worker.subscribe(BTreeMap::new()).await;
+    let versions: Vec<&str> = snapshot.tasks[0].artifacts.iter().map(|a| a.version.as_str()).collect();
+    assert!(versions.contains(&next.version.as_str()), "{versions:?}");
     worker.quit().await;
 }
