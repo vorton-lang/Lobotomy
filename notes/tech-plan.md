@@ -501,6 +501,7 @@
 - worker 的采用沿用验收对未投递消息的检查（用户定）。用户发给 worker、没有送到的消息，只有用户能明确放下；Angela 采用时遇到这类消息会被拒绝（data-model.md §4.2，#14）。交给过 worker 的任务关闭后不能重开（data-model.md §4.6）。
 - worker 的过程（agent 做了什么、跑了哪些命令），第 1 步不在界面上显示，留给第 3 步的"查看过程"和协议的 `read_log`（用户定）。
 - **实现**（`lobotomyd/src/workers.rs`）：后端为 `workers.toml` 的每个条目启动一个 worker 宿主，宿主退出 5 秒后重启。重启后按项目库里已应用的 seq 续订。项目打开时，worker 名写成 remote 的 role。项目调度器把 remote role 的排队任务交给 worker。Angela 的 send_to_role、accept、send_back、abandon、set_paused 遇到 worker 的任务时，走 worker 协议，其中 accept 带授权检查。配置格式见 `workers.rs` 开头的注释。
+  - `workers.toml` 只在后端启动时读一次。读不出来时，后端照常启动，但不启动任何 worker，也不改项目里 worker 的 role；host 快照带上原因，界面在「全部」和每个项目的右侧栏最上面写明（实现时的选择）。
 - 后端只运行 Angela 的 turn，不直接运行执行者（用户定）；项目调度器只把排队任务交给 worker。项目打开时，后端删除没有被任何记录引用的非 remote role，例如初始的 Malkuth。runner 的回归测试在 worker 宿主中（`worker/tests/runner.rs`）。e2e 和性能基线中的长对话由 Angela 在假 Codex 上的 turn 生成。
 
 **第 1 步的范围**：
@@ -576,6 +577,7 @@
 4. **非代码事情的交付物与验收**：先接哪一类？
 5. **Angela 的系统提示词**：后话（用户定）。
 6. **UI/UX 的具体设计**：§5 是借鉴清单和补充设计，布局与交互的细节还没过。图和 worker 抽象两个开放点已有答案（§4.1、§4.2 和 worker 接口设计稿）。
+7. **在 GUI 中编辑 worker 配置**：现在只能手写 host 目录的 `workers.toml`，改了要重启后端；新建项目后也要手写一条，#94 的试用卡在这一步。随第 3 步的界面一起设计：哪些字段放进 GUI，例如 harness、模型、权限；哪些留在文件里，例如凭据和授权路径。定下来时会改动"worker 的 harness 和模型写在 `workers.toml` 中"（#86，用户定）。
 
 ## 9. 第 0 步实验结果（2026-10-16 01:05–01:45，本机 Windows）
 

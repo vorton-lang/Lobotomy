@@ -55,6 +55,7 @@ const host: HostSnapshot = {
   attention: [quota],
   harnesses: [],
   angela: asking,
+  workers_error: null,
 };
 
 const angelaSnapshot: Snapshot = {

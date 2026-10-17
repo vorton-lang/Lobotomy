@@ -76,7 +76,14 @@ test('internal vocabulary stays secondary while abnormal endings remain visible'
     command_id: null,
     created_at: seq,
   });
-  await openHost(page, { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela }, undefined, {
+  const host: HostSnapshot = {
+    projects: [entry('alpha'), entry('beta')],
+    attention: [],
+    harnesses: [],
+    angela,
+    workers_error: null,
+  };
+  await openHost(page, host, undefined, {
     thread: {
       items: [
         item('item_3', 1, 'normal', 'agent_message', {
@@ -191,7 +198,13 @@ async function openHost(
 // A project's page has no composer, so going there unmounts it; the message being written to
 // Angela must still be there on return (found in use, 2026-10-17).
 test('a message being written to Angela survives a look at a project', async ({ page }) => {
-  await openHost(page, { projects: [entry('alpha'), entry('beta')], attention: [], harnesses: [], angela });
+  await openHost(page, {
+    projects: [entry('alpha'), entry('beta')],
+    attention: [],
+    harnesses: [],
+    angela,
+    workers_error: null,
+  });
   await page.getByLabel('消息').fill('还没写完的话');
   const projects = page.getByRole('navigation', { name: '项目' });
   await projects.getByRole('button', { name: /alpha/ }).click();
@@ -217,6 +230,7 @@ test('the settings are a page of their own, wherever the window is', async ({ pa
         { harness: 'claude', permission: 'full', models: claudeModels, efforts: ['low', 'medium', 'high'] },
       ],
       angela,
+      workers_error: null,
     },
     (name, args) => {
       sent.push([name, args]);
@@ -280,6 +294,7 @@ test('archiving from the settings asks first and leaves them usable', async ({ p
       { harness: 'codex', permission: 'auto_review', models: codexModels, efforts: ['low', 'medium', 'high'] },
     ],
     angela,
+    workers_error: null,
   };
   const sent: unknown[] = [];
   let finish!: () => void;

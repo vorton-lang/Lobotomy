@@ -209,6 +209,9 @@ pub struct Workers {
     host: Arc<Host>,
     projects: Weak<Projects>,
     entries: BTreeMap<String, Entry>,
+    /// Why `workers.toml` could not be read. No worker runs until it is fixed and the backend
+    /// starts again; the rest of the backend runs on.
+    error: Option<String>,
     clients: Mutex<HashMap<String, Arc<Client>>>,
     stop: CancellationToken,
     tasks: TaskTracker,
@@ -216,21 +219,35 @@ pub struct Workers {
 
 impl Workers {
     /// Reads `<host>/workers.toml`; without it there are no workers.
-    pub fn load(host: Arc<Host>, projects: &Arc<Projects>) -> anyhow::Result<Arc<Self>> {
+    pub fn load(host: Arc<Host>, projects: &Arc<Projects>) -> Arc<Self> {
         let path = host.dir.join("workers.toml");
-        let file: File = match std::fs::read_to_string(&path) {
-            Ok(text) => toml::from_str(&text).with_context(|| format!("reading {}", path.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => File::default(),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        let file = match std::fs::read_to_string(&path) {
+            Ok(text) => toml::from_str::<File>(&text).map_err(anyhow::Error::from),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(File::default()),
+            Err(e) => Err(e.into()),
         };
-        Ok(Arc::new(Self {
+        let (entries, error) = match file {
+            Ok(file) => (file.worker, None),
+            Err(e) => {
+                let error = format!("{}：{e:#}", path.display());
+                tracing::error!(error, "could not read the workers");
+                (BTreeMap::new(), Some(error))
+            }
+        };
+        Arc::new(Self {
             host,
             projects: Arc::downgrade(projects),
-            entries: file.worker,
+            entries,
+            error,
             clients: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
             tasks: TaskTracker::new(),
-        }))
+        })
+    }
+
+    /// Why `workers.toml` could not be read, if it could not.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     /// Starts a worker host for each entry, kept running until [`Workers::shutdown`].
@@ -348,8 +365,12 @@ impl Workers {
         Ok(())
     }
 
-    /// The project's roles for its workers, as the configuration lists them.
+    /// The project's roles for its workers, as the configuration lists them. A configuration that
+    /// could not be read says nothing about them: the roles stay as they were.
     pub async fn sync_roles(&self, project: &Project) -> anyhow::Result<()> {
+        if self.error.is_some() {
+            return Ok(());
+        }
         let workers = self.of_project(&self.project_name(&project.id)?);
         runtime(project, SyncWorkerRoles { workers }).await
     }

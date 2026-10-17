@@ -39,6 +39,7 @@ Rust 后端（独立进程，常驻） ←── WebSocket ──→ Electron �
 - **项目**：主区是这个项目执行者的 Thread：用户的消息、它的回复与工具调用、汇报、运行时的消息（例如退回的理由）。右侧栏是这个项目的"等你决定"和 Workboard（[roles-and-tasks.md](roles-and-tasks.md) §3）。点开任务，在任务面板中看交付说明，验收或退回（§7.4）。直接通路是常设的二等入口，不是临时方案（[#23](https://github.com/vorton-lang/Lobotomy/issues/23)，用户定）。
   - 项目页没有输入框（#86，用户定）。项目的执行者是 worker，不在后端运行；不带任务发给它的消息没有人接。给 worker 的消息经过它的任务：等你决定卡片中的回复，以及任务面板中的退回。
   - 项目还没有 worker 时，主区写明在 host 目录的 `workers.toml` 中加一个写着这个项目名的条目，重启后生效（#94）。
+  - `workers.toml` 读不出来时，所有 worker 都没有启动。「全部」和每个项目的右侧栏最上面写明这一点和出错的位置，改好后要重启（tech-plan.md §7 第 7 组）。
 - **顶栏**：在项目中显示仓库名；在「全部」中显示"全部项目"。
 - **role play 只在展示层**：名字，以及每个角色一个标识色和头像（§7.15）。
 - ⚙ 设置是单独的页面，见 §7.8。
@@ -163,7 +164,7 @@ CI 中固定运行合成场景（参照 OpenHands 的 `BENCH_MESSAGES` 与 Goose
 
 - 请求 `{id, method, params}`。关于项目的请求在 `params.project` 中写明项目 ID；`command` 的参数是 `{name, args, project}`。前端的 `call` 自动带上窗口正在显示的项目。
 - host 范围的方法不需要项目：
-  - `host`：host 的快照：各项目的登记、打不开的原因、"等你决定"（不含额度受阻）、是否有 turn 在运行；额度受阻的条目；各 harness 的权限模式；
+  - `host`：host 的快照：各项目的登记、打不开的原因、"等你决定"（不含额度受阻）、是否有 turn 在运行；额度受阻的条目；各 harness 的权限模式；`workers.toml` 读不出来的原因；
   - `command` 中的 `create_project`（新建项目，data-model.md §10.4）、`archive_project`、`unarchive_project`、`retry_open`（参数 `project_id`，data-model.md §10.3、§10.4）、`quota_retry`、`set_permission`、`shutdown`。额度重试后，所有项目的调度器都被唤醒。归档要等被中断的 CLI 退出，最长约 30 秒，请求在归档完成后才返回。
 - 项目范围的方法：
   - `snapshot`：快照，含"等你决定"的条目；

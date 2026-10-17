@@ -360,6 +360,9 @@ pub struct HostSnapshot {
     attention: Vec<Attention>,
     harnesses: Vec<HarnessView>,
     angela: AngelaStatus,
+    /// Why `workers.toml` could not be read: no worker runs until it is fixed and the backend
+    /// starts again.
+    workers_error: Option<String>,
 }
 
 /// Angela as the host shows her (data-model.md §10.6). Projects run without her.
@@ -423,7 +426,8 @@ pub async fn host_snapshot(
         .filter(|domain| domain.as_ref().map_or(true, Domain::is_blocked))
         .map(|domain| Ok(Attention::Quota { domain: domain? }))
         .collect::<anyhow::Result<_>>()?;
-    let snapshot = HostSnapshot { projects: statuses, attention, harnesses: harnesses(host)?, angela };
+    let workers_error = host.workers.get().and_then(|w| w.error()).map(str::to_owned);
+    let snapshot = HostSnapshot { projects: statuses, attention, harnesses: harnesses(host)?, angela, workers_error };
     Ok(snapshot)
 }
 

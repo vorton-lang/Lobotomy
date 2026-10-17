@@ -21,6 +21,7 @@ export const hostSnapshot = (): HostSnapshot => ({
   attention: [],
   harnesses: [],
   angela: { error: null, busy: false, attention: [] },
+  workers_error: null,
 });
 
 export const role = (taskId: string | null): RoleView => ({

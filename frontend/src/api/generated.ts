@@ -169,7 +169,12 @@ export type HostSnapshot = { projects: Array<ProjectStatus>,
  * What waits for the user outside any project: the blocked quota domains, each once
  * (data-model.md §10.5).
  */
-attention: Array<Attention>, harnesses: Array<HarnessView>, angela: AngelaStatus, };
+attention: Array<Attention>, harnesses: Array<HarnessView>, angela: AngelaStatus,
+/**
+ * Why `workers.toml` could not be read: no worker runs until it is fixed and the backend
+ * starts again.
+ */
+workers_error: string | null, };
 
 export type Item = { id: string, seq: number, turn_id: string, kind: string, content: JsonValue,
 /**

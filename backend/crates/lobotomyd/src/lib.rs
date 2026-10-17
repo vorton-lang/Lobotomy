@@ -50,7 +50,7 @@ impl Backend {
         *host.mcp_base.lock().unwrap() = format!("http://{addr}");
         let projects = Arc::new(Projects::new(host.clone()));
         // Before the projects open: each gets its workers' roles, and its scheduler gives them tasks.
-        let workers = workers::Workers::load(host.clone(), &projects)?;
+        let workers = workers::Workers::load(host.clone(), &projects);
         let _ = host.workers.set(workers.clone());
         projects.open_registered().await?;
         workers.start();

@@ -89,6 +89,7 @@ const host = (...ids: string[]): HostSnapshot => ({
   attention: [],
   harnesses: [],
   angela: angela(),
+  workers_error: null,
 });
 
 /** Answers the oldest request of this method. */
