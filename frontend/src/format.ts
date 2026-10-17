@@ -22,6 +22,7 @@ import type {
   RoleView,
   TaskDetail,
   TaskView,
+  ThreadPage,
   Turn,
 } from './api/types';
 import type { AttemptState } from './api/generated';
@@ -274,6 +275,21 @@ export function splitReply(text: string): ReplyPart[] {
   const rest = text.slice(last);
   if (rest.trim() || parts.length === 0) parts.push({ kind: 'text', text: rest });
   return parts;
+}
+
+/**
+ * The Markdown a page's rows show unopened: the replies, in Angela's conversation between their
+ * references, and the messages other than the runtime's. Empty texts render nothing.
+ */
+export function pageMarkdown(page: ThreadPage, angela: boolean): string[] {
+  const replies = page.items
+    .filter((i) => i.kind === 'agent_message')
+    .flatMap((i) => {
+      const text = textOf(jsonObject(i.content).text);
+      return angela ? splitReply(text).flatMap((p) => (p.kind === 'text' ? [p.text] : [])) : [text];
+    });
+  const messages = [...page.messages, ...page.queued].filter((m) => m.source !== 'runtime').map((m) => textOf(m.body));
+  return [...replies, ...messages].filter((text) => text.trim());
 }
 
 /**

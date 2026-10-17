@@ -32,7 +32,8 @@ import type {
   ThreadPage,
   Turn,
 } from './api/types';
-import { liveSize } from './format';
+import { liveSize, pageMarkdown } from './format';
+import { renderMarkdown } from './markdown/render';
 
 export interface ThreadState {
   role: string;
@@ -497,11 +498,16 @@ let appliedThread = 0;
  * an applied one is dropped: that one already carries what it has. An older page carries only
  * its own items' turns, not the newest state: it fits while the item it was read before is still
  * the oldest, and only adds what the thread lacks, keeping the queue.
+ *
+ * The page's Markdown is rendered before it applies, so that its rows mount at their height:
+ * rendered after they mounted, the rows shrank from their plain text, and the list moved under
+ * the user as they scrolled up into it (tech-plan.md §7 实际验收).
  */
 async function readThread(params: { role: string; before?: number; after?: number }, mode: Mode) {
   const { project } = useStore.getState();
   const request = mode === 'older' ? 0 : ++threadRequest;
   const page = await call('thread', params);
+  await Promise.all(pageMarkdown(page, project === null).map((text) => renderMarkdown(text)));
   if (!showing(project)) return;
   if (mode === 'older' ? useStore.getState().thread.items[0]?.seq !== params.before : request < appliedThread) return;
   if (mode !== 'older') appliedThread = request;
