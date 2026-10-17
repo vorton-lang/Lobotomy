@@ -27,7 +27,6 @@ export function Workboard() {
           + 新任务
         </button>
       </h3>
-      {/* The tasks in work sit under the role that works on them. */}
       {roles.map((role) => (
         <div key={role.name} className="role-group">
           <RoleLine role={role} task={tasks.find((t) => t.id === role.task_id)} />

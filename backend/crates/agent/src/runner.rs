@@ -344,7 +344,19 @@ async fn drive<H: AgentHost>(
     let mut lines = BufReader::new(io.stdout).lines();
     let mut seen = Observed::default();
     let mut output = Output::new(harness);
-    while let Some(line) = lines.next_line().await? {
+    let mut exited = None;
+    loop {
+        let line = tokio::select! {
+            status = spawned.child.wait(), if exited.is_none() => {
+                exited = Some(status?);
+                // Descendants may still hold stdout open. End them, then drain the buffered
+                // output so the CLI's final events are recorded before the turn ends.
+                spawned.end_tree()?;
+                continue;
+            }
+            line = lines.next_line() => line?,
+        };
+        let Some(line) = line else { break };
         raw.write_all(line.as_bytes()).await?;
         raw.write_all(b"\n").await?;
         seen.output = true;
@@ -356,7 +368,12 @@ async fn drive<H: AgentHost>(
         }
     }
     raw.flush().await?;
-    let status = spawned.child.wait().await?;
+    let status = match exited {
+        Some(status) => status,
+        None => spawned.child.wait().await?,
+    };
+    // Stdout can close first while a descendant keeps only stderr open.
+    spawned.end_tree()?;
     let _ = stderr_copy.await;
 
     let interrupted = instance.running.lock().unwrap().get(&turn.id).is_some_and(|t| t.interrupt_requested);

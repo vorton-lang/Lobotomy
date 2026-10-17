@@ -57,6 +57,55 @@ impl Client {
     }
 }
 
+/// The token-leak regression from #16 (9f543fb), formerly part of the retired search test.
+#[tokio::test]
+async fn angelas_turn_token_stays_out_of_gui_reads_and_continue_results() {
+    use lobotomy_core::turn::{Outcome, TurnState, load_turn};
+
+    let dir = tempfile::tempdir().unwrap();
+    let backend = start(dir.path()).await;
+    let angela = backend.backend.angela().unwrap();
+    let mut gui = Client::open(backend.addr, &backend.project.host.gui_token, "angela").await;
+    let message = gui
+        .command("send_message", json!({ "request_id": "m1", "role": "Angela", "body": "FAKE:fail" }))
+        .await
+        .unwrap();
+    let turn = wait_for("Angela's failed turn", || {
+        let turn_id: Option<String> = angela
+            .db
+            .read(|c| {
+                Ok(c.query_row("SELECT turn_id FROM message WHERE id = ?1", [message["id"].as_str().unwrap()], |r| {
+                    r.get(0)
+                })?)
+            })
+            .unwrap();
+        let turn_id = turn_id?;
+        let turn = angela.db.read(|c| load_turn(c, &turn_id)).unwrap();
+        (turn.state == TurnState::Ended).then_some(turn)
+    })
+    .await;
+    assert_eq!(turn.outcome, Some(Outcome::Failed));
+    assert!(!turn.token.is_empty(), "the stored turn must have a token to test its omission");
+
+    let serialized = serde_json::to_value(&turn).unwrap();
+    assert!(serialized.get("token").is_none());
+    let thread = gui.call("thread", json!({ "role": "Angela" })).await.unwrap();
+    assert_eq!(thread["turns"][&turn.id]["id"], turn.id);
+    let snapshot = gui.call("snapshot", json!({})).await.unwrap();
+    assert_eq!(snapshot["roles"][0]["hold"]["turn"]["id"], turn.id);
+    for view in [&serialized, &thread, &snapshot] {
+        assert!(!view.to_string().contains(&turn.token), "a turn token reached a serialized view");
+    }
+
+    // The continue result leaked the token separately from Turn serialization (#59, 55ef58c).
+    let continued = gui.command("continue", json!({ "request_id": "c1", "role": "Angela" })).await.unwrap();
+    let next = angela.db.read(|c| load_turn(c, continued["turn_id"].as_str().unwrap())).unwrap();
+    assert!(continued.get("token").is_none());
+    assert!(!continued.to_string().contains(&next.token), "a turn token reached the continue result");
+    drop(angela);
+    backend.shutdown(Duration::from_secs(5)).await;
+}
+
 #[tokio::test]
 async fn the_gui_can_stop_the_backend() {
     let dir = tempfile::tempdir().unwrap();

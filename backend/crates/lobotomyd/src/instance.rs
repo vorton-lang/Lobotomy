@@ -1,5 +1,5 @@
-//! The backend's instances: a project, or Angela (data-model.md §10.6), each run by the agent
-//! driver on this backend's [`Host`].
+//! The backend's project and Angela instances (data-model.md §10.6), using the agent driver's
+//! storage on this backend's [`Host`]. Only Angela runs turns here; executors run in worker hosts.
 
 pub use lobotomy_agent::instance::{LiveItem, LiveTurn, lock_file};
 

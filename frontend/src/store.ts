@@ -347,7 +347,6 @@ export function setPermission(harness: string, permission: Permission) {
   return act('set_permission', { harness, permission });
 }
 
-/** The host snapshot says which project to show; its snapshot names the main role. */
 async function reloadAll() {
   await loadHost();
   await reloadProject();

@@ -57,8 +57,8 @@ impl BlobStore {
     }
 
     /// Writes the file unless it already exists. Called before the transaction that inserts the
-    /// blob row: a crash in between leaves a file without a row, which the startup sweep deletes
-    /// (data-model.md §6). The reverse order could leave a row without its file.
+    /// blob row: a crash in between can leave a file without a row. The reverse order could
+    /// leave a row without its file.
     pub fn put(&self, text: &str) -> Result<Blob> {
         let hash = format!("{:x}", Sha256::digest(text.as_bytes()));
         let path = self.path(&hash);

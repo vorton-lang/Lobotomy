@@ -1,4 +1,4 @@
-// A stand-in for `claude -p --output-format stream-json` in backend and GUI tests. It prints events
+// A stand-in for `claude -p --output-format stream-json` in backend and worker tests. It prints events
 // in the format of Claude Code 2.1.283 (harness-adapter.md §1.4) and calls org_report on the real
 // MCP service through the URL in the file of its `--mcp-config` argument.
 //

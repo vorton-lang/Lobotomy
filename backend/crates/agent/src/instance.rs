@@ -1,7 +1,7 @@
-//! What runs turns and keeps their transcripts: in the backend a project, or Angela
-//! (data-model.md §10.6). Each has a database with the project schema, a blob store, the turns
-//! this process runs and their live items; the runner, the GUI's pushes and the transcript reads
-//! work on any of them.
+//! Instance storage and turn state shared by the backend and worker host (tech-plan.md §7).
+//! The backend uses it for project records and Angela; the worker host uses one per task.
+//! Only Angela and worker task instances run turns. Each instance has a database with the core
+//! schema, a blob store and live items for the turns its owning process runs.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -22,24 +22,24 @@ use crate::AgentHost;
 /// singletons, so one process runs several instances (data-model.md §10). What the instances of
 /// a process share is in the host `H` it refers to.
 pub struct Instance<H> {
-    /// In the backend, a project's registered id (data-model.md §10.3) or Angela's.
+    /// A registered project id, Angela's id, or the worker task id.
     pub id: String,
     pub data_dir: PathBuf,
     pub db: Arc<Db>,
     pub blobs: BlobStore,
     pub host: Arc<H>,
-    /// Turns this backend runs right now, with the pids to interrupt them.
+    /// Turns this process runs right now, with the pids to interrupt them.
     pub running: Mutex<HashMap<String, RunningTurn>>,
     /// The turn runners: closing the instance waits for them (data-model.md §10.4).
     pub tasks: TaskTracker,
     /// Items of running turns that have started and not completed, for live display. Kept in
-    /// memory only; a backend crash loses them (frontend.md §3).
+    /// memory only; a process crash loses them (frontend.md §3).
     pub live: Mutex<HashMap<String, LiveTurn>>,
     /// Bumped on every change to `live`, so the GUI service knows when to push it.
     pub live_version: AtomicU64,
     /// Wakes the scheduler after a change. Shared with the MCP tools of its roles.
     pub wake: Arc<Notify>,
-    /// An exclusive lock on `<data_dir>/lock`, held while the instance lives: two backends on one
+    /// An exclusive lock on `<data_dir>/lock`, held while the instance lives: two processes on one
     /// data directory would run two schedulers on one database (#16). The OS releases it when
     /// the process ends, however it ends.
     _lock: InstanceLock,
@@ -123,7 +123,7 @@ impl<H: AgentHost> Instance<H> {
     }
 
     /// Stops the runners of the turns still running: each CLI ends with its process tree, as when
-    /// the backend exits. Their turns are reconciled when the instance opens next (data-model.md
+    /// the owning process exits. Their turns are reconciled when the instance opens next (data-model.md
     /// §3.3).
     pub async fn end_turns(&self) -> anyhow::Result<()> {
         let turns = std::mem::take(&mut *self.running.lock().unwrap());
@@ -143,7 +143,6 @@ impl<H: AgentHost> Instance<H> {
         result
     }
 
-    /// Changes the live view of running turns.
     pub fn update_live(&self, change: impl FnOnce(&mut HashMap<String, LiveTurn>)) {
         change(&mut self.live.lock().unwrap());
         self.live_version.fetch_add(1, Ordering::Relaxed);

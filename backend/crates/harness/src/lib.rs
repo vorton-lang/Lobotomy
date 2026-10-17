@@ -1,4 +1,4 @@
-//! Harness adapters and the platform layer (notes/harness-adapter.md): Codex, and Claude from M2.
+//! Harness adapters and the platform layer (notes/harness-adapter.md): Codex and Claude.
 
 pub mod claude;
 pub mod codex;

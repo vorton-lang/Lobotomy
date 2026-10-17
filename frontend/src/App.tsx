@@ -1,7 +1,7 @@
 // The window (frontend.md §2): the project list on the left. 「全部」 is the conversation
 // with Angela, with what waits for the user in every project on the right; without Angela, that
-// list fills it. A project shows as in M1: the executor's thread in the main area, what waits for
-// the user and the Workboard on the right, a task's detail in a panel over the thread. The side
+// list fills it. A project shows its recorded thread in the main area, what waits for the user
+// and the Workboard on the right, a task's detail in a panel over the thread. The side
 // columns and the task panel can be dragged wider or narrower. The settings are a page of their
 // own, in place of all this while open (§7.8).
 
