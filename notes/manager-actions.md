@@ -216,7 +216,7 @@ v1 中 Lobotomy 不 push。push 与 GitHub 导出的内容范围、触发和批�
 
 本节未实现，列入 roadmap 待排。
 
-Lobotomy 管理项目的全部状态，包括 GitHub 上的状态。外部系统的连接由 Lobotomy 持有，role 经 Lobotomy MCP 访问，权限集中控制。GitHub 是第一个实例，之后的外部系统沿用同一模式。
+Lobotomy 管理项目的全部状态，包括 GitHub 上的状态。外部系统的连接由 Lobotomy 持有，role 经 Lobotomy MCP 访问，权限集中控制。本节以 GitHub 为例。GitHub 以外的外部系统经外部系统 adapter 接入，凭据由 adapter 保存，见 [external-adapter.md](external-adapter.md)。
 
 - **接入方式**：后端调用 `gh` CLI，使用用户自己的登录，Lobotomy 不读取、不保存 token。原则与 harness adapter 相同：官方 CLI、正常用法。role 进程看不到这份登录（见 5.1），凭据只在后端这一层。
 - **权限**：按 role × 动作配置 allow / confirm / deny。默认值：

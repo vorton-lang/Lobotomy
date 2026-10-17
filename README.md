@@ -38,6 +38,7 @@
 
 - [Tech plan](notes/tech-plan.md)：#86 的新方向：分层、worker、forge 与治理、编排层（图、事件、Angela）、界面、现有代码的去留与顺序
 - [Worker interface](notes/worker-interface.md)：编排层与 worker 之间 task 级的接口：操作、状态、事件、交付物与证据、凭据
+- [External adapter](notes/external-adapter.md)：后端与外部系统 adapter 之间的接口：能力声明、操作、登录状态，以及给 Angela 的工具（草案，未实现）
 - [Roadmap](notes/roadmap.md)：M1 执行闭环 → M2 第二个 harness → M3 多项目 → M4 最小的全局 Angela；其余按真实使用排序
 - [Architecture](notes/architecture.md)：进程、代码布局、技术选择与测试
 - [Data model](notes/data-model.md)：命令、占用、turn 与消息、任务流、副作用、对话记录、额度、项目与 host
