@@ -55,6 +55,7 @@ agent 负责验收并合并这些修复 PR：看改动是否只修了失败的�
 | `backend/crates/core` | `cargo test -p lobotomy-core` |
 | `backend/crates/harness` | `cargo test -p lobotomy-harness` |
 | `backend/crates/worker-protocol` | `cargo test -p lobotomy-worker-protocol` |
+| `backend/crates/worker`（worker 宿主） | `cargo test -p lobotomy-worker` |
 | 运行时：`backend/crates/agent`（runner、执行者的 MCP 工具、恢复），以及 `backend/crates/lobotomyd` 中的额度、调度与 Angela | `cargo test -p lobotomyd --test backend <名字片段>`，只运行名字含这个片段的测试，例如 `quota`、`claude`、`angela` |
 | `backend/crates/agent/src/launch.rs`、`capability.rs`（子进程的环境） | `cargo test -p lobotomyd --test environment` |
 | `backend/crates/lobotomyd/src/gui` | `cargo test -p lobotomyd --test gui` |

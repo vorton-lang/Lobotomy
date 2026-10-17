@@ -42,6 +42,7 @@ backend/                 Rust workspace
   crates/harness         Claude 与 Codex 的 adapter：参数、事件解析；平台层（Windows 的 Job、控制台、句柄，Linux 的进程组）
   crates/agent           agent 驱动：实例、turn runner、启动与能力裁剪、每个 turn 的 MCP 路由与执行者的工具
   crates/worker-protocol worker 协议的类型与 JSON-RPC 帧格式（worker-interface.md）
+  crates/worker          自带的 worker 宿主 lobotomy-worker：每个 task 一个实例，经 stdio 说 worker 协议
   crates/lobotomyd       后端进程：host、项目实例与 Angela、调度器、GUI WebSocket、MCP HTTP
     examples/            export-gui-types.rs：从 Rust 类型导出 GUI 的 TypeScript 类型（需 ts-rs feature）
     tests/fixtures       假 Codex、假 Claude（fake-*.mjs）

@@ -171,6 +171,17 @@ evidence = { required = ["ci-ok"] }
 - 协议自己的拒绝用错误码 -32000，原因写在 `data.reason`，例如 `unknown_task`、`invalid_spec`。
 - 未实现：生成 TypeScript 与 JSON Schema（第 1 步只有 Rust 两端用它）；`read_log`；`put_blob`。
 
+**自带的 worker 宿主**（2026-10-17，[worker](../backend/crates/worker)，第 1 步第 4 组）。可执行文件是 `lobotomy-worker`，由编排层启动，用 stdio 通信，日志写 stderr。做法如下：
+- 每个 task 一个实例目录，里面是一个项目结构的数据库，agent 是其中唯一的 role。每个 attempt 是这个库里的一个任务。turn、消息、问题沿用 data-model.md §3、§4 的规则，由共用的 agent 驱动运行。宿主自己的 `worker.db` 记录 task、attempt、消息的对应关系和发出的事件。
+- attempt 的状态由实例中任务的阶段推出：执行中为 `working`；有开放问题为 `blocked`（`needs_input`）；上一个 turn 异常结束为 `blocked`（`resume`）；未结束的 turn 处于 unknown 为 `unknown`；等验收为 `delivered`。
+- `send_message` 按状态落到实例里：`delivered` 时是退回返工，`resume` 时是继续，其余是排队给下一个 turn。
+- `stop` 和 `revise` 先打断进程；等 attempt 没有未结束的 turn，才把它记为 `canceled`。`close(abandoned)` 同理，记为 `abandoned`。
+- 额度：turn 被拒时，宿主发 `resources` 通知，自己不封住额度域，也不自动续接；之后同一 harness 上有 turn 正常结束，就报告额度已恢复。
+
+下面一项是实现时的选择，**待用户确认**：turn 正常结束，但 agent 既没有汇报 done 也没有提问，而且没有排队的消息时，attempt 也停在 `blocked`（`resume`），原因写明。理由：此时什么都不在运行，报 `working` 会把等待藏起来（§4）。
+
+还没做的：`progress` 事件（粒度待决，§12）；预算的执行（第 6 组随 CI 内循环一起做）；交付物、证据和 `adopt`（第 5、6 组），在此之前 `hello` 声明不支持，要求检查或开 PR 的任务在 `create_task` 时被拒。
+
 ## 11. 与现有实现的对应
 
 | 现有 | 去向 |

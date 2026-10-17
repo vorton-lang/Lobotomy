@@ -691,6 +691,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "lobotomy-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "lobotomy-agent",
+ "lobotomy-core",
+ "lobotomy-harness",
+ "lobotomy-worker-protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lobotomy-worker-protocol"
 version = "0.1.0"
 dependencies = [

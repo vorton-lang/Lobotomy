@@ -165,7 +165,8 @@ impl Db {
 ///
 /// A database a newer backend has migrated further is refused, not used: this backend does not
 /// know what the newer tables mean. A project's then fails to open alone (data-model.md §10.3).
-pub(crate) fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
+/// The worker host applies its own database's migrations with it too.
+pub fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
     let applied = conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))? as usize;
     if applied > migrations.len() {
         return Err(Error::rejected(
