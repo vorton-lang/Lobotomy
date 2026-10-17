@@ -69,7 +69,9 @@ turn 和 native session 留在 worker 内部。对外只以不透明 ID 出现�
 
 - 任务说明无效，或要求了 worker 没有声明的能力时，`create_task` 当场返回错误，不创建 attempt。开始执行后的失败一律记为 `failed` 并写明原因。不设 `rejected` 状态。
   - **语义更新**（用户确认，2026-10-17，第 1 步第 4 组开工前）：turn 异常结束不算 attempt 失败。turn 被 `stop(turn)` 打断、CLI 失败或额度被拒时，attempt 停在 `blocked`，`need` 为 `resume`，写明原因，不带问题。编排层用 `send_message` 续接；worker 宿主沿用现有的"继续"语义起新 turn：同一会话、同一工作区，harness 没开始过的 turn 原样重发（data-model.md §3.4、§9.2）。运行时不自动续接，额度失败也一样。`failed` 只用于 attempt 级的失败，例如预算用完、环境准备不了。
+  - **语义更新**（用户，2026-10-17，第 1 步实际验收）：续接是对一次停下的回复。每次停下带一个 ID，像问题一样；`send_message` 写明它回复哪一次停下。第一条回复关掉这次停下，之后对同一 ID 的回复被拒绝，并说明谁在什么时候已经回复。不写回复对象的消息仍是普通消息，排到下一个 turn。依据：验收中用户和 Angela 几乎同时续接，后到的一条被当成普通消息排进下一轮。未实现，见 tech-plan.md §7"实际验收"。
 - 可选能力：`read_log(task_id, attempt_id, cursor)` 按需读完整日志，供排查用。
+  - **语义更新**（用户，2026-10-17）：task 目录用完即删，不放持久内容。过程记录改由 worker 推给编排层保存：agent 每完成一个条目，worker 带 seq 推送；`close` 带上编排层已存到的 seq，worker 确认没有更晚的条目后才删目录。这样 worker 搬到远端后，查看过程也不必经过网络去问 worker，`read_log` 不再需要。未实现，随第 3 步"查看过程"做。
 - worker → 编排层只有一种请求：`put_blob(hash, chunk)`，按内容哈希分块上传非代码交付物，内容存进 Lobotomy 的文件库（§6）。
 - 不设"暂停"原语。依据：实验和调研都显示，暂停在各家实现里都不可靠；需要时由编排层停止，之后再续接。
 

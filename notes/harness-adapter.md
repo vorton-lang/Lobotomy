@@ -225,6 +225,8 @@ Lobotomy 不恢复被中断的执行现场。
 1. 运行时调用 harness 的原生中断或退出路径。
 2. 运行时等待 CLI 退出。归档超过宽限期时强制结束所属进程组或 Job Object，确认其中的进程已退出，再释放项目。Linux 已退出但尚未回收的僵尸进程不再运行，不阻止这一步。
 
+**语义更新**（用户，2026-10-17）：退出时不再先中断再等待，直接结束 CLI 的进程树；被结束的 turn 在下次启动时照常核对。依据：第 1 步实际验收中，Codex 在 10 秒内没有响应 Ctrl+C，用户只看到应用迟迟不退出；强制结束后，任务照样在同一个会话里续接。没有证据表明多等能多留下什么。未实现，见 tech-plan.md §7"实际验收"。
+
 丢弃 runner、关闭进程句柄和 kill-on-drop 都只作兜底，不能代替正常收尾中的退出确认。
 
 OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功。
@@ -252,7 +254,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 **测试**：
 
 - [backend/crates/harness/tests/process_tree.rs](../backend/crates/harness/tests/process_tree.rs)：在两个平台上，确认结束时 CLI 与它的子进程都已退出；丢弃进程的所有者时也结束整个进程树。
-- [backend/crates/lobotomyd/tests/backend.rs](../backend/crates/lobotomyd/tests/backend.rs)：归档时经辅助进程中断，不响应中断的 CLI 在宽限期后连同进程树结束。
+- [backend/crates/worker/tests/runner.rs](../backend/crates/worker/tests/runner.rs)：停止 turn 时经辅助进程中断，不响应中断的 CLI 在宽限期后连同进程树结束。原来测归档时这一行为的后端测试，随本地执行者的路径删除（2026-10-17）。
 - 原来 `harness/tests/process.rs`（Windows）测挂起、存活检查和关闭 Job 时结束孙进程，backend.rs 另测经辅助进程中断一个 turn。它们于 2026-10-17 随测试退役删除（#86）。
 
 ### 1.9 权限模式

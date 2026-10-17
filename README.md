@@ -2,7 +2,7 @@
 
 > 状态（2026-10-17）：M1 执行闭环、M2（第二个 harness：Claude Code）与 M3 多项目已经完成。M4 最小的全局 Manager Angela 的三步都已实现，见 [Roadmap](notes/roadmap.md)。
 >
-> 项目按 [#86](https://github.com/vorton-lang/Lobotomy/issues/86) 转向新方向，见 [技术方案](notes/tech-plan.md)。私有存储、采集、验证、预览与试用已经删除。共用的 agent 驱动与外部 worker 宿主已经接入；后端只运行 Angela 的 turn，执行者在 worker 宿主中运行。第 1 步的真实任务验收还没有完成，范围见技术方案 §7。
+> 项目按 [#86](https://github.com/vorton-lang/Lobotomy/issues/86) 转向新方向，见 [技术方案](notes/tech-plan.md)。私有存储、采集、验证、预览与试用已经删除。共用的 agent 驱动与外部 worker 宿主已经接入；后端只运行 Angela 的 turn，执行者在 worker 宿主中运行。第 1 步已于 2026-10-17 做过实际验收：Angela 派出的真实任务走完了 PR、CI 和按版本合并；验收发现的问题与跟进见技术方案 §7"实际验收"。
 
 一个长期在线、位于现有 coding harness 之上的 agent 组织运行时：用户主要与 Manager 协作，系统承载长期角色、原生 session、可恢复状态和组织级工作界面。
 
