@@ -77,6 +77,10 @@ pub struct Agent {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub permission: Option<String>,
+    /// Variables the worker host, and so its agent's CLI, gets, such as another provider's
+    /// endpoint (tech-plan.md §4.5).
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 /// The repository the worker's tasks work on, and its forge.
@@ -341,7 +345,12 @@ impl Workers {
         let project = self.project(&entry.project).with_context(|| format!("project {} is not open", entry.project))?;
         let root = self.host.dir.join("workers").join(name);
         let mut command = Command::new(worker_program()?);
-        command.args(entry.args(&root)).stdin(Stdio::piped()).stdout(Stdio::piped()).kill_on_drop(true);
+        command
+            .args(entry.args(&root))
+            .envs(&entry.agent.env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .kill_on_drop(true);
         #[cfg(windows)]
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         let mut child = command.spawn().context("starting the worker host")?;

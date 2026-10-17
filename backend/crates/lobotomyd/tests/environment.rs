@@ -24,6 +24,10 @@ async fn harness_processes_do_not_see_gh_tokens() {
         unsafe { std::env::set_var(name, "dummy") };
     }
     let dir = tempfile::tempdir().unwrap();
+    // A role's own variables reach its turns only (tech-plan.md §4.5).
+    std::fs::create_dir_all(host_dir(dir.path())).unwrap();
+    let vars = "[Malkuth]\nANTHROPIC_BASE_URL = \"https://example.test/anthropic\"\n[Angela]\nANTHROPIC_AUTH_TOKEN = \"not hers to see\"\n";
+    std::fs::write(host_dir(dir.path()).join("role-env.toml"), vars).unwrap();
     let backend = start(dir.path()).await;
 
     // A role turn.
@@ -36,6 +40,8 @@ async fn harness_processes_do_not_see_gh_tokens() {
     assert_eq!(env["GH_CONFIG_DIR"], backend.project.empty_gh_config_dir().to_string_lossy().as_ref());
     assert_eq!(env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1", "memory is Lobotomy's, not the harness's");
     assert_eq!(env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1", "background work would end with the turn");
+    assert_eq!(env["ANTHROPIC_BASE_URL"], "https://example.test/anthropic");
+    assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], Value::Null, "another role's variables stay its own");
 
     // A quota check.
     let host = backend.project.host.clone();

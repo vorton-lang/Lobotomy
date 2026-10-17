@@ -263,6 +263,7 @@
 
 - **测试期的模型**（用户，2026-10-17）：测试时 Angela 先用 DeepSeek API。理由：便宜、快；能力弱，更容易暴露运行时的问题，从而给出补强方向。Fable 或 Opus 太强，运行时有缺陷也能把活做完，问题藏起来。
   - 接法：DeepSeek 官方文档给出了 Claude Code 的接法，设 `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`、`ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_MODEL` 等环境变量（官方文档，2026-10）。Claude Code 本身不改，Angela 仍用通用的 agent 驱动；角色配置要能按角色设置这几个变量，不能影响 worker。
+    - 实现（2026-10-17，第 1 步第 9 组）：变量写在 host 目录的 `role-env.toml` 里，按 role 名分节，例如 `[Angela]`。每个 turn 启动时读一次，改了从下一个 turn 起生效；别的 role 拿不到。worker 的变量写在 `workers.toml` 条目的 `agent.env` 里。Angela 在设置里另选了模型时，`--model` 会盖过 `ANTHROPIC_MODEL`，用 DeepSeek 时要把她的模型留空。
   - 型号与价格（官方价格页，2026-10）：`deepseek-flash`（V4.1-Flash）和 `deepseek-v4-pro`，上下文都是 1M。flash 每百万 token：未命中缓存的输入 0.15–0.30 美元，命中缓存 0.003–0.006 美元，输出 0.60–1.20 美元（区间为闲时与高峰）。不支持 `cache_control`，缓存由 DeepSeek 自动处理。
   - 待实测：DeepSeek 文档把"MCP servers"列为不支持，这里指的应是 API 的服务端 MCP 连接器；Claude Code 把本地 MCP 工具作为普通工具定义发送，Angela 的 MCP 工具应当可用，要实测确认。
   - API key 是用户自己的付费凭据，不是 claude.ai 的凭据，Lobotomy 可以保存。

@@ -234,6 +234,28 @@ impl AgentHost for Host {
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         Ok(dir)
     }
+
+    /// The variables `<host>/role-env.toml` gives the turn's role, read for each turn, so a change
+    /// applies from the next turn on. Angela uses it to run Claude Code on DeepSeek
+    /// (tech-plan.md §4.5); other roles, and the workers, are not affected:
+    ///
+    /// ```toml
+    /// [Angela]
+    /// ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+    /// ANTHROPIC_AUTH_TOKEN = "…"
+    /// ANTHROPIC_MODEL = "deepseek-flash"
+    /// ```
+    fn env(&self, _instance: &Instance, turn: &Turn) -> anyhow::Result<Vec<(String, String)>> {
+        let path = self.dir.join("role-env.toml");
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let mut roles: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> =
+            toml::from_str(&text).with_context(|| format!("reading {}", path.display()))?;
+        Ok(roles.remove(&turn.role).map(|vars| vars.into_iter().collect()).unwrap_or_default())
+    }
 }
 
 /// The GUI token, created on first use: two ULIDs give 160 random bits.
