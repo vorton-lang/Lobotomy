@@ -1,8 +1,6 @@
 # Lobotomy
 
-> 状态（2026-10-17）：M1 执行闭环、M2（第二个 harness：Claude Code）与 M3 多项目已经完成。M4 最小的全局 Manager Angela 的三步都已实现，见 [Roadmap](notes/roadmap.md)。
->
-> 项目按 [#86](https://github.com/vorton-lang/Lobotomy/issues/86) 转向新方向，见 [技术方案](notes/tech-plan.md)。私有存储、采集、验证、预览与试用已经删除。共用的 agent 驱动与外部 worker 宿主已经接入；后端只运行 Angela 的 turn，执行者在 worker 宿主中运行。第 1 步已于 2026-10-17 做过实际验收：Angela 派出的真实任务走完了 PR、CI 和按版本合并；验收发现的问题与跟进见技术方案 §7"实际验收"。
+> 状态：全局的 Manager Angela 和 worker 层可用。Angela 派出的任务由 worker 在自己的 clone 里完成，开 PR、跑 CI，再按版本合并。方向见[技术方案](notes/tech-plan.md)（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)），已知问题和下一步见其中 §7。
 
 一个长期在线、位于现有 coding harness 之上的 agent 组织运行时：用户主要与 Manager 协作，系统承载长期角色、原生 session、可恢复状态和组织级工作界面。
 
@@ -10,7 +8,7 @@
 
 ## 现在能做什么
 
-执行者由 host 目录中 `workers.toml` 配置的 worker 提供，每个条目指定项目名和 harness，可选模型。worker 在宿主准备的工作区中使用官方 Codex CLI 或 Claude Code；项目中的旧执行者不再由后端运行。在 GUI 中，你可以：
+执行者由 host 目录中 `workers.toml` 配置的 worker 提供，每个条目指定项目名和 harness，可选模型。worker 在宿主准备的工作区中使用官方 Codex CLI 或 Claude Code。在 GUI 中，你可以：
 
 - 给项目配置的 worker 建任务，查看任务面板中的交付说明、PR 与检查；
 - 在「等你决定」的卡片中回答 worker 提出的问题；
@@ -21,7 +19,7 @@
 - 你可以"回复"她的某一条消息，指定你在回什么；她转达你的话时会带上它，你的消息下写明转给了谁。
 - 右侧栏的"共识"列出她记下的目标、决定和约束，各附你的原话。
 
-独立审查角色 Yesod 还没有实现。worker 的执行过程目前不在界面显示；第 1 步的范围与实际验收标准见技术方案 §7。
+独立审查角色 Yesod 还没有实现。worker 的执行过程不在界面显示。
 
 ## 从源码运行
 
