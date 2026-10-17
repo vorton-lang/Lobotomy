@@ -9,14 +9,17 @@ use std::time::Duration;
 use anyhow::Context;
 use lobotomy_core::id::now_ms;
 use lobotomy_worker_protocol::event::{
-    Artifact, AttemptState, Blocked, Event, EventBody, MessageStatus, Question, Receipt, TaskSnapshot,
+    Artifact, AttemptState, Blocked, Event, EventBody, Evidence, MessageStatus, Question, Receipt, TaskSnapshot,
 };
 use lobotomy_worker_protocol::ops::{CloseOutcome, TaskSpec};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
-const MIGRATIONS: &[&str] =
-    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_environment.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_environment.sql"),
+    include_str!("../migrations/0003_forge.sql"),
+];
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -69,6 +72,12 @@ pub struct AttemptRow {
     pub port_base: Option<u16>,
     /// The instance's attempt (review round) whose delivery the environment has taken.
     pub delivered_round: Option<String>,
+    pub pr: Option<(u64, String)>,
+    /// CI failures handed back to the agent, and the version of the last one.
+    pub ci_rounds: u32,
+    pub handed_back: Option<String>,
+    /// The artifact version adopted, as `<artifact_id>@<version>`.
+    pub adopted: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -130,7 +139,8 @@ fn task_row(r: &Row<'_>) -> rusqlite::Result<TaskRow> {
 }
 
 const ATTEMPT_COLUMNS: &str =
-    "id, task_id, seq, spec_version, core_task, ending, ended, superseded, port_base, delivered_round";
+    "id, task_id, seq, spec_version, core_task, ending, ended, superseded, port_base, delivered_round, pr_number, pr_url,
+     ci_rounds, handed_back, adopted";
 
 fn attempt_row(r: &Row<'_>) -> rusqlite::Result<AttemptRow> {
     Ok(AttemptRow {
@@ -148,6 +158,13 @@ fn attempt_row(r: &Row<'_>) -> rusqlite::Result<AttemptRow> {
         superseded: json(&r.get::<_, String>(7)?)?,
         port_base: r.get(8)?,
         delivered_round: r.get(9)?,
+        pr: match (r.get::<_, Option<i64>>(10)?, r.get::<_, Option<String>>(11)?) {
+            (Some(number), Some(url)) => Some((number as u64, url)),
+            _ => None,
+        },
+        ci_rounds: r.get(12)?,
+        handed_back: r.get(13)?,
+        adopted: r.get(14)?,
     })
 }
 
@@ -243,6 +260,42 @@ pub fn earlier_change(c: &Connection, task_id: &str, attempt_id: &str) -> anyhow
         |r| r.get(0),
     )
     .optional()?)
+}
+
+pub fn set_pull_request(tx: &Transaction<'_>, attempt_id: &str, number: u64, url: &str) -> anyhow::Result<()> {
+    tx.execute(
+        "UPDATE attempt SET pr_number = ?2, pr_url = ?3 WHERE id = ?1",
+        params![attempt_id, number as i64, url],
+    )?;
+    Ok(())
+}
+
+/// A CI failure on `version` went back to the agent.
+pub fn hand_back(tx: &Transaction<'_>, attempt_id: &str, version: &str) -> anyhow::Result<()> {
+    tx.execute(
+        "UPDATE attempt SET ci_rounds = ci_rounds + 1, handed_back = ?2 WHERE id = ?1",
+        params![attempt_id, version],
+    )?;
+    Ok(())
+}
+
+pub fn set_adopted(tx: &Transaction<'_>, attempt_id: &str, adopted: &str) -> anyhow::Result<()> {
+    tx.execute("UPDATE attempt SET adopted = ?2 WHERE id = ?1", params![attempt_id, adopted])?;
+    Ok(())
+}
+
+/// An artifact's current version, if it was published.
+pub fn artifact(c: &Connection, artifact_id: &str) -> anyhow::Result<Option<Artifact>> {
+    let current: Option<String> =
+        c.query_row("SELECT current FROM artifact WHERE id = ?1", [artifact_id], |r| r.get(0)).optional()?;
+    Ok(current.as_deref().map(serde_json::from_str).transpose()?)
+}
+
+/// The evidence on one version of an artifact.
+pub fn evidence(c: &Connection, artifact_id: &str, version: &str) -> anyhow::Result<Vec<Evidence>> {
+    let mut stmt = c.prepare("SELECT current FROM evidence WHERE artifact_id = ?1 AND version = ?2 ORDER BY name")?;
+    let rows = stmt.query_map([artifact_id, version], |r| json(&r.get::<_, String>(0)?))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// The current version of an artifact, if it was published.
@@ -395,6 +448,13 @@ pub fn append(tx: &Transaction<'_>, task_id: &str, attempt_id: &str, body: Event
                 params![artifact.artifact_id, task_id, attempt_id, kind, text(artifact), now_ms()],
             )?;
         }
+        EventBody::EvidenceUpdated { evidence } => {
+            tx.execute(
+                "INSERT INTO evidence (artifact_id, version, name, task_id, current, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (artifact_id, version, name) DO UPDATE SET current = excluded.current, updated_at = excluded.updated_at",
+                params![evidence.artifact_id, evidence.version, evidence.name, task_id, text(evidence), now_ms()],
+            )?;
+        }
         _ => {}
     }
     let seq: i64 =
@@ -428,6 +488,10 @@ pub fn snapshot(c: &Connection) -> anyhow::Result<Vec<TaskSnapshot>> {
             .map(|m| MessageStatus { message_id: m.id, receipt: m.receipt })
             .collect();
         let artifacts = artifacts(c, &task.attempt_id)?;
+        let mut on_them = Vec::new();
+        for a in &artifacts {
+            on_them.extend(evidence(c, &a.artifact_id, &a.version)?);
+        }
         out.push(TaskSnapshot {
             task_id: task.id,
             spec_version: task.spec_version,
@@ -439,7 +503,7 @@ pub fn snapshot(c: &Connection) -> anyhow::Result<Vec<TaskSnapshot>> {
             question: task.question,
             messages,
             artifacts,
-            evidence: Vec::new(),
+            evidence: on_them,
             seq: task.seq,
         });
     }

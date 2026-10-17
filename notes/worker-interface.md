@@ -191,13 +191,21 @@ evidence = { required = ["ci-ok"] }
 - **实现时的选择**：agent 交付时如果留有未提交的改动，环境替它提交一次，提交说明写明"交付时由环境提交"，交付物标题也注明。理由：沿用原来"成果是工作目录的最终状态"的语义，不让改动丢在 clone 里。
 - 准备或取回失败时，attempt 记为 `failed`，原因写明。
 
+**GitHub forge**（2026-10-17，第 1 步第 6 组）。启动时给了 `--forge github --repo <owner/name>`，环境就按下面的方式工作。
+- 凭据：worker 宿主以 GitHub App 的身份签发 token，限定在这个仓库，有效一小时，提前十分钟换新；也可以用环境变量 `LOBOTOMY_FORGE_TOKEN` 直接给 token，测试就用这种方式。宿主读到这个变量后，立即从自己的环境中删掉，免得 agent 的进程继承。git 通过环境变量里的 `http.extraHeader` 拿到 token，token 不出现在命令行参数和 URL 中。
+- 允许开 PR 的任务交付时，环境从镜像把分支推到上游，再开 PR；如果这个分支已经有开着的 PR，就沿用。`change` 交付物的链接就是这个 PR。
+- 证据：读取交付版本上的 check run，每个 check 一条来源为 `environment` 的证据。有检查还没出结果时，每 20 秒读一次。
+- 状态：必需的检查都通过了，才是 `delivered`；还在等时是 `working`，原因写明在等哪些检查。
+- CI 内循环：必需的检查失败时，环境把失败的检查和失败 job 日志的末尾（最多 80 行）作为退回意见交给 agent，在同一会话里返工。这件事每个版本只做一次。`ci_rounds` 用完后，attempt 记为 `failed`。`turns` 预算用完后也记为 `failed`。
+- `adopt`：版本必须仍是当前版本，必需的检查必须在这个版本上通过，然后用 GitHub 的合并接口做 squash 合并，并指定 head SHA。PR 的 head 变了（409）记为 `version_changed`，GitHub 拒绝合并记为 `conflict`。合并成功后，删掉远端分支。重复调用 `adopt` 返回同一个结果。
+- attempt 被停止或放弃时，关掉它的 PR。
+
+实测（2026-10-17，真实的 vorton-lang/Lobotomy，只读）：App 签发 token、读取 check run、取失败 job 的日志末尾都正常。日志端点会跳转到下载地址，跳转能正常跟随。开 PR、推送和合并还只在假 GitHub 上测过，留到第 1 步结束时的实际验收。
+
 还没做的：
 - L1 的内存上限。
 - `close` 之后清理工作区：现在全部保留。
-- 从需要凭据的上游取镜像（第 6 组）。
 - `progress` 事件：粒度待决，见 §12。
-- 预算的执行：第 6 组随 CI 内循环一起做。
-- 证据和 `adopt`（第 6 组）。在此之前 `hello` 声明不支持，要求检查或开 PR 的任务在 `create_task` 时被拒。
 
 ## 11. 与现有实现的对应
 

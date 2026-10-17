@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use lobotomy_worker_protocol::event::{ArtifactKind, EVENT, RESOURCES};
+use lobotomy_worker_protocol::event::{ArtifactKind, EVENT, EvidenceSource, RESOURCES};
 use lobotomy_worker_protocol::ops::{
     Ack, Adopt, AgentCapabilities, Capabilities, Close, CreateTask, EnvironmentCapabilities, Hello, HelloResult,
     Revise, SendMessage, Snapshot, Stop, Subscribe,
@@ -99,9 +99,7 @@ async fn handle(tasks: &Arc<Tasks>, request: Request) -> Response {
         Revise::NAME => call!(Revise, |p| tasks.revise(p)),
         Stop::NAME => call!(Stop, |p| tasks.stop(p)),
         Close::NAME => call!(Close, |p| async { tasks.close(p).await.map(|()| Ack {}) }),
-        Adopt::NAME => {
-            call!(Adopt, |_| async { Err(RpcError::rejected("unsupported", "this environment does not adopt")) })
-        }
+        Adopt::NAME => call!(Adopt, |p| tasks.adopt(p)),
         other => Response::err(id, RpcError::new(rpc::METHOD_NOT_FOUND, format!("no method {other}"))),
     }
 }
@@ -114,7 +112,7 @@ async fn hello(tasks: &Tasks, params: lobotomy_worker_protocol::ops::HelloParams
         ));
     }
     let config = &tasks.host.config;
-    let repo = tasks.host.environment.is_some();
+    let (repo, forge) = (tasks.host.environment.is_some(), tasks.host.forge.is_some());
     Ok(HelloResult {
         protocol: PROTOCOL_VERSION.into(),
         capabilities: Capabilities {
@@ -125,16 +123,18 @@ async fn hello(tasks: &Tasks, params: lobotomy_worker_protocol::ops::HelloParams
                 steer: false,
                 interrupt: true,
             },
-            // No evidence yet: the forge comes with tech-plan.md §7 step 1, group 6.
             environment: EnvironmentCapabilities {
                 artifacts: match repo {
                     true => vec![ArtifactKind::Change, ArtifactKind::Report],
                     false => vec![ArtifactKind::Report],
                 },
-                evidence: Vec::new(),
+                evidence: match forge {
+                    true => vec![EvidenceSource::Environment],
+                    false => Vec::new(),
+                },
                 isolation: if repo { "local-folder" } else { "folder" }.into(),
                 platform: std::env::consts::OS.into(),
-                adopt: false,
+                adopt: forge,
             },
         },
     })

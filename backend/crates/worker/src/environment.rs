@@ -83,16 +83,26 @@ impl Environment {
         format!("lobotomy/{safe}-{seq}")
     }
 
-    /// Clones the upstream repository bare, once, and brings its branches up to date.
-    pub fn refresh_mirror(&self) -> anyhow::Result<()> {
+    /// Clones the upstream repository bare, once, and brings its branches up to date. `auth`
+    /// carries the forge's token, if the upstream needs one.
+    pub fn refresh_mirror(&self, auth: &[(String, String)]) -> anyhow::Result<()> {
         let mirror = self.mirror();
         if !mirror.join("HEAD").exists() {
             let parent = mirror.parent().context("the mirror has no parent directory")?;
-            git(parent, &["clone", "--bare", "--quiet", &self.repo.upstream, "mirror.git"], &[])?;
+            git(parent, &["clone", "--bare", "--quiet", &self.repo.upstream, "mirror.git"], auth)?;
             git(&mirror, &["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"], &[])?;
         }
         // Only the upstream's branches are pruned; the attempts' commits are kept elsewhere.
-        git(&mirror, &["fetch", "--quiet", "--prune", "origin"], &[])?;
+        git(&mirror, &["fetch", "--quiet", "--prune", "origin"], auth)?;
+        Ok(())
+    }
+
+    /// Pushes the commits kept under `keep` to `branch` upstream. The environment pushes from its
+    /// mirror, never from the agent's clone, whose configuration and hooks are the agent's
+    /// (worker-interface.md §7).
+    pub fn push(&self, keep: &str, branch: &str, auth: &[(String, String)]) -> anyhow::Result<()> {
+        let refspec = format!("+{keep}:refs/heads/{branch}");
+        git(&self.mirror(), &["push", "--quiet", &self.repo.upstream, &refspec], auth)?;
         Ok(())
     }
 
@@ -109,8 +119,8 @@ impl Environment {
     }
 
     /// Makes the attempt's clone: from the mirror, on its own branch from the base.
-    pub fn prepare(&self, dirs: &AttemptDirs, branch: &str) -> anyhow::Result<()> {
-        self.refresh_mirror()?;
+    pub fn prepare(&self, dirs: &AttemptDirs, branch: &str, auth: &[(String, String)]) -> anyhow::Result<()> {
+        self.refresh_mirror(auth)?;
         std::fs::create_dir_all(&dirs.tmp).with_context(|| format!("creating {}", dirs.tmp.display()))?;
         std::fs::create_dir_all(self.no_hooks())?;
         std::fs::write(&dirs.gitconfig, self.gitconfig())

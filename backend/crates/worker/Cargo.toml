@@ -19,6 +19,11 @@ tokio = { workspace = true, features = ["io-std"] }
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+base64 = "0.23.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "rustls"] }
 
 [dev-dependencies]
+# The fake forge in tests/forge.rs.
+axum = { workspace = true, features = ["json"] }
 tempfile.workspace = true

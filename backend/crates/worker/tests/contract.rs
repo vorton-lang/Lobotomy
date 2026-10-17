@@ -1,161 +1,17 @@
 //! The worker host as the orchestrator sees it: the protocol on its stdin and stdout, with the fake
 //! Codex (worker-interface.md §3–§5, §9).
 
-use std::collections::{BTreeMap, VecDeque};
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+mod common;
+
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use lobotomy_worker_protocol::event::{AttemptState, Event, EventBody, Need, Receipt};
+use common::*;
+use lobotomy_worker_protocol::event::{AttemptState, EventBody, Need, Receipt};
 use lobotomy_worker_protocol::ops::{
-    Action, Budget, Close, CloseOutcome, CloseParams, CreateTask, CreateTaskParams, Hello, HelloParams, Revise,
-    SendMessage, SendMessageParams, Snapshot, Stop, StopLevel, StopParams, Subscribe, SubscribeParams, TaskSpec,
+    Close, CloseOutcome, CloseParams, CreateTask, CreateTaskParams, Revise, SendMessage, SendMessageParams, Stop,
+    StopLevel, StopParams,
 };
-use lobotomy_worker_protocol::rpc::{self, Id, Message, Request, RpcError};
-use lobotomy_worker_protocol::{Method, PROTOCOL_VERSION};
-use tokio::io::BufReader;
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-
-const WAIT: Duration = Duration::from_secs(60);
-
-fn fixture(name: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lobotomyd/tests/fixtures").join(name);
-    serde_json::to_string(&["node".to_owned(), path.to_string_lossy().into_owned()]).unwrap()
-}
-
-/// The orchestrator's side of one worker host process.
-struct Worker {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    next_id: i64,
-    events: VecDeque<Event>,
-}
-
-impl Worker {
-    async fn start(root: &Path) -> Self {
-        Self::start_with(root, &[]).await
-    }
-
-    async fn start_with(root: &Path, extra: &[&str]) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_lobotomy-worker"))
-            .args(["--root".as_ref(), root.as_os_str(), "--harness".as_ref(), "codex".as_ref()])
-            .args(extra)
-            .env("LOBOTOMY_CODEX", fixture("fake-codex.mjs"))
-            .env("LOBOTOMY_CLAUDE", fixture("fake-claude.mjs"))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
-        let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut worker = Self { child, stdin, stdout, next_id: 0, events: VecDeque::new() };
-        let hello = worker.call::<Hello>(&HelloParams { protocols: vec![PROTOCOL_VERSION.into()] }).await.unwrap();
-        assert_eq!(hello.capabilities.agent.harness, "codex");
-        worker
-    }
-
-    async fn call<M: Method>(&mut self, params: &M::Params) -> Result<M::Result, RpcError> {
-        self.next_id += 1;
-        let id = Id::Number(self.next_id);
-        rpc::write(&mut self.stdin, &Message::Request(Request::new::<M>(id.clone(), params))).await.unwrap();
-        loop {
-            match self.read().await {
-                Message::Response(response) if response.id == id => return response.into_result::<M>(),
-                Message::Response(other) => panic!("a response to another request: {other:?}"),
-                Message::Notification(_) | Message::Request(_) => {}
-            }
-        }
-    }
-
-    /// The next message; events go to the queue on the way.
-    async fn read(&mut self) -> Message {
-        let message = tokio::time::timeout(WAIT, rpc::read(&mut self.stdout))
-            .await
-            .expect("the worker host said nothing for a minute")
-            .unwrap()
-            .expect("the worker host closed its stdout");
-        if let Message::Notification(n) = &message
-            && n.method == "event"
-        {
-            self.events.push_back(serde_json::from_value(n.params.clone()).unwrap());
-        }
-        message
-    }
-
-    /// The first event, from the queue or later, that `wanted` accepts; the ones before it are
-    /// consumed.
-    async fn event(&mut self, what: &str, wanted: impl Fn(&Event) -> bool) -> Event {
-        let deadline = tokio::time::Instant::now() + WAIT;
-        loop {
-            while let Some(event) = self.events.pop_front() {
-                if wanted(&event) {
-                    return event;
-                }
-            }
-            assert!(tokio::time::Instant::now() < deadline, "timed out waiting for {what}");
-            self.read().await;
-        }
-    }
-
-    async fn state(&mut self, task: &str, state: AttemptState) -> Event {
-        let what = format!("{task} to be {state:?}");
-        self.event(&what, |e| {
-            e.task_id == task && matches!(&e.body, EventBody::StateChanged { state: s, .. } if *s == state)
-        })
-        .await
-    }
-
-    async fn subscribe(&mut self, after: BTreeMap<String, u64>) -> Snapshot {
-        self.call::<Subscribe>(&SubscribeParams { after }).await.unwrap()
-    }
-
-    /// Kills the process, as a crash would.
-    async fn kill(mut self) {
-        self.child.kill().await.unwrap();
-    }
-
-    /// Closes stdin, as the orchestrator does when it quits, and waits for the process to end.
-    async fn quit(mut self) {
-        drop(self.stdin);
-        let status = tokio::time::timeout(WAIT, self.child.wait()).await.unwrap().unwrap();
-        assert!(status.success(), "{status}");
-    }
-}
-
-fn spec(words: &str) -> TaskSpec {
-    TaskSpec {
-        title: "写 work.txt".into(),
-        user_words: words.into(),
-        interpretation: "照原话做".into(),
-        actions: vec![Action::EditCode],
-        done_when: "work.txt 存在".into(),
-        required_checks: Vec::new(),
-        stop_when: "做完就停".into(),
-        budget: Budget::default(),
-        ask_when: "不确定时".into(),
-    }
-}
-
-fn create(task: &str, words: &str) -> CreateTaskParams {
-    CreateTaskParams { task_id: task.into(), spec_version: 1, spec: spec(words) }
-}
-
-fn message(task: &str, id: &str, body: &str) -> SendMessageParams {
-    SendMessageParams {
-        task_id: task.into(),
-        message_id: id.into(),
-        body: body.into(),
-        refs: Vec::new(),
-        question_id: None,
-    }
-}
-
-fn root(dir: &tempfile::TempDir) -> PathBuf {
-    dir.path().join("worker")
-}
-
 #[tokio::test]
 async fn a_task_is_delivered_reworked_and_closed_and_retries_change_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -288,32 +144,6 @@ async fn after_a_crash_the_snapshot_says_where_the_task_stands_and_later_events_
     worker.quit().await;
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
-}
-
-/// The upstream repository: one commit on `main`.
-fn upstream(dir: &Path) -> PathBuf {
-    let repo = dir.join("upstream");
-    std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "--quiet", "--initial-branch", "main"]);
-    git(&repo, &["config", "user.name", "Test User"]);
-    git(&repo, &["config", "user.email", "user@example.com"]);
-    std::fs::write(repo.join("README.md"), "# project\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "--quiet", "-m", "initial"]);
-    repo
-}
-
-fn published(event: &Event) -> Option<&lobotomy_worker_protocol::event::Artifact> {
-    match &event.body {
-        EventBody::ArtifactPublished { artifact } => Some(artifact),
-        _ => None,
-    }
-}
-
 /// The agent works in its own clone with L1's variables and cannot push; once its processes have
 /// exited, the environment takes its work back into the mirror (worker-interface.md §6, §7).
 #[tokio::test]
@@ -321,14 +151,13 @@ async fn a_delivery_is_taken_back_into_the_mirror() {
     let dir = tempfile::tempdir().unwrap();
     let upstream = upstream(dir.path());
     let root = root(&dir);
-    let mut worker = Worker::start_with(&root, &["--upstream", upstream.to_str().unwrap()]).await;
+    let mut worker = Worker::start_with(&root, &["--upstream", upstream.to_str().unwrap()], &[]).await;
     worker.subscribe(BTreeMap::new()).await;
     let attempt = worker.call::<CreateTask>(&create("t", "FAKE:done")).await.unwrap().attempt_id;
     worker.state("t", AttemptState::Preparing).await;
-    let change = worker.event("the change", |e| published(e).is_some_and(|a| a.artifact_id.ends_with(":change"))).await;
-    let change = published(&change).unwrap().clone();
-    let report = worker.event("the report", |e| published(e).is_some_and(|a| a.artifact_id.ends_with(":report"))).await;
-    assert!(published(&report).unwrap().text.as_deref().unwrap().contains("写了 work.txt"));
+    let change = worker.artifact(":change").await;
+    let report = worker.artifact(":report").await;
+    assert!(report.text.as_deref().unwrap().contains("写了 work.txt"));
     worker.state("t", AttemptState::Delivered).await;
 
     // The fake agent left work.txt uncommitted; the environment committed it.
@@ -358,9 +187,7 @@ async fn a_delivery_is_taken_back_into_the_mirror() {
 
     // Review rework: a new version of the same change.
     worker.call::<SendMessage>(&message("t", "m1", "FAKE:done FAKE:text=again")).await.unwrap();
-    let next =
-        worker.event("the next version", |e| published(e).is_some_and(|a| a.artifact_id.ends_with(":change"))).await;
-    let next = published(&next).unwrap();
+    let next = worker.artifact(":change").await;
     assert_eq!(next.artifact_id, format!("{attempt}:change"));
     assert_ne!(next.version, change.version);
     assert_eq!(git(&mirror, &["show", &format!("{}:work.txt", next.version)]), "again");

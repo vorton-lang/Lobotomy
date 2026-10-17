@@ -15,18 +15,19 @@ use lobotomy_agent::runner::{self, db, launch, launch_registered, reconcile, run
 use lobotomy_core::Caller;
 use lobotomy_core::question::open_questions;
 use lobotomy_core::task::{
-    Abandon, CreateTask, Phase, SendBack, SendMessage, StartAttempt, latest_attempt, load_task, occupant,
-    queued_messages,
+    Abandon, Accept, CreateTask, Phase, SendBack, SendMessage, StartAttempt, latest_attempt, load_task, occupant,
+    queued_messages, undelivered_user_messages,
 };
 use lobotomy_core::turn::{
     Continue, EndTurn, Hold, NewNativeSession, Outcome, RegisterTurn, TurnState, hold, last_turn, unfinished_turn,
 };
 use lobotomy_worker_protocol::event::{
-    Artifact, ArtifactKind, AttemptState, Blocked, Event, EventBody, Need, Question, Receipt,
+    Artifact, ArtifactKind, AttemptState, Blocked, Event, EventBody, Evidence, EvidenceSource, EvidenceStatus, Need,
+    Question, Receipt,
 };
 use lobotomy_worker_protocol::ops::{
-    Action, AttemptRef, CloseOutcome, CloseParams, CreateTaskParams, Revised, SendMessageParams, StopLevel, StopParams,
-    Stopped, TaskSpec,
+    Action, AdoptOutcome, AdoptParams, AdoptRejection, AttemptRef, CloseOutcome, CloseParams, CreateTaskParams,
+    Revised, SendMessageParams, StopLevel, StopParams, Stopped, TaskSpec,
 };
 use lobotomy_worker_protocol::rpc::RpcError;
 use rusqlite::{Connection, OptionalExtension, Transaction};
@@ -34,6 +35,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::environment::{AttemptDirs, Environment, PORTS_PER_ATTEMPT};
+use crate::forge::{Check, GitHub, Merge, PullRequest};
 use crate::host::{Outgoing, WorkerHost};
 use crate::store::{self, AttemptRow, MessageRow, NewTask, Status, TaskRow};
 
@@ -73,11 +75,26 @@ struct Open {
 pub struct Tasks {
     pub host: Arc<WorkerHost>,
     open: Mutex<HashMap<String, Open>>,
+    /// When each delivered version's checks were last read from the forge.
+    polled: Mutex<HashMap<String, Instant>>,
 }
+
+/// How often the checks of a delivered version are read again while some are pending.
+const CHECK_POLL: Duration = Duration::from_secs(20);
 
 impl Tasks {
     pub fn new(host: Arc<WorkerHost>) -> Arc<Self> {
-        Arc::new(Self { host, open: Mutex::new(HashMap::new()) })
+        Arc::new(Self { host, open: Mutex::new(HashMap::new()), polled: Mutex::new(HashMap::new()) })
+    }
+
+    /// Whether `version`'s checks are due to be read: never yet, or not for a while.
+    fn checks_due(&self, version: &str) -> bool {
+        let mut polled = self.polled.lock().unwrap();
+        let due = polled.get(version).is_none_or(|at| at.elapsed() >= CHECK_POLL);
+        if due {
+            polled.insert(version.to_owned(), Instant::now());
+        }
+        due
     }
 
     /// The instance of an open task, for its agent's MCP calls.
@@ -230,13 +247,105 @@ impl Tasks {
         if spec.actions.is_empty() {
             return Err(rejected("invalid_spec", "a task names the actions it allows"));
         }
-        if let Some(check) = spec.required_checks.first() {
-            return Err(rejected("unsupported", format!("this environment provides no evidence, so not {check}")));
+        let pull_request = spec.actions.contains(&Action::OpenPullRequest);
+        if pull_request && self.host.forge.is_none() {
+            return Err(rejected("unsupported", "this environment has no forge to open pull requests on"));
         }
-        if spec.actions.contains(&Action::OpenPullRequest) {
-            return Err(rejected("unsupported", "this environment opens no pull requests"));
+        // Checks run on a pull request: without one there is no evidence.
+        if let Some(check) = spec.required_checks.first()
+            && !pull_request
+        {
+            return Err(rejected(
+                "invalid_spec",
+                format!("{check} runs on a pull request, which the task does not allow"),
+            ));
         }
         Ok(())
+    }
+
+    pub async fn adopt(self: &Arc<Self>, params: AdoptParams) -> OpResult<AdoptOutcome> {
+        let forge =
+            self.host.forge.as_ref().ok_or_else(|| rejected("unsupported", "this environment does not adopt"))?;
+        let task = self.task_row(&params.task_id).await?;
+        let attempt = self.attempt(&task.attempt_id).await?;
+        let key = format!("{}@{}", params.artifact_id, params.version);
+        if attempt.adopted.as_deref() == Some(key.as_str()) {
+            return Ok(AdoptOutcome::Adopted);
+        }
+        let refuse = |reason, detail: String| Ok(AdoptOutcome::Rejected { reason, detail });
+        if task.closed.is_some() || attempt.ended.is_some() || attempt.ending.is_some() {
+            return Err(rejected("attempt_ended", format!("attempt {} has ended", attempt.id)));
+        }
+        let id = params.artifact_id.clone();
+        let current = self.read(move |c| store::artifact(c, &id)).await.map_err(rpc_error)?;
+        let Some(artifact) = current.filter(|a| a.artifact_id == format!("{}:change", attempt.id)) else {
+            return refuse(
+                AdoptRejection::VersionChanged,
+                format!("{} is not the attempt's change", params.artifact_id),
+            );
+        };
+        if artifact.version != params.version {
+            return refuse(AdoptRejection::VersionChanged, format!("the change is at {} now", artifact.version));
+        }
+        let (a, v) = (artifact.artifact_id.clone(), artifact.version.clone());
+        let evidence = self.read(move |c| store::evidence(c, &a, &v)).await.map_err(rpc_error)?;
+        let missing: Vec<&str> = task
+            .spec
+            .required_checks
+            .iter()
+            .filter(|name| !evidence.iter().any(|e| &e.name == *name && e.status == EvidenceStatus::Passed))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            return refuse(
+                AdoptRejection::EvidenceMissing,
+                format!("not passed on this version: {}", missing.join(", ")),
+            );
+        }
+        if task.status.state != AttemptState::Delivered {
+            return refuse(AdoptRejection::VersionChanged, "the agent is working on a new version".into());
+        }
+        let Some((number, _)) = attempt.pr.clone() else {
+            return refuse(AdoptRejection::Conflict, "the change has no pull request".into());
+        };
+        let title = format!("{} (#{number})", task.spec.title);
+        let report = format!("{}:report", attempt.id);
+        let message = self
+            .read(move |c| store::artifact(c, &report))
+            .await
+            .map_err(rpc_error)?
+            .and_then(|r| r.text)
+            .unwrap_or_default();
+        match forge.merge(number, &params.version, &title, &message).await.map_err(rpc_error)? {
+            Merge::Merged => {}
+            Merge::HeadChanged => {
+                return refuse(AdoptRejection::VersionChanged, "the pull request's head moved".into());
+            }
+            Merge::Refused(why) => return refuse(AdoptRejection::Conflict, why),
+        }
+        // Merged: the instance's task is done, with whatever the agent was never given let go.
+        let instance = self.ensure_open(&task.id).await.map_err(rpc_error)?;
+        let (core_task, request) = (attempt.core_task.clone(), format!("{}:adopt", attempt.id));
+        db(&instance, move |db| {
+            let (version, dropping) = db.read(|c| {
+                let undelivered = undelivered_user_messages(c, &core_task)?;
+                Ok((load_task(c, &core_task)?.criteria_version, undelivered.into_iter().map(|m| m.id).collect()))
+            })?;
+            db.execute(
+                &Caller::User,
+                &Accept { request_id: request, task_id: core_task, criteria_version: version, dropping },
+            )
+        })
+        .await
+        .map_err(rpc_error)?;
+        let attempt_id = attempt.id.clone();
+        self.write(move |tx| store::set_adopted(tx, &attempt_id, &key)).await.map_err(rpc_error)?;
+        let branch = Environment::branch(&task.id, attempt.seq);
+        if let Err(e) = forge.delete_branch(&branch).await {
+            tracing::warn!(branch, error = format!("{e:#}"), "could not delete the merged branch");
+        }
+        instance.wake.notify_one();
+        Ok(AdoptOutcome::Adopted)
     }
 
     pub async fn send_message(self: &Arc<Self>, params: SendMessageParams) -> OpResult<AttemptRef> {
@@ -559,7 +668,21 @@ async fn step(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> any
         let busy = db(instance, |db| db.read(|c| occupant(c, ROLE))).await?;
         // The role still works on an earlier attempt until that one has ended.
         if busy.as_deref().is_none_or(|t| t == core_task) {
-            ignore_rejection(runtime(instance, StartAttempt { task_id: core_task }).await)?;
+            ignore_rejection(runtime(instance, StartAttempt { task_id: core_task.clone() }).await)?;
+            if let Some(max) = task.spec.budget.turns {
+                let (used, waiting) = db(instance, move |db| {
+                    db.read(|c| {
+                        let used: i64 =
+                            c.query_row("SELECT COUNT(*) FROM turn WHERE task_id = ?1", [&core_task], |r| r.get(0))?;
+                        Ok((used, !queued_messages(c, ROLE)?.is_empty()))
+                    })
+                })
+                .await?;
+                if waiting && used >= i64::from(max) {
+                    fail(tasks, &task.id, &attempt.id, format!("the turn budget of {max} is used up")).await?;
+                    return Ok(false);
+                }
+            }
             if let Some(turn) = ignore_rejection(runtime(instance, RegisterTurn { role: ROLE.into() }).await)? {
                 launch(instance, turn.turn_id);
             }
@@ -573,6 +696,22 @@ async fn step(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> any
         tasks.read(move |c| store::ending_attempts(c, &id)).await?
     };
     Ok(task.closed.is_some() && task.status.state.is_final() && ending.is_empty())
+}
+
+/// Ends the attempt as failed: an attempt-level failure, such as a budget used up (worker-interface.md
+/// §3).
+async fn fail(tasks: &Tasks, task_id: &str, attempt_id: &str, reason: String) -> anyhow::Result<()> {
+    tracing::warn!(task = task_id, attempt = attempt_id, reason, "attempt failed");
+    let status = Status { state: AttemptState::Failed, blocked: None, reason: Some(reason) };
+    let (id, attempt_id) = (task_id.to_owned(), attempt_id.to_owned());
+    let events = tasks
+        .write(move |tx| {
+            store::set_ended(tx, &attempt_id, &status)?;
+            Ok(vec![store::append(tx, &id, &attempt_id, status.event())?])
+        })
+        .await?;
+    tasks.publish(events);
+    Ok(())
 }
 
 /// Makes the attempt's clone before its first turn (worker-interface.md §4 `preparing`). Returns
@@ -589,13 +728,18 @@ async fn prepare(tasks: &Tasks, task: &TaskRow, attempt: &AttemptRow) -> anyhow:
     }
     let host = tasks.host.clone();
     let (task_id, seq) = (task.id.clone(), attempt.seq);
-    let prepared = tokio::task::spawn_blocking(move || {
-        let environment = host.environment.as_ref().context("no environment")?;
-        let dirs = AttemptDirs::new(&host.task_dir(&task_id), seq);
-        environment.prepare(&dirs, &Environment::branch(&task_id, seq))?;
-        anyhow::Ok(environment.repo.port_start)
-    })
-    .await?;
+    let prepared = match tasks.host.forge_git_env().await {
+        Ok(auth) => {
+            tokio::task::spawn_blocking(move || {
+                let environment = host.environment.as_ref().context("no environment")?;
+                let dirs = AttemptDirs::new(&host.task_dir(&task_id), seq);
+                environment.prepare(&dirs, &Environment::branch(&task_id, seq), &auth)?;
+                anyhow::Ok(environment.repo.port_start)
+            })
+            .await?
+        }
+        Err(e) => Err(e),
+    };
     let (id, attempt_id) = (task.id.clone(), attempt.id.clone());
     let (ready, events) = match prepared {
         Ok(start) => {
@@ -623,14 +767,16 @@ async fn prepare(tasks: &Tasks, task: &TaskRow, attempt: &AttemptRow) -> anyhow:
 }
 
 /// Takes a delivery back (worker-interface.md §6): the change, kept in the mirror once the agent's
-/// processes have exited, and the agent's own account of it.
+/// processes have exited, and the agent's own account of it. A task that allows it gets its change
+/// pushed from the mirror and a pull request.
 async fn take_delivery(
     tasks: &Tasks,
     task: &TaskRow,
     attempt: &AttemptRow,
     round: &Round,
-) -> anyhow::Result<Vec<Artifact>> {
+) -> anyhow::Result<(Vec<Artifact>, Option<PullRequest>)> {
     let mut out = Vec::new();
+    let mut opened = None;
     if tasks.host.environment.is_some() {
         let host = tasks.host.clone();
         let (task_id, seq) = (task.id.clone(), attempt.seq);
@@ -647,13 +793,34 @@ async fn take_delivery(
             if delivered.committed_leftovers {
                 title.push_str("（含交付时由环境提交的改动）");
             }
+            if let Some(forge) = &tasks.host.forge
+                && task.spec.actions.contains(&Action::OpenPullRequest)
+            {
+                let auth = forge.git_env().await?;
+                let (host, task_id, seq) = (tasks.host.clone(), task.id.clone(), attempt.seq);
+                tokio::task::spawn_blocking(move || {
+                    let environment = host.environment.as_ref().context("no environment")?;
+                    let branch = Environment::branch(&task_id, seq);
+                    environment.push(&format!("refs/{branch}"), &branch, &auth)
+                })
+                .await??;
+                let branch = Environment::branch(&task.id, attempt.seq);
+                let base = &tasks.host.environment.as_ref().context("no environment")?.repo.base;
+                let body = format!(
+                    "{}\n\n---\n由 Lobotomy 的 worker 提交（task {}，attempt {}）。",
+                    round.summary.as_deref().unwrap_or(""),
+                    task.id,
+                    attempt.seq
+                );
+                opened = Some(forge.open_pull_request(&branch, base, &task.spec.title, body.trim_start()).await?);
+            }
             out.push(Artifact {
                 artifact_id: format!("{}:change", attempt.id),
                 version: delivered.head,
                 kind: ArtifactKind::Change,
                 supersedes,
                 title,
-                url: None,
+                url: opened.as_ref().map(|pr| pr.url.clone()),
                 size: Some(delivered.size),
                 text: None,
             });
@@ -678,7 +845,131 @@ async fn take_delivery(
             .await?
     };
     // A round that changed nothing publishes nothing again.
-    Ok(out.into_iter().zip(current).filter(|(a, v)| v.as_deref() != Some(a.version.as_str())).map(|(a, _)| a).collect())
+    let changed = out
+        .into_iter()
+        .zip(current)
+        .filter(|(a, v)| v.as_deref() != Some(a.version.as_str()))
+        .map(|(a, _)| a)
+        .collect();
+    Ok((changed, opened))
+}
+
+/// What the forge's checks say of a delivery (worker-interface.md §6): delivered once the required
+/// checks passed on its version; a failure goes back to the agent within the CI budget; otherwise
+/// it waits. `None` when the task requires no checks or delivered no change.
+struct Gate {
+    status: Status,
+    /// Evidence that changed since it was last stored.
+    evidence: Vec<Evidence>,
+    /// The version whose failure went back to the agent now.
+    handed_back: Option<String>,
+}
+
+async fn gate(
+    tasks: &Tasks,
+    task: &TaskRow,
+    attempt: &AttemptRow,
+    instance: &Arc<TaskInstance>,
+) -> anyhow::Result<Option<Gate>> {
+    let Some(forge) = &tasks.host.forge else { return Ok(None) };
+    let required = &task.spec.required_checks;
+    if required.is_empty() {
+        return Ok(None);
+    }
+    let id = format!("{}:change", attempt.id);
+    let Some(change) = tasks.read(move |c| store::artifact(c, &id)).await? else { return Ok(None) };
+    let version = change.version.clone();
+    let mut known = {
+        let (a, v) = (change.artifact_id.clone(), version.clone());
+        tasks.read(move |c| store::evidence(c, &a, &v)).await?
+    };
+    let (mut evidence, mut failed) = (Vec::new(), Vec::new());
+    if tasks.checks_due(&version) {
+        match forge.checks(&version).await {
+            Ok(checks) => {
+                for check in checks {
+                    let status = match check.passed() {
+                        None => EvidenceStatus::Pending,
+                        Some(true) => EvidenceStatus::Passed,
+                        Some(false) => EvidenceStatus::Failed,
+                    };
+                    let e = Evidence {
+                        artifact_id: change.artifact_id.clone(),
+                        version: version.clone(),
+                        name: check.name.clone(),
+                        status,
+                        source: EvidenceSource::Environment,
+                        url: check.html_url.clone(),
+                    };
+                    if status == EvidenceStatus::Failed {
+                        failed.push(check);
+                    }
+                    if !known.contains(&e) {
+                        known.retain(|k| k.name != e.name);
+                        known.push(e.clone());
+                        evidence.push(e);
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(task = task.id, error = format!("{e:#}"), "could not read the checks"),
+        }
+    }
+    let status_of = |name: &str| known.iter().find(|e| e.name == name).map(|e| e.status);
+    let waiting: Vec<&str> =
+        required.iter().filter(|n| status_of(n) != Some(EvidenceStatus::Passed)).map(String::as_str).collect();
+    let working = |reason: String| Status { state: AttemptState::Working, blocked: None, reason: Some(reason) };
+    let mut handed_back = None;
+    let status = if waiting.is_empty() {
+        Status::of(AttemptState::Delivered)
+    } else if !required.iter().any(|n| status_of(n) == Some(EvidenceStatus::Failed)) {
+        working(format!("waiting for checks: {}", waiting.join(", ")))
+    } else if attempt.handed_back.as_deref() == Some(version.as_str()) {
+        working("CI failed; the agent is fixing it".into())
+    } else if let Some(max) = task.spec.budget.ci_rounds.filter(|max| attempt.ci_rounds >= *max) {
+        Status {
+            state: AttemptState::Failed,
+            blocked: None,
+            reason: Some(format!("CI failed on {version}, and the CI budget of {max} rounds is used up")),
+        }
+    } else {
+        let summary = failure_summary(forge, &known, &failed, attempt.ci_rounds + 1, task.spec.budget.ci_rounds).await;
+        let back = SendBack {
+            request_id: format!("{}:ci:{version}", attempt.id),
+            task_id: attempt.core_task.clone(),
+            reason: summary,
+        };
+        db(instance, move |db| db.execute(&Caller::User, &back)).await?;
+        handed_back = Some(version.clone());
+        working("CI failed; handed back to the agent".into())
+    };
+    Ok(Some(Gate { status, evidence, handed_back }))
+}
+
+/// What the agent gets when CI fails: which checks, and the end of each failed job's log, since
+/// it cannot reach the forge itself (worker-interface.md §7).
+async fn failure_summary(
+    forge: &GitHub,
+    known: &[Evidence],
+    failed: &[Check],
+    round: u32,
+    budget: Option<u32>,
+) -> String {
+    let of = budget.map(|b| format!("，最多 {b} 次")).unwrap_or_default();
+    let mut text = format!("CI 没有通过（第 {round} 次交回{of}）。失败的检查：");
+    for e in known.iter().filter(|e| e.status == EvidenceStatus::Failed) {
+        text.push_str(&format!("\n- {}{}", e.name, e.url.as_deref().map(|u| format!("：{u}")).unwrap_or_default()));
+    }
+    for check in failed {
+        match forge.failure_log(check).await {
+            Ok(log) if !log.trim().is_empty() => {
+                text.push_str(&format!("\n\n{} 的日志末尾：\n```\n{log}\n```", check.name));
+            }
+            Ok(_) => {}
+            Err(e) => tracing::debug!(check = check.name, error = format!("{e:#}"), "no log"),
+        }
+    }
+    text.push_str("\n\n请修复后提交，再用 org_report 汇报 done。");
+    text
 }
 
 /// Ends the attempts asked to end once no turn of theirs is left unfinished: a stop takes effect
@@ -724,6 +1015,12 @@ async fn settle_endings(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstanc
             })
             .await?;
         tasks.publish(events);
+        // Its pull request will not be merged.
+        if let (Some(forge), Some((number, _))) = (&tasks.host.forge, &attempt.pr)
+            && let Err(e) = forge.close_pull_request(*number).await
+        {
+            tracing::warn!(task = task_id, number, error = format!("{e:#}"), "could not close the pull request");
+        }
     }
     Ok(())
 }
@@ -764,12 +1061,30 @@ async fn observe(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> 
         tasks.host.quota_passed(harness);
     }
     // A new delivery: its artifacts go out before the state that says it is delivered.
-    let (mut status, mut artifacts, mut delivered_round, mut ended) = (seen.status.clone(), Vec::new(), None, false);
+    let (mut status, mut ended) = (seen.status.clone(), false);
     if let Some(round) = seen.round.as_ref().filter(|r| attempt.delivered_round.as_deref() != Some(r.id.as_str())) {
         match take_delivery(tasks, &task, &attempt, round).await {
-            Ok(published) => {
-                artifacts = published;
-                delivered_round = Some(round.id.clone());
+            Ok((artifacts, opened)) => {
+                let (id, attempt_id, round) = (task_id.to_owned(), attempt.id.clone(), round.id.clone());
+                let events = tasks
+                    .write(move |tx| {
+                        let mut events = Vec::new();
+                        for artifact in artifacts {
+                            events.push(store::append(
+                                tx,
+                                &id,
+                                &attempt_id,
+                                EventBody::ArtifactPublished { artifact },
+                            )?);
+                        }
+                        if let Some(pr) = &opened {
+                            store::set_pull_request(tx, &attempt_id, pr.number, &pr.url)?;
+                        }
+                        store::set_delivered_round(tx, &attempt_id, &round)?;
+                        Ok(events)
+                    })
+                    .await?;
+                tasks.publish(events);
             }
             Err(e) => {
                 tracing::error!(task = task_id, error = format!("{e:#}"), "could not take the delivery");
@@ -782,15 +1097,24 @@ async fn observe(tasks: &Tasks, task_id: &str, instance: &Arc<TaskInstance>) -> 
             }
         }
     }
+    let (mut evidence, mut handed_back) = (Vec::new(), None);
+    if !ended
+        && status.state == AttemptState::Delivered
+        && let Some(gate) =
+            gate(tasks, &task, &tasks.attempt(&attempt.id).await.map_err(anyhow::Error::new)?, instance).await?
+    {
+        ended = gate.status.state == AttemptState::Failed;
+        (status, evidence, handed_back) = (gate.status, gate.evidence, gate.handed_back);
+    }
     let (id, attempt_id) = (task_id.to_owned(), attempt.id.clone());
     let events = tasks
         .write(move |tx| {
             let mut events = Vec::new();
-            for artifact in artifacts {
-                events.push(store::append(tx, &id, &attempt_id, EventBody::ArtifactPublished { artifact })?);
+            for evidence in evidence {
+                events.push(store::append(tx, &id, &attempt_id, EventBody::EvidenceUpdated { evidence })?);
             }
-            if let Some(round) = &delivered_round {
-                store::set_delivered_round(tx, &attempt_id, round)?;
+            if let Some(version) = &handed_back {
+                store::hand_back(tx, &attempt_id, version)?;
             }
             if ended {
                 store::set_ended(tx, &attempt_id, &status)?;

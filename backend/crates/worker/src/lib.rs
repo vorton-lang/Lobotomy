@@ -3,6 +3,7 @@
 //! repository it is given (`environment`), or else in a plain folder of the task's own.
 
 pub mod environment;
+pub mod forge;
 pub mod host;
 pub mod server;
 pub mod store;

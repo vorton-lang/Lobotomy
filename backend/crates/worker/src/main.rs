@@ -3,8 +3,11 @@
 //!
 //! `lobotomy-worker --root <dir> --harness <claude|codex> [--model <m>] [--effort <e>]
 //! [--permission <full|auto_review>] [--upstream <url|path> [--base <branch>] [--author-name <n>]
-//! [--author-email <e>] [--port-start <n>]]` runs it. With `--upstream`, each attempt works in its
-//! own clone of that repository; without it, in a plain folder. `LOBOTOMY_CODEX` and
+//! [--author-email <e>] [--port-start <n>]] [--forge github --repo <owner/name> [--app-id <id>
+//! --app-key <pem>] [--forge-api <url>] [--co-author <who>]]` runs it. With a repository, each
+//! attempt works in its own clone of it; without, in a plain folder. On a forge, the task's change
+//! goes out as a pull request, its checks are the evidence, and adopting merges it. The forge's
+//! token comes from the App, or from `LOBOTOMY_FORGE_TOKEN`. `LOBOTOMY_CODEX` and
 //! `LOBOTOMY_CLAUDE` replace the located CLIs, as for the backend. `lobotomy-worker ctrl-c <pid>`
 //! is the helper that sends Ctrl+C to a CLI's console (harness-adapter.md §1.8).
 
@@ -15,12 +18,14 @@ use anyhow::{Context, bail};
 use lobotomy_agent::HarnessConfig;
 use lobotomy_harness::{Harness, Permission};
 use lobotomy_worker::environment::Repo;
+use lobotomy_worker::forge::{self, Auth};
 use lobotomy_worker::host::{Config, WorkerHost};
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: lobotomy-worker --root <dir> --harness <claude|codex> [--model <m>] [--effort <e>] \
     [--permission <full|auto_review>] [--upstream <url|path> [--base <branch>] [--author-name <n>] \
-    [--author-email <e>] [--port-start <n>]]";
+    [--author-email <e>] [--port-start <n>]] [--forge github --repo <owner/name> [--app-id <id> --app-key <pem>] \
+    [--forge-api <url>] [--co-author <who>]]";
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -63,7 +68,39 @@ fn parse(args: &[String]) -> anyhow::Result<(PathBuf, Config)> {
         None => Permission::default(),
     };
     let (model, effort) = (take("model"), take("effort"));
-    let repo = match take("upstream") {
+    let forge = match take("forge").as_deref() {
+        None => None,
+        Some("github") => {
+            let full = take("repo").with_context(|| format!("--forge github needs --repo owner/name; {USAGE}"))?;
+            let (owner, repo) = full.split_once('/').with_context(|| format!("--repo {full} is not owner/name"))?;
+            let auth = match (take("app-id"), take("app-key")) {
+                (Some(id), Some(key)) => {
+                    Auth::App { id: id.parse().with_context(|| format!("--app-id {id}"))?, key: key.into() }
+                }
+                (None, None) => {
+                    let token = std::env::var("LOBOTOMY_FORGE_TOKEN")
+                        .context("--forge github needs --app-id and --app-key, or LOBOTOMY_FORGE_TOKEN")?;
+                    // The agent's processes inherit this process's environment: the token leaves it
+                    // (worker-interface.md §7). SAFETY: no other thread runs yet.
+                    unsafe { std::env::remove_var("LOBOTOMY_FORGE_TOKEN") };
+                    Auth::Token(token)
+                }
+                _ => bail!("--app-id and --app-key go together; {USAGE}"),
+            };
+            Some(forge::Config {
+                api: take("forge-api").unwrap_or_else(|| "https://api.github.com".into()),
+                owner: owner.into(),
+                repo: repo.into(),
+                auth,
+                co_author: take("co-author"),
+            })
+        }
+        Some(other) => bail!("unknown forge {other}; only github"),
+    };
+    // On a forge, the upstream is the forge's repository unless given.
+    let upstream =
+        take("upstream").or_else(|| forge.as_ref().map(|f| format!("https://github.com/{}/{}.git", f.owner, f.repo)));
+    let repo = match upstream {
         Some(upstream) => Some(Repo {
             upstream,
             base: take("base").unwrap_or_else(|| "main".into()),
@@ -80,7 +117,7 @@ fn parse(args: &[String]) -> anyhow::Result<(PathBuf, Config)> {
         bail!("unknown argument --{name}; {USAGE}");
     }
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
-    let config = Config { harness, cli: HarnessConfig::detect()?, model, effort, permission, repo };
+    let config = Config { harness, cli: HarnessConfig::detect()?, model, effort, permission, repo, forge };
     Ok((root, config))
 }
 

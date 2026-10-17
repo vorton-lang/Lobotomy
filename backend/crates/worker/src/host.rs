@@ -14,6 +14,7 @@ use lobotomy_worker_protocol::event::{Event, Quota, Resources};
 use tokio::sync::broadcast;
 
 use crate::environment::{AttemptDirs, Environment, Repo};
+use crate::forge::{self, GitHub};
 use crate::store::{self, AttemptRow, Store};
 
 const INSTRUCTIONS: &str = include_str!("prompts/worker.md");
@@ -28,6 +29,8 @@ pub struct Config {
     pub permission: Permission,
     /// The repository tasks work on. Without one, each task works in a plain folder.
     pub repo: Option<Repo>,
+    /// The forge the repository is on, for pull requests, checks and merges.
+    pub forge: Option<forge::Config>,
 }
 
 /// What goes to the subscriber, once stored.
@@ -43,6 +46,7 @@ pub struct WorkerHost {
     pub config: Config,
     pub store: Store,
     pub environment: Option<Environment>,
+    pub forge: Option<GitHub>,
     /// The agent's MCP service, such as `http://127.0.0.1:4100`. Set once the server listens.
     pub mcp_base: Mutex<String>,
     pub outgoing: broadcast::Sender<Outgoing>,
@@ -55,11 +59,13 @@ impl WorkerHost {
         std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
         let store = Store::open(&root.join("worker.db"))?;
         let environment = config.repo.clone().map(|repo| Environment::new(&root, repo));
+        let forge = config.forge.clone().map(GitHub::new).transpose()?;
         Ok(Self {
             root,
             config,
             store,
             environment,
+            forge,
             mcp_base: Mutex::new(String::new()),
             outgoing: broadcast::channel(1024).0,
             quota: Mutex::new(BTreeMap::new()),
@@ -143,6 +149,14 @@ impl AgentHost for WorkerHost {
 }
 
 impl WorkerHost {
+    /// The variables that give git the forge's token; none without a forge.
+    pub async fn forge_git_env(&self) -> anyhow::Result<Vec<(String, String)>> {
+        match &self.forge {
+            Some(forge) => forge.git_env().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// The attempt a turn of the task works on.
     fn turn_attempt(&self, task_id: &str, turn: &Turn) -> anyhow::Result<AttemptRow> {
         let core_task = turn.task_id.as_deref().with_context(|| format!("turn {} belongs to no attempt", turn.id))?;
