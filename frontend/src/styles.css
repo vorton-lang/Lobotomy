@@ -1181,15 +1181,6 @@ svg.mark {
   padding: 0 20px 8px;
   border-bottom: 1px solid var(--line);
 }
-.task-panel > .now-running {
-  margin: 0;
-  padding: 6px 20px;
-  background: var(--accent-soft);
-  border-bottom: 1px solid var(--line);
-}
-.task-panel > .now-running button {
-  margin-left: 8px;
-}
 .panel-body {
   overflow-y: auto;
   padding: 0 20px 32px;
