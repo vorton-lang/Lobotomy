@@ -2,16 +2,16 @@
 
 > Status: 设计决定，大部分已实现。没有实现的项在正文中标明「未实现」。
 > 依据：[#5](https://github.com/vorton-lang/Lobotomy/issues/5) 的已确认评论、[#6](https://github.com/vorton-lang/Lobotomy/issues/6) 的推荐实现、[#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)。SQLite 是业务事实的唯一权威，工作目录只是执行现场。
-> **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：私有存储、槽位、采集、验证、预览、展示分支采用与试用终端随 worker 层的替换退出，用户选择直接删除，不做过渡替身。现在的执行现场见 §3，成果与验收见 §4。
+> Lobotomy 没有私有存储和槽位，不采集、验证或预览成果，也没有展示分支采用与试用终端（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户定）。执行现场见 §3，成果与验收见 §4。
 > 实测环境：Windows 11，Claude Code 2.1.283，Codex CLI 0.159.2（随 Codex desktop app 分发）。
 
 ## 0. 原则
 
 - **机械操作归运行时，判断归 Manager。** Manager 是 agent，会犯错；能用确定性规则完成的事不经过它，它只收到事件用于知情。
-- **只按正常方式调用官方 CLI。** 不依赖 Claude Agent SDK、Codex SDK / app-server 或 ACP adapter。订阅绑定官方入口，正常调用 CLI 与用户手动使用一致。CLI 做不到的，由 Lobotomy 的 MCP 服务提供。例外：官方 CLI 担任 Angela 表现不佳时，可以改用自建的 API harness（用户确认，2026-10-09）。
-- **角色不绑定 harness。** 每个 role 使用哪个 harness 由配置决定，Angela 也一样。外部测试者没有 Claude，所有 role 都要能在 Codex 上运行（用户确认，2026-10-09）。
+- **只按正常方式调用官方 CLI。** 不依赖 Claude Agent SDK、Codex SDK / app-server 或 ACP adapter。订阅绑定官方入口，正常调用 CLI 与用户手动使用一致。CLI 做不到的，由 Lobotomy 的 MCP 服务提供。例外：官方 CLI 担任 Angela 表现不佳时，可以改用自建的 API harness（用户定）。
+- **角色不绑定 harness。** 每个 role 使用哪个 harness 由配置决定，Angela 也一样。外部测试者没有 Claude，所有 role 都要能在 Codex 上运行（用户定）。
 - **不依赖平台特有行为。** 能力取 Windows 与 Linux 的交集。先在 Windows 上开发运行，正式发版前集中修 Linux 问题。下文标为"Windows 实测"的细节属于平台适配层，不是设计依赖。
-- **不依赖 harness 的权限系统。** 默认关闭审批与沙箱。管理员不允许时，用户可以把这个 harness 改为自动审批。没有人工审批（1.9，**语义更新**）。安全靠结构：后端与开发副本分离、对外能力裁剪。
+- **不依赖 harness 的权限系统。** 默认关闭审批与沙箱。管理员不允许时，用户可以把这个 harness 改为自动审批。没有人工审批（1.9）。安全靠结构：后端与开发副本分离、对外能力裁剪。
 - **harness 自己的日志和会话文件不管理。**
 
 ## 1. Adapter
@@ -51,8 +51,8 @@ Codex（消息经 stdin，位置参数为 -）
 ```
 
 - 参数由 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs) 与 [codex.rs](../backend/crates/harness/src/codex.rs) 拼出。方括号中的参数可以省略：模型与推理强度来自用户为 role 在这个 harness 上的选择，没有选择时不传，用 CLI 的默认值。测试可以在 CLI 配置（`agent/src/harness.rs` 的 `Cli`）上设一个推理强度，给没有选择的 role 用。
-- **模型与推理强度由用户按 role 选择**（用户确认，2026-10-13）。设置中每个 role 一行，harness 旁边是模型和推理强度（frontend.md §7.8）。
-  - **语义更新**（#86，用户，2026-10-17）：设置中只剩 Angela 这一行。worker 的 harness 和模型由用户写在 `workers.toml` 中（tech-plan.md §7 第 7 组）。
+- **模型与推理强度由用户按 role 选择**（用户定）。设置中只有 Angela 一行，harness 旁边是模型和推理强度（frontend.md §7.8）。
+  - worker 的 harness 和模型由用户写在 `workers.toml` 中（tech-plan.md §7 第 7 组，#86，用户定）。
   - 每个 role 在每个 harness 上各存一份选择（data-model.md §9.1 的 `role_model`）。依据：模型名属于 harness，role 换到另一个 harness 再换回来时，原来的选择还在。
   - 每个 turn 启动时读取选择。改选择不换会话：正在运行的 turn 不受影响，下一个 turn 用新选择 resume 同一个会话。
   - 可选的模型：Claude 是 CLI 的别名 `fable`、`opus`、`sonnet`、`haiku`。Claude Code 没有列出模型的命令，帮助文本举了前三个。推理强度是 low、medium、high、xhigh、max（Claude Code 2.1.283 帮助文本）。Codex 的模型来自 `codex debug models` 输出的目录：只列 `visibility` 为 `list` 的模型，每个带支持的推理强度和默认强度。
@@ -87,9 +87,9 @@ Codex（消息经 stdin，位置参数为 -）
 7. **事件解析要容错。** 两家 JSON 事件格式都不在稳定承诺内：未知事件忽略，并记录原文。
    - harness 自己的格式只在适配层里解析。MCP 调用的结果由适配层整理成 `result_text`（工具返回的第一段文字）和 `error_text`（调用失败的原因）；运行时和 GUI 只读这两个字段（[#16](https://github.com/vorton-lang/Lobotomy/issues/16)）。
    - 按 harness 不同的代码都对 `Harness` 枚举做匹配。加入新的 harness 时，编译器会指出每一处。
-   - **适配器接口**（M2，2026-10-10）：接入两个真实 harness 后，仍按枚举匹配，没有抽象成 trait。按 harness 不同的只有四处：拼参数、解析输出（`Output`）、识别权限被拒、额度检查。两个都是 CLI，抽出的接口也只会是 CLI 的形状。自建的 API harness（roadmap.md 原则）可以做成同样形状的可执行程序：从 stdin 读输入，按参数接续会话，输出与某一家相同的 JSON 事件，会话记录由它自己保存在 Lobotomy 的数据目录中。这样运行时不需要改动。真有第三种 harness 时，再按它的需要调整。
+   - **适配器接口**（实现时的选择）：两个真实 harness 都按枚举匹配，没有抽象成 trait。按 harness 不同的只有四处：拼参数、解析输出（`Output`）、识别权限被拒、额度检查。两个都是 CLI，抽出的接口也只会是 CLI 的形状。自建的 API harness（roadmap.md 原则）可以做成同样形状的可执行程序：从 stdin 读输入，按参数接续会话，输出与某一家相同的 JSON 事件，会话记录由它自己保存在 Lobotomy 的数据目录中。这样运行时不需要改动。真有第三种 harness 时，再按它的需要调整。
 8. **启动前登记 turn。** 运行时在启动 CLI 前生成稳定的 turn_id，并绑定 task、attempt、native session 和本轮投递的输入消息 ID。Claude 首轮的 session ID 由运行时经 `--session-id` 指定；Codex 首轮的 session ID 在 `thread.started` 事件返回后补记。同一 attempt 内接续时，运行时只新建 turn，不新建 attempt（[data-model.md](data-model.md) §3.1、§4.1）。
-   - 如果 native session 已有正常结束的 turn，却没有记下 session ID，运行时不再为它登记 turn，role 停下。否则下一个 turn 会不带 resume 启动，悄悄丢掉上下文。用户可以新建 native session（[#10](https://github.com/vorton-lang/Lobotomy/issues/10)，用户确认，2026-10-04）。
+   - 如果 native session 已有正常结束的 turn，却没有记下 session ID，运行时不再为它登记 turn，role 停下。否则下一个 turn 会不带 resume 启动，悄悄丢掉上下文。用户可以新建 native session（[#10](https://github.com/vorton-lang/Lobotomy/issues/10)，用户定）。
 
 ### 1.4 实测结果（Windows）
 
@@ -138,7 +138,7 @@ Codex（消息经 stdin，位置参数为 -）
 - `rate_limit_event` 每轮都有，实测 `status` 为 `allowed_warning`。
 - 额度被拒：交互式 CLI 中实测过一次（[data-model.md](data-model.md) §8.3）。`-p` 下的形式还没有见到。适配器认三种信号，任一出现即为额度被拒：`status` 为 `rejected` 的 `rate_limit_event`（重置时间取自这里）；顶层 `error` 为 `rate_limit` 的 assistant 消息；`api_error_status` 为 429 的 `result`。被拒时那条合成消息记为错误，不当作 agent 的回复。
 
-**Claude adapter 的实现**（M2，2026-10-10）：参数与解析在 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs)。
+**Claude adapter 的实现**：参数与解析在 [harness/src/claude.rs](../backend/crates/harness/src/claude.rs)。
 
 - 运行时按 turn 所在会话的 harness 启动 CLI。role 切换 harness 后，旧会话结束，下一个 turn 在新会话中运行（data-model.md §9.2）。
 - 每个 turn 的 MCP 配置写到数据目录的 `turns/<turn_id>.mcp.json`，turn 结束时删除：文件中有这个 turn 的 token。
@@ -150,7 +150,7 @@ Codex（消息经 stdin，位置参数为 -）
 
 adapter 按平台自动探测两家 CLI，并允许手动配置。`CLAUDE_BIN`、`CODEX_BIN` 指定二进制；`LOBOTOMY_CLAUDE`、`LOBOTOMY_CODEX`（程序与参数的 JSON 数组）整个替换启动命令，GUI 的端到端测试用它们换上假 CLI。
 
-每次启动记录 CLI 的版本：未实现，列入 roadmap 待排。原来只有 MCP 契约测试（§2）调用 `--version`，它已于 2026-10-17 随测试退役删除（#86）。
+每次启动记录 CLI 的版本：未实现，列入 roadmap 待排。
 
 Windows 实测：Claude 经 scoop shim 位于 PATH；Codex 不在 PATH 上，位于 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，hash 目录随 desktop app 更新变化，版本可能在运行期间升级。
 
@@ -167,22 +167,22 @@ role 会话默认继承用户的全部对外通道：Claude 继承 claude.ai 连
 | gh | `GH_CONFIG_DIR` 指向空目录，并从进程环境中删除 `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN`、`GITHUB_ENTERPRISE_TOKEN`（这四个变量优先于配置目录中的凭据，[#10](https://github.com/vorton-lang/Lobotomy/issues/10)），等同未登录。额度检查调用同样处理 | 同左 |
 | harness 自带的长期记忆 | 进程环境变量 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`：Claude Code 不读也不写 `~/.claude/projects/<工作目录>/memory/`。`--setting-sources ""` 关不掉它：2026-10-11 Angela 在那里写过文件。依据：长期记忆由 Lobotomy 保存（roadmap.md"原则"） | 未查 |
 | 用户自己装的 skill（见下） | 实测不加载 | `-c skills.config=[…]` 按路径逐个关掉 |
-| 后台任务（用户确认，2026-10-17） | 进程环境变量 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`：命令和子 agent 都在前台运行。依据见下面的实测 | 未查 |
+| 后台任务（用户定） | 进程环境变量 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`：命令和子 agent 都在前台运行。依据见下面的实测 | 未查 |
 
 - 保留网页搜索与读取、子 agent。
 - 这些措施防的是失误和过度热心，不防对抗：bypass 模式下 agent 总能绕过（例如从凭据管理器取 token）。
 - 新工具提示（未实现，列入 roadmap 待排）：运行时每轮从 Claude 的 `system/init` 事件读取工具清单，与已知清单比对；CLI 升级后出现的新工具在 Inspector 中标出，由用户决定是否禁用。现在适配器只从 `system/init` 读取会话 ID 和工作目录；Inspector 也还没有做（[frontend.md](frontend.md) §2）。
-- Codex role 不读用户的 `config.toml`。Claude role 同样不读设置文件：用户为自己使用配置的 hooks 和权限规则，假定有人在场。所以用户为自己选的模型和推理强度对 role 都不生效，模型与推理强度由 Lobotomy 按用户在设置中的选择传入（§1.2）。2026-10-13 实测，在有这个设置之前：用户的 Claude 设置是 `opus`，Angela 的 turn 用的是 `claude-fable-5-1`；用户的 Codex 配置是 `gpt-6-astra` 与 medium，Angela 的 turn 用的是 `gpt-6.1-sol` 与 low。
+- Codex role 不读用户的 `config.toml`。Claude role 同样不读设置文件：用户为自己使用配置的 hooks 和权限规则，假定有人在场。所以用户为自己选的模型和推理强度对 role 都不生效，模型与推理强度由 Lobotomy 按用户在设置中的选择传入（§1.2）。2026-10-13 实测，Lobotomy 不传模型时：用户的 Claude 设置是 `opus`，Angela 的 turn 用的是 `claude-fable-5-1`；用户的 Codex 配置是 `gpt-6-astra` 与 medium，Angela 的 turn 用的是 `gpt-6.1-sol` 与 low。
   - 待决：同一天 Fable 的额度用完，CLI 的提示是可以换用别的模型。额度域现在按 harness 划分（data-model.md §8）；各 role 都用同一个默认模型时，这样划分不会多停 role。现在可以按 role 选模型，额度域是否要细到模型，还没有定。
-- **全局指令文件**（用户确认，2026-10-04）：Codex role 继承用户个人的 `~/.codex/AGENTS.md`，Lobotomy 不另开 `CODEX_HOME`。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 与 `-c project_doc_max_bytes=0` 都不能排除全局 AGENTS.md（§1.4）。Claude role 的情况见 §6。
-- **用户自己装的 skill 不给 role 用，官方的保留**（用户确认，2026-10-13）。依据：用户自己的 skill 写的是用户本人的协作与工程习惯，Angela 在 Codex 上的一个 turn 用命令读了 user-collaboration 和 engineering-taste 的 `SKILL.md`。Codex 与插件自带的 skill 关掉会削弱模型的能力。
+- **全局指令文件**（用户定）：Codex role 继承用户个人的 `~/.codex/AGENTS.md`，Lobotomy 不另开 `CODEX_HOME`。理由：单独的 home 需要另行登录，以后的接管也只能走 CLI 的 TUI，增加的复杂度不值得。实测 `--ignore-user-config` 与 `-c project_doc_max_bytes=0` 都不能排除全局 AGENTS.md（§1.4）。Claude role 的情况见 §6。
+- **用户自己装的 skill 不给 role 用，官方的保留**（用户定）。依据：用户自己的 skill 写的是用户本人的协作与工程习惯，Angela 在 Codex 上的一个 turn 用命令读了 user-collaboration 和 engineering-taste 的 `SKILL.md`。Codex 与插件自带的 skill 关掉会削弱模型的能力。
   - Codex：每个 turn 列出 `$CODEX_HOME/skills`（默认 `~/.codex/skills`）与 `~/.agents/skills` 下的 `SKILL.md`，跳过以 `.` 开头的目录（Codex 自带的 skill 在 `.system`），用 `-c skills.config=[{path=…, enabled=false}, …]` 逐个关掉。路径用正斜杠。仓库自己的 skill 不动。`-c skills.include_instructions=false` 会连官方的一起关掉，不用。
   - Codex 实测（codex-cli 0.162.0-alpha.17.2，Windows，2026-10-13，带 §1.2 的参数）：不关时，模型说能用 imagegen、openai-docs、skill-creator、skill-installer，以及用户的 engineering-taste、great-resume、grilling、grilling-adapter、user-collaboration；按路径关掉后只剩前四个。
   - Claude：用 `--setting-sources ""` 启动时，`system/init` 的 skill 清单中没有用户从 claude.ai 同步的 skill，例如 docx、coding-discipline（2026-10-13）。
 - **Claude Code 2.1.283 实测**（Windows，2026-10-09）：
   - 用上面的参数启动后，`system/init` 中的工具清单为 Task、Edit、Glob、Grep、NotebookEdit、PowerShell、Read、ReportFindings、Skill、TaskCreate、TaskGet、TaskList、TaskStop、TaskUpdate、ToolSearch、WebFetch、WebSearch、Write；MCP 服务只有 lobotomy。
   - `Workflow` 是新出现的工具，会在后台启动多个 agent，可能在 turn 结束后仍在运行，所以去掉。子 agent（`Task`）在 turn 内同步完成，保留。
-  - Windows 上执行命令的工具是 `PowerShell`，不是 `Bash`。待办列表改为 `TaskCreate`、`TaskUpdate` 等工具，不再是 `TodoWrite`。
+  - Windows 上执行命令的工具是 `PowerShell`，不是 `Bash`。待办列表用 `TaskCreate`、`TaskUpdate` 等工具，没有 `TodoWrite`。
 - **后台任务的实测**（Claude Code 2.1.283，haiku，`-p` 加 stream-json，Windows，2026-10-17）：
   - 不设变量时，模型用 `run_in_background` 启动一条 20 秒的命令，回复"已在后台启动"后，turn 以 `result/success` 结束。约 5 秒后，Claude Code 把后台任务标为 `killed`，进程以退出码 0 退出，命令没有跑完。print 模式下，后台任务结束不会再唤醒模型。
   - 设了变量后，工具中没有 `run_in_background` 参数。明确要求放后台时，模型改用 PowerShell 的 `Start-Job`；turn 照样正常结束，作业随进程树结束（§1.8）。所以这个变量只减少这种情况，不能杜绝。worker 宿主对这种情况的处理见 worker-interface.md §10。
@@ -209,7 +209,7 @@ Lobotomy 不恢复被中断的执行现场。
 
 后端退出时，操作系统默认不保证后端启动的 harness 进程一起退出。所以运行时用一层很薄的平台启动适配，把后端与它启动的进程树绑定（[#7](https://github.com/vorton-lang/Lobotomy/issues/7)）。
 
-**语义更新**（[#46](https://github.com/vorton-lang/Lobotomy/issues/46)，用户确认，2026-10-11）：Lobotomy 负责自己启动的进程树。Windows 用 Job Object；Linux 用独立进程组，覆盖 CLI 和仍在这个进程组中的普通子进程。主动脱离进程组或另建 session 的进程不在 Linux 的保证范围内。harness 仍先走自己的中断与清理路径。依据：Windows 的 Job Object 本来就结束整个进程树，这样两个平台行为一致；归档超时时也要结束 CLI 的进程树（data-model.md §10.4）。
+Lobotomy 负责自己启动的进程树（[#46](https://github.com/vorton-lang/Lobotomy/issues/46)，用户定）。Windows 用 Job Object；Linux 用独立进程组，覆盖 CLI 和仍在这个进程组中的普通子进程。主动脱离进程组或另建 session 的进程不在 Linux 的保证范围内。harness 仍先走自己的中断与清理路径（后端正常关闭时除外，见下文）。依据：Windows 的 Job Object 本来就结束整个进程树，这样两个平台行为一致；归档超时时也要结束 CLI 的进程树（data-model.md §10.4）。
 
 | 平台 | 做法 | 效果 | 实现 |
 |---|---|---|---|
@@ -218,14 +218,14 @@ Lobotomy 不恢复被中断的执行现场。
 
 实现在 [harness/src/process.rs](../backend/crates/harness/src/process.rs)。
 
-**turn 结束时**（**语义更新**，2026-10-04）：CLI 退出后，运行时结束这个 turn 的进程树，确认其中的进程已退出，然后才结束这个 turn。代价是 agent 在 turn 中启动的后台进程（例如开发服务器）不会存活到 turn 之后。
+**turn 结束时**：CLI 退出后，运行时结束这个 turn 的进程树，确认其中的进程已退出，然后才结束这个 turn。代价是 agent 在 turn 中启动的后台进程（例如开发服务器）不会存活到 turn 之后。
 
-后端正常关闭时：
+**后端正常关闭时**（用户定）：运行时不先中断再等待，直接结束 CLI 的进程树。被结束的 turn 在下次启动时照常核对。依据：第 1 步的实际验收中（2026-10-17），Codex 在 10 秒内没有响应 Ctrl+C，用户只看到应用迟迟不退出；强制结束后，任务照样在同一个会话里续接。没有证据表明多等能多留下什么。
+
+未实现，见 tech-plan.md §7"实际验收"。现状是先中断再等待：
 
 1. 运行时调用 harness 的原生中断或退出路径。
 2. 运行时等待 CLI 退出。归档超过宽限期时强制结束所属进程组或 Job Object，确认其中的进程已退出，再释放项目。Linux 已退出但尚未回收的僵尸进程不再运行，不阻止这一步。
-
-**语义更新**（用户，2026-10-17）：退出时不再先中断再等待，直接结束 CLI 的进程树；被结束的 turn 在下次启动时照常核对。依据：第 1 步实际验收中，Codex 在 10 秒内没有响应 Ctrl+C，用户只看到应用迟迟不退出；强制结束后，任务照样在同一个会话里续接。没有证据表明多等能多留下什么。未实现，见 tech-plan.md §7"实际验收"。
 
 丢弃 runner、关闭进程句柄和 kill-on-drop 都只作兜底，不能代替正常收尾中的退出确认。
 
@@ -254,12 +254,11 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 **测试**：
 
 - [backend/crates/harness/tests/process_tree.rs](../backend/crates/harness/tests/process_tree.rs)：在两个平台上，确认结束时 CLI 与它的子进程都已退出；丢弃进程的所有者时也结束整个进程树。
-- [backend/crates/worker/tests/runner.rs](../backend/crates/worker/tests/runner.rs)：停止 turn 时经辅助进程中断，不响应中断的 CLI 在宽限期后连同进程树结束。原来测归档时这一行为的后端测试，随本地执行者的路径删除（2026-10-17）。
-- 原来 `harness/tests/process.rs`（Windows）测挂起、存活检查和关闭 Job 时结束孙进程，backend.rs 另测经辅助进程中断一个 turn。它们于 2026-10-17 随测试退役删除（#86）。
+- [backend/crates/worker/tests/runner.rs](../backend/crates/worker/tests/runner.rs)：停止 turn 时经辅助进程中断，不响应中断的 CLI 在宽限期后连同进程树结束。
 
 ### 1.9 权限模式
 
-**语义更新**（#13，用户确认，2026-10-04）：每个 harness 有一项权限设置。设置属于本机（data-model.md §10），所有项目共用。Codex 与 Claude 分开设置：同一个环境可能允许一个完全放开，而不允许另一个。依据：#13 的测试环境中，管理员通过 Codex 的 requirements 不允许完全放开，Codex 一启动就退出。
+每个 harness 有一项权限设置（#13，用户定）。设置属于本机（data-model.md §10），所有项目共用。Codex 与 Claude 分开设置：同一个环境可能允许一个完全放开，而不允许另一个。依据：#13 的测试环境中，管理员通过 Codex 的 requirements 不允许完全放开，Codex 一启动就退出。
 
 | 模式 | 什么时候用 | Codex | Claude（自动审批未在受管环境中实测） |
 |---|---|---|---|
@@ -295,30 +294,30 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 ## 2. MCP 服务
 
-后端在 localhost 提供 streamable HTTP MCP。运行时每轮把带 token 的 URL 传给 CLI（1.3 第 2 条），由 URL 识别调用者；每轮不需要额外启动子进程。工具集见 [manager-actions.md](manager-actions.md) 与 [roles-and-tasks.md](roles-and-tasks.md)。
+后端在 localhost 提供 streamable HTTP MCP。运行时按 turn 发放 token，每轮把带 token 的 URL 传给 CLI（1.3 第 2 条），由 URL 识别调用者；每轮不需要额外启动子进程。`done` 等 MCP 调用绑定到发出它的 turn，不按"角色当前任务"反查归属（[data-model.md](data-model.md) §3）。工具集见 [manager-actions.md](manager-actions.md) 与 [roles-and-tasks.md](roles-and-tasks.md)。
 
-**实现**（2026-10-04）：
+**实现**：
 
-- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{project}/{token}`（M3 起）：路由先按项目 ID 找到打开的项目实例，没有时返回 404；再把项目实例和 token 放进 HTTP 请求的扩展中。工具处理函数从请求上下文读取它们，在这个项目中按 token 找到 turn（data-model.md §10.3）。Angela 的地址是 `/mcp/angela/{token}`，不带项目 ID；token 在她自己的数据库中找到她的 turn，工具参数带项目 ID（M4，data-model.md §10.6）。项目 ID 是带前缀的 ULID，不会是 `angela`。
+- 使用官方 Rust SDK rmcp 3.5（[architecture.md](architecture.md) §3）。URL 为 `/mcp/{project}/{token}`：路由先按项目 ID 找到打开的项目实例，没有时返回 404；再把项目实例和 token 放进 HTTP 请求的扩展中。工具处理函数从请求上下文读取它们，在这个项目中按 token 找到 turn（data-model.md §10.3）。Angela 的地址是 `/mcp/angela/{token}`，不带项目 ID；token 在她自己的数据库中找到她的 turn，工具参数带项目 ID（data-model.md §10.6）。项目 ID 是带前缀的 ULID，不会是 `angela`。
 - 服务不保存 MCP 会话（rmcp 的 stateless 模式），工具调用以单个 JSON 响应返回，不用 SSE 流，不提供 GET 流（返回 405）。调用者已由 URL 中的 token 识别，会话没有额外作用。
 - `Host` 只接受 loopback 名称，防止 DNS 重绑定。
 - 两家 CLI 协商的协议版本不同（§1.4）：Claude 已使用 2026-07-28 的无状态协议，Codex 仍使用 2025-06-18 的 `initialize` 握手。stateless 模式对两者逐个请求应答，两者都能工作。
 
-**契约测试**：原来在 `backend/crates/lobotomyd/tests/mcp_contract.rs`。它用真实 CLI 跑一个 turn，确认三点：CLI 调用了工具，处理函数从 URL 取到了 token；所有 HTTP 交换都成功；工具结果到达了模型。测试打印协商的协议版本和每个 HTTP 交换。它消耗订阅额度，默认不运行。**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：它随测试退役删除。怎样对照真实 CLI 检查 adapter，随 worker 层的替换再定。
+**契约测试**：仓库中没有用真实 CLI 的契约测试（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户定）。怎样对照真实 CLI 检查 adapter，随 worker 层的替换再定。
 
-留下的结果：
+下面的实测结果来自用真实 CLI 的测试，这些测试消耗订阅额度，现在不在仓库中。
+
+MCP 契约测试用真实 CLI 跑一个 turn，确认三点：CLI 调用了工具，处理函数从 URL 取到了 token；所有 HTTP 交换都成功；工具结果到达了模型。测试打印协商的协议版本和每个 HTTP 交换。结果：
 
 - 2026-10-04：Claude Code 2.1.283 与 Codex CLI 0.159.2 都通过。
 - 2026-10-10：Claude 的契约测试用适配器拼出的参数（MCP 配置文件、权限、能力裁剪），通过，协商的协议版本为 2026-07-28。
 
-真实 CLI 的后端测试（默认不运行，消耗订阅额度）。它们也于 2026-10-17 随测试退役删除（#86），下面是留下的结果：
+真实 CLI 的后端测试：
 
 - `a_real_codex_turn_reports_done`、`a_real_claude_turn_reports_done`、`a_real_claude_turn_is_interrupted_and_continued`。2026-10-10 都通过：真实 Claude 走完建任务、done、采集、验证到等待验收；输出中没有解析器不认识的事件。
 - `a_real_quota_check_passes`：真实 Codex 的额度检查调用。
 - `a_real_claude_angela_assigns_a_task`：Angela 在真实 Claude 上派一个只读任务。2026-10-11 通过一次（[roadmap.md](roadmap.md) M4）。
 - Claude 的各项用 haiku，结束后删除测试会话的记录。
-
-**语义更新**（2026-10-03，[data-model.md](data-model.md) §3）：运行时按 turn 发放 token。`done` 等 MCP 调用绑定到发出它的 turn，不按"角色当前任务"反查归属。
 
 ## 3. 执行现场
 
@@ -327,13 +326,11 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 | Angela（manager） | host 目录下她实例的 `work/`，一个空目录；按绝对路径读各项目的仓库（data-model.md §10.6） |
 | Binah（tech_lead） | 未实现，roadmap 待排 |
 | 执行者（worker） | worker 宿主为每个 attempt 准备的工作区：普通文件夹，或给了上游时的一份 clone（worker-interface.md §10） |
-| Yesod（reviewer） | 未实现，roadmap 待排。原设计在固定的候选成果上单独物化审查现场，依赖的私有存储已退出（#86） |
+| Yesod（reviewer） | 未实现，roadmap 待排。在固定的候选成果上单独物化审查现场的做法依赖私有存储，Lobotomy 没有私有存储（#86） |
 
-**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，2026-10-17）：每个 role 在自己的空目录中运行。Angela 用她实例的 `work/`，项目的 role 用项目数据目录下的 `work/<role 名>/`。运行时不把仓库复制进任何目录，所以过渡期的 main 不能执行代码任务。依据：槽位与私有存储随 worker 层的替换退出。
+后端不运行项目中的 role（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户定）。执行者是 `workers.toml` 中的 worker，在 worker 宿主准备的工作区中运行，见上表。Angela 的 `work/` 是空目录，运行时不把仓库复制进去。
 
-**语义更新**（#86，用户，2026-10-17）：后端不再运行项目中的 role，上一条中项目的 role 用 `work/<role 名>/` 不再适用。执行者是 `workers.toml` 中的 worker，在 worker 宿主准备的工作区中运行，见上表。依据：用户要求删掉本地执行者的路径。
-
-角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。Angela 读项目的仓库，与用户看到同一份代码；她的指令写明仓库只用来展示，不修改（data-model.md §10.6，用户确认，2026-10-11）。
+角色定义见 [roles-and-tasks.md](roles-and-tasks.md)。Angela 读项目的仓库，与用户看到同一份代码；她的指令写明仓库只用来展示，不修改（data-model.md §10.6，用户定）。
 
 - **执行现场不是事实来源。** 工作目录只是 CLI 的执行环境，不能反过来推断业务事实；业务事实以 SQLite 为准（#6 §1）。
 - **只有 Lobotomy 创建执行现场。** 不使用 `claude -w`、`codex --worktree`，`EnterWorktree` 已在 1.6 中禁用。
@@ -341,7 +338,7 @@ OS 绑定只在后端异常退出时兜底。进程结束不等于业务成功�
 
 ## 4. 成果与验收
 
-**语义更新**（#86，2026-10-17）：运行时不采集、不验证、不发布成果，也不写项目的仓库。执行者报告 `done` 后，那个 turn 结束时，attempt 以候选成果结束，任务进入验收。用户或 Angela 验收后任务完成；退回时开始下一个 attempt（data-model.md §4.1、§9.2）。依据：采集、验证、预览与展示分支采用随 worker 层的替换退出；新方向的成果走 PR、CI 与合并（#86）。
+运行时不采集、不验证、不发布成果，也不写项目的仓库。依据：成果走 PR、CI 与合并（#86）。执行者报告 `done` 后，那个 turn 结束时，attempt 以候选成果结束，任务进入验收。用户或 Angela 验收后任务完成；退回时开始下一个 attempt（data-model.md §4.1、§9.2）。
 
 进行中的工作在 GUI 中按任务查看，界面见 [frontend.md](frontend.md)：
 

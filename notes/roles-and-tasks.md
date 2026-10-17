@@ -1,16 +1,16 @@
 # 角色与任务
 
-> Status: 设计决定 v0.3（2026-10-03）
+> Status: 设计决定
 > 前置：[harness-adapter.md](harness-adapter.md)、[manager-actions.md](manager-actions.md)
 > 依据：任务模型按 [#5](https://github.com/vorton-lang/Lobotomy/issues/5) 确认的"持久工单 + 受控状态机"方向；attempt 与 turn 的关系按 [#7 的讨论补充](https://github.com/vorton-lang/Lobotomy/issues/7#issuecomment-5953401457)，见 [data-model.md](data-model.md) §4。
-> **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：采集、验证、发布与试用随 worker 层的替换退出。现在的任务流见 §2.2。
+> 任务流中没有采集、验证、发布与试用（用户定，[#86](https://github.com/vorton-lang/Lobotomy/issues/86)）。任务流见 §2.2。
 
 ## 1. 角色
 
 ### 1.1 角色类型与具名角色
 
 - **角色类型**是模板，规定职责、指令与工具权限：`manager`、`tech_lead`、`worker`、`reviewer`。
-- **具名角色**是实例，有一个类型和当前使用的 harness，在每个 harness 上可以选模型和推理强度（**语义更新**，用户确认，2026-10-13：原来写"绑定一个模型"；模型名属于 harness，见 harness-adapter.md §1.2）。名字沿用 Lobotomy Corporation 的设定，最多 11 个：Angela，以及 10 位 Sephirah（Malkuth、Yesod、Hod、Netzach、Tiphereth A、Tiphereth B、Gebura、Chesed、Binah、Hokma）。
+- **具名角色**是实例，有一个类型和当前使用的 harness，在每个 harness 上可以选模型和推理强度（用户定；模型名属于 harness，见 harness-adapter.md §1.2）。名字沿用 Lobotomy Corporation 的设定，最多 11 个：Angela，以及 10 位 Sephirah（Malkuth、Yesod、Hod、Netzach、Tiphereth A、Tiphereth B、Gebura、Chesed、Binah、Hokma）。
 - **名字只是标识**，给用户一点 role play 的感觉，不影响工作。名字出现在 GUI、消息标题（`【来自 Binah】`）、会议中的 @、以及"等 Binah"这类状态里。角色指令中只告知 role 自己的名字，不写入游戏角色的性格。
 
 ### 1.2 v1 人员
@@ -19,21 +19,21 @@
 |---|---|---|---|
 | Angela | manager | Claude | host 目录下她自己的空目录；全局一个（data-model.md §10.6） |
 | Binah | tech_lead | Claude | 未实现 |
-| Malkuth | worker | Codex | 不再运行，见下方语义更新 |
-| Yesod | reviewer | Codex | 未实现；原设计的审查现场依赖已退出的私有存储（#86） |
+| Malkuth | worker | Codex | 不运行，执行者见下文 |
+| Yesod | reviewer | Codex | 未实现；审查现场待决（§1.3） |
 
-- 表中的 harness 是默认值。每个 role 都能换 harness，Angela 也一样（harness-adapter.md §0，用户确认，2026-10-09）。
-- Angela 全局只有一个，属于用户（**语义更新**，[#23](https://github.com/vorton-lang/Lobotomy/issues/23)，用户确认，2026-10-09；data-model.md §10.6）。
+- 表中的 harness 是默认值。每个 role 都能换 harness，Angela 也一样（用户定；harness-adapter.md §0）。
+- Angela 全局只有一个，属于用户（用户定，[#23](https://github.com/vorton-lang/Lobotomy/issues/23)；data-model.md §10.6）。
 - Binah 与 Yesod 未实现，列入 roadmap 待排。
-- **语义更新**（#86，用户，2026-10-17）：后端不再运行 Malkuth。项目的执行类 role 是 host 目录的 `workers.toml` 中列出的 worker：名字、harness 和模型都由配置给出，agent 在 worker 宿主中运行（tech-plan.md §7 第 7 组，harness-adapter.md §3）。依据：用户要求删掉本地执行者的路径。
+- 后端自己不运行执行类 role，Malkuth 不运行（用户定，#86）。项目的执行类 role 是 host 目录的 `workers.toml` 中列出的 worker：名字、harness 和模型都由配置给出，agent 在 worker 宿主中运行（tech-plan.md §7 第 7 组，harness-adapter.md §3）。
 
 ### 1.3 类型职责
 
-- **manager**：用户的全局协作者，也是默认入口。用户经它管理各个项目，也可以直接打开其他 role 的窗口。直接通路是常设的二等入口，不是临时方案；用户自然选择，不强制（**语义更新**，[#23](https://github.com/vorton-lang/Lobotomy/issues/23)，用户确认，2026-10-09）。职责见她的指令 [prompts/manager.md](../backend/crates/lobotomyd/src/prompts/manager.md)，动作见 [manager-actions.md](manager-actions.md)。
+- **manager**：用户的全局协作者，也是默认入口。用户经它管理各个项目，也可以直接打开其他 role 的窗口。直接通路是常设的二等入口，不是临时方案；用户自然选择，不强制（用户定，[#23](https://github.com/vorton-lang/Lobotomy/issues/23)）。职责见她的指令 [prompts/manager.md](../backend/crates/lobotomyd/src/prompts/manager.md)，动作见 [manager-actions.md](manager-actions.md)。
 - **tech_lead**：找问题、提质疑、做架构层面的调研。由 Manager 派任务，也可被 Manager 临时咨询。代码审查不是它的职责。
 - **worker**：执行任务。`done` 只提交候选成果，不代表任务完成。
 - **reviewer**：对照完成条件和代码质量审查一份固定的候选成果，可以跑测试；只给出结论（通过 / 要求修改）和具体意见，不改代码。结论绑定所审查的成果与完成条件版本。
-  - 审查现场的原设计是在已 pin 的不可变成果上单独物化一份；它依赖的私有存储已退出（#86），审查现场随 worker 层的替换重新设计。
+  - 审查现场待决，随 worker 层的替换重新设计（#86）。
   - 每个任务新开一个会话，同一任务的多轮审查共用：前者避免受过去审查的先入之见影响，后者让它能核对自己上一轮的意见是否已处理。由运行时机械轮换。
 
 ### 1.4 没有 Angela 也能运转
@@ -56,7 +56,7 @@ Lobotomy 离开 Angela 应当仍然可用：会非常难用，但控制流能完
 - **任务 ID 稳定**，跨 turn、会话更换和下线保持不变。
 - **执行轮（attempt）**：每次进入执行就开一个 attempt，包括任务开始、退回、重开。一个 attempt 可以包含多个 turn；同一 attempt 内接续时，运行时只新建 turn，不新建 attempt。重开任务建立新 attempt，并保留已关闭的历史。旧 attempt 迟到的 `done` 不能完成新 attempt。见 [data-model.md](data-model.md) §4.1。
 - **完成条件版本化**：条件被修改后，旧证据只对旧版本有效。代码任务与研究任务采用各自相应的证据；没有代码不等于自动免审。修改的处理与证据的作废条件见 data-model.md §4.4、§4.5。
-- **离开执行阶段后，发给执行者的消息排队**，任务回到执行时再投递。任务关闭时不再投递；还有未投递的用户消息时，验收要用户明确放弃它们（data-model.md §4.2，**语义更新**，#14）。
+- **离开执行阶段后，发给执行者的消息排队**，任务回到执行时再投递。任务关闭时不再投递；还有未投递的用户消息时，验收要用户明确放弃它们（data-model.md §4.2，#14）。
 
 ### 2.2 生命周期
 
@@ -69,10 +69,10 @@ v1 优先稳定而不是吞吐：任务真正完成前，所有参与者都不�
   执行阶段可进出"阻塞"；任何阶段都可"放弃"
 ```
 
-审查阶段未实现，列入 roadmap 待排。现在报告 `done` 的 turn 结束后，任务直接进入验收（data-model.md §4.1）。**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：验证阶段随 worker 层的替换退出。
+审查阶段未实现，列入 roadmap 待排。现在报告 `done` 的 turn 结束后，任务直接进入验收（data-model.md §4.1）。生命周期中没有验证阶段（用户定，[#86](https://github.com/vorton-lang/Lobotomy/issues/86)）。
 
 - **阶段、用户暂停、阻塞原因三者分开记录。** 额度恢复不解除用户暂停；暂停期间的产出保留，但不自动推进。
-  - **语义更新**（#86，2026-10-17）：暂停时仍在运行的 turn 报告的 `done` 照常生效：这个 turn 结束时，任务进入验收。暂停挡住的是运行时启动新的 turn；验收是用户或 Angela 的决定。依据：[#62](https://github.com/vorton-lang/Lobotomy/issues/62) 中关于验证的规则随验证退出。
+  - 暂停时仍在运行的 turn 报告的 `done` 照常生效：这个 turn 结束时，任务进入验收。暂停挡住的是运行时启动新的 turn；验收是用户或 Angela 的决定（#86）。
   - 待决问题：暂停是否中断正在运行的 turn。现在 turn 继续运行到结束；暂停不代表 CLI 进程已退出。
 - **所有状态变化都经运行时命令完成**（GUI 与 agent 同一入口），由命令检查权限、当前执行轮与前置条件，并连同依据一并持久保存。
 
@@ -83,17 +83,17 @@ v1 优先稳定而不是吞吐：任务真正完成前，所有参与者都不�
 | 执行 ⇄ 阻塞 | 执行者 `org_report(status: blocked, blocked_on)`；卡在等用户时自动挂到"等你决定"。用户或 Manager 在提问之后发来的回复绑定到执行者的下一个 turn 时解除（data-model.md 的"问题与回复的因果关联"；§4"Manager 的消息也解除执行者的提问"） |
 | 执行 → 验收 | 执行者 `org_report(status: done)`。`done` 可能早于 CLI 退出：运行时记下 `done` 并保持占用；这个 turn 结束时，attempt 以候选成果结束，任务进入验收（data-model.md §4.1） |
 | 执行 → 审查（未实现） | 运行时：把候选成果交给 Reviewer |
-| 审查 → 验收 / 退回 | Reviewer 给出结论。通过则进入验收；要求修改时由 Manager 给出建议，用户选择哪些现在改、哪些暂缓（可转为 issue）（**语义更新**，[#19](https://github.com/vorton-lang/Lobotomy/issues/19)，用户确认，2026-10-13），退回时按 ID 引用 Reviewer 意见原文。暂缓意见、风险豁免与最终验收分别留痕，"暂缓了全部意见"不能记作"审查通过" |
+| 审查 → 验收 / 退回 | Reviewer 给出结论。通过则进入验收；要求修改时由 Manager 给出建议，用户选择哪些现在改、哪些暂缓（可转为 issue）（用户定，[#19](https://github.com/vorton-lang/Lobotomy/issues/19)），退回时按 ID 引用 Reviewer 意见原文。暂缓意见、风险豁免与最终验收分别留痕，"暂缓了全部意见"不能记作"审查通过" |
 | 验收 → 完成 / 退回 | Manager 判断是否满足完成条件；例外验收如实留痕。验收决定与任务关闭在同一个 SQLite 事务中提交（data-model.md §9.2）。验收不发布任何内容（#86） |
 | 放弃 | Manager 或用户。关闭本轮及后续调度，保留记录与证据。放弃不涉及撤销代码 |
 
 - **参与者 = 执行者 + Reviewer。** 从开始到完成或放弃，运行时不给参与者派别的任务。Manager 临时咨询 TL 不会使 TL 成为参与者。
-- **审查默认给一轮返工，由运行时执行**（**语义更新**，[#19](https://github.com/vorton-lang/Lobotomy/issues/19)）：首次审查 → 用户选择要改的意见 → 一次返工 → 再次审查；仍不通过时交给用户决定，不继续循环。重开任务不会静默重置审查预算，也不继承旧结论。
+- **审查默认给一轮返工，由运行时执行**（[#19](https://github.com/vorton-lang/Lobotomy/issues/19)）：首次审查 → 用户选择要改的意见 → 一次返工 → 再次审查；仍不通过时交给用户决定，不继续循环。重开任务不会静默重置审查预算，也不继承旧结论。
 - **任务范围的约束自动失效。** ledger 中带 `task_id` 的 `constraint` 在任务关闭时失效（manager-actions.md §3.2）。
 
 ### 2.3 任务与成果
 
-**语义更新**（#86，用户确认，2026-10-17）：运行时不再采集成果。这个任务做了什么，看执行者 `done` 报告的交付说明，以及 Thread 中属于这个任务的 turn。成果的来源怎样记录，随 worker 层的替换与 PR 流程重新设计。
+运行时不采集成果（用户定，#86）。这个任务做了什么，看执行者 `done` 报告的交付说明，以及 Thread 中属于这个任务的 turn。成果的来源怎样记录，随 worker 层的替换与 PR 流程重新设计。
 
 ## 3. Workboard
 
@@ -129,23 +129,23 @@ Yesod    审查：实现 Codex adapter               进行中
 - `assign` 的 `links`（关联 issue 或 PR，§2.1）要等 GitHub 接入，未实现，列入 roadmap 待排。
 - `set_paused` 与 `ask_user` 见本节下面的"用户设的暂停只有用户能解除"与 manager-actions.md §6。
 
-**`assign` 必须写明允许的动作和停止条件**（用户确认，2026-10-11）：
+**`assign` 必须写明允许的动作和停止条件**（用户定）：
 
 - `actions`：执行者可以做哪些事，从"只读调查""改文档""改代码"中选，可以多选。
 - `stop_when`：这项工作的范围或预算，例如"得到第一个可用结果就汇报""最多测量一次"。它与 `done_when` 分开：完成条件说成果要满足什么；停止条件说什么时候停下来汇报，不再扩大。
 - 这一条约束 Manager 派的任务。用户在 GUI 中直接建任务不受影响。
 - 依据：Manager 的面试中，候选把对用户意图的推断当成授权，并把插进来的小事扩大成没有边界的调查（[Ember manager-interviews 第二轮](https://github.com/vorton-lang/Ember/tree/main/manager-interviews/2026-10-11-official-cli-round2)）。写在 Manager 的指令里只能提高概率；做成必填字段，每次派活都必须先写清这两项。
-- 运行时对 `actions` 不拦截（用户确认，2026-10-11），由用户或 Manager 决定是否验收。**语义更新**（#86，用户确认，2026-10-17）：运行时不再标出只读调查的任务改了哪些文件。这个标记来自采集候选成果时与基线的比较，采集已退出。
-- `stop_when` 只展示给执行者和用户，运行时不计量（用户确认，2026-10-11）。真实使用中出现执行者到了停止条件还不停下的情况后，再考虑按时间或 turn 数计量。
+- 运行时对 `actions` 不拦截（用户定），由用户或 Manager 决定是否验收。运行时也不标出只读调查的任务改了哪些文件（用户定，#86）：这需要采集候选成果并与基线比较，而运行时不采集成果（§2.3）。
+- `stop_when` 只展示给执行者和用户，运行时不计量（用户定）。真实使用中出现执行者到了停止条件还不停下的情况后，再考虑按时间或 turn 数计量。
 - 待决问题：允许"改文档"、不允许"改代码"的任务改了代码时，运行时怎样判断哪些文件算文档。
 
-**用户设的暂停只有用户能解除**（用户确认，2026-10-11，[#50](https://github.com/vorton-lang/Lobotomy/issues/50)）：
+**用户设的暂停只有用户能解除**（用户定，[#50](https://github.com/vorton-lang/Lobotomy/issues/50)）：
 
 - 运行时记下暂停由谁设置。任务被用户暂停时，Manager 的恢复命令被拒绝。Manager 自己设的暂停，Manager 可以解除（manager-actions.md §6）。
 - 依据：#50 中的场景是用户先同意继续，之后直接暂停任务。Manager 按旧的摘要行动时，可能重新启动这个任务。只写在 Manager 的指令里防不住这种情况（roadmap.md M4）。暂停是用户的权威，Manager 的判断不能覆盖它（roadmap.md"事实、权威、判断分开"）。
 - 待决问题：用户的其他直接操作是否也只有用户能撤销，例如重开用户放弃的任务、改回用户刚修改的完成条件。现在 Manager 不能重开任务，也不能修改完成条件（data-model.md §10.6 跨库操作第 2 条）。
 
-**Manager 的消息也解除执行者的提问**（**语义更新**，用户确认，2026-10-11）：
+**Manager 的消息也解除执行者的提问**（用户定）：
 
 - Angela 在执行者提问之后发给它的消息，绑定到执行者的下一个 turn 时，也解除这个阻塞，与用户的回复相同。关联规则见 data-model.md 的"问题与回复的因果关联"。
 - 依据：manager-actions.md §0"Manager 就是下层的用户"。用户经 Angela 回答时，Angela 用 `send_to_role` 转达原话；只有用户直接发的消息能解除时，执行者收到答复后，"等你决定"中仍然留着这个问题。

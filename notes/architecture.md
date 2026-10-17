@@ -16,7 +16,7 @@ lobotomyd ──启动，stdio 上的 worker 协议──→ worker 宿主 lobot
 执行者的 CLI（每个 turn 一个进程）──MCP──→ 所属的 worker 宿主
 ```
 
-**语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：`store` crate（jj 私有存储）、采集、验证、预览、展示分支采用与试用终端随 worker 层的替换退出。新方向的分层见 [tech-plan.md](tech-plan.md) §1，worker 接口见 [worker-interface.md](worker-interface.md)。
+分层见 [tech-plan.md](tech-plan.md) §1，worker 接口见 [worker-interface.md](worker-interface.md)。
 
 - 一个后端进程管理所有项目和 Angela（data-model.md §10，frontend.md §1）。Angela 打不开时，项目照常运行。
 - agent 驱动是单独的 crate `lobotomy-agent`（tech-plan.md §7 第 1 步）。后端用它运行 Angela 的 turn，worker 宿主用它运行执行者的 turn。它的模块：
@@ -78,14 +78,14 @@ spikes/                  实测用的探针脚本
 
 改什么跑什么，见 [AGENTS.md](../AGENTS.md)"改什么跑什么"。
 
-- **CI**（用户确认，2026-10-04；`.github/workflows/ci.yml`）：每次推送与 PR 都在 Windows 和 Ubuntu 上运行：
+- **CI**（用户定；`.github/workflows/ci.yml`）：每次推送与 PR 都在 Windows 和 Ubuntu 上运行：
   - 后端：格式检查、全部测试、Clippy。Clippy 跑两次：默认构建一次，加 `--features lobotomyd/ts-rs` 一次。
   - GUI 类型：`npm run api:check`，检查生成的类型没有漂移，并用真实的 serde 输出检查类型（frontend.md §7.1）。
   - 前端：类型检查、单元测试、构建。
   - 端到端测试：Windows 上用本机 Edge，Ubuntu 上用 Playwright 自带的 Chromium，Electron 在 Xvfb 下运行。
   - 推送到 main 时另外运行性能基线，只记录，不设门槛（perf-baseline.md）。
 - 后端按 `backend/rustfmt.toml` 统一格式（行宽 120）。
-- **语义更新**（[#86](https://github.com/vorton-lang/Lobotomy/issues/86)，用户确认，2026-10-17）：只保留回归测试，没有拦住过问题的测试已经退役（tech-plan.md §8）。新增测试的规则见 AGENTS.md"加测试前"。
-- 后端测试用假 CLI 驱动真实的后端；执行者的 runner 测试用假 CLI 驱动真实的 worker 宿主（`worker/tests/runner.rs`）。真实 CLI 的测试已随测试退役删除，留下的实测结果见 harness-adapter.md §2。
+- 测试只保留回归测试，没有拦住过问题的测试已经退役（用户定，tech-plan.md §8）。新增测试的规则见 AGENTS.md"加测试前"。
+- 后端测试用假 CLI 驱动真实的后端；执行者的 runner 测试用假 CLI 驱动真实的 worker 宿主（`worker/tests/runner.rs`）。没有用真实 CLI 的测试，真实 CLI 的实测结果见 harness-adapter.md §2。
 - 前端的单元测试与端到端测试见 frontend.md §7.13。
-- 把后端的几个测试入口合并为一个二进制，试过两次，运行时间没有明显缩短，构建反而更慢，已撤回（[#24](https://github.com/vorton-lang/Lobotomy/pull/24)）。
+- 把后端的几个测试入口合并为一个二进制，试过两次，运行时间没有明显缩短，构建反而更慢，所以没有合并（[#24](https://github.com/vorton-lang/Lobotomy/pull/24)）。

@@ -9,7 +9,7 @@
 - 现状：用户可以手动组合现有操作，达到同样效果：先发消息，再中断，再选择继续。运行时不阻止这种组合，也不提供专门命令。
 - 加入条件：实测确认两家 CLI 在工具调用中途被中断后，会话记录完整，resume 能正常接续（harness-adapter.md §6）。Codex 在 Windows 上已满足：Ctrl+C 中断后，rollout 记录了工具的中止结果和 `turn_aborted`，resume 正常（harness-adapter.md §1.4）。Claude 在 Windows 上中断命令后 resume 同一会话，任务照常完成（harness-adapter.md §1.3 第 6 条，2026-10-10）。Linux 待实测。
 - 可能的替代：harness-adapter.md §6 记录了 Codex 的 `codex queue`（向已有会话排队一条消息）。如果它能在 `exec` 的 turn 运行中投递消息，可能替代这一项。是否可以，待查。
-- 新证据：同类产品的用户痛点调研中，"运行中改方向、消息排队"合计约 777👍（[research/ui-ux-survey.md](research/ui-ux-survey.md) §1.6 第 9 条）。"撤回或修改排队中的消息"已列入 [roadmap.md](roadmap.md) 待排。
+- 证据：同类产品的用户痛点调研中，"运行中改方向、消息排队"合计约 777👍（[research/ui-ux-survey.md](research/ui-ux-survey.md) §1.6 第 9 条）。"撤回或修改排队中的消息"已列入 [roadmap.md](roadmap.md) 待排。
 - 设想的做法：
   1. 消息进入收件箱。
   2. 运行时调用原生中断，等待 CLI 退出，turn 记为 interrupted。
