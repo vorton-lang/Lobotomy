@@ -94,6 +94,10 @@ pub struct Blocked {
     pub need: Need,
     /// The question to answer, for `needs_input`.
     pub question_id: Option<String>,
+    /// This stop, for `resume`: a message that names it goes on from here. Only the first one
+    /// does; later ones are refused (§3).
+    #[serde(default)]
+    pub stop_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,8 +108,8 @@ pub enum Need {
     #[serde(rename = "needs_auth")]
     Auth,
     /// The last turn was interrupted or failed, its quota refused included; the state's `reason`
-    /// says why. A message goes on in the same session and workspace. Nothing goes on by itself
-    /// (§3).
+    /// says why. A message that replies to the stop goes on in the same session and workspace;
+    /// another waits for the next turn. Nothing goes on by itself (§3).
     #[serde(rename = "resume")]
     Resume,
 }

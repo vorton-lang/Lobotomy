@@ -151,6 +151,10 @@ pub struct SendMessageParams {
     pub refs: Vec<String>,
     /// The question it answers.
     pub question_id: Option<String>,
+    /// The stop it replies to (`Blocked::stop_id`): the attempt goes on from there. A stop the
+    /// attempt is no longer at, or one already replied to, refuses the message.
+    #[serde(default)]
+    pub stop_id: Option<String>,
 }
 
 /// The requirement changed: in one step, stop the current attempt and start a new one on the new

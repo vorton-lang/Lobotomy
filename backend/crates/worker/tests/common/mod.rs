@@ -178,6 +178,7 @@ pub fn message(task: &str, id: &str, body: &str) -> SendMessageParams {
         body: body.into(),
         refs: Vec::new(),
         question_id: None,
+        stop_id: None,
     }
 }
 

@@ -79,6 +79,9 @@ pub struct Tasks {
     polled: Mutex<HashMap<String, Instant>>,
     /// When each turn was asked to stop: past the grace period, it is ended.
     interrupts: Mutex<HashMap<String, Instant>>,
+    /// Held while a message is taken in: whether a stop is still open, and its reply, must not
+    /// interleave with another message's.
+    sending: tokio::sync::Mutex<()>,
 }
 
 /// How often the checks of a delivered version are read again while some are pending.
@@ -91,6 +94,7 @@ impl Tasks {
             open: Mutex::new(HashMap::new()),
             polled: Mutex::new(HashMap::new()),
             interrupts: Mutex::new(HashMap::new()),
+            sending: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -368,6 +372,7 @@ impl Tasks {
     }
 
     pub async fn send_message(self: &Arc<Self>, params: SendMessageParams) -> OpResult<AttemptRef> {
+        let _sending = self.sending.lock().await;
         let request = serde_json::to_string(&params).expect("params are JSON serializable");
         let id = params.message_id.clone();
         if let Some(message) = self.read(move |c| store::message(c, &id)).await.map_err(rpc_error)? {
@@ -383,6 +388,9 @@ impl Tasks {
             return Err(rejected("attempt_ended", format!("attempt {} takes no more messages", attempt.id)));
         }
         let instance = self.ensure_open(&task.id).await.map_err(rpc_error)?;
+        if let Some(stop) = &params.stop_id {
+            self.check_stop(&instance, &attempt, stop).await?;
+        }
         let core_id = deliver(&instance, &attempt, &params).await.map_err(rpc_error)?;
         let (row_task, row_attempt) = (task.id.clone(), attempt.id.clone());
         let row = MessageRow {
@@ -404,6 +412,21 @@ impl Tasks {
         self.publish(events);
         instance.wake.notify_one();
         Ok(AttemptRef { attempt_id: attempt.id })
+    }
+
+    /// A reply goes on from a stop only while the attempt is at it, and only the first one does
+    /// (worker-interface.md §3).
+    async fn check_stop(&self, instance: &TaskInstance, attempt: &AttemptRow, stop: &str) -> OpResult<()> {
+        let (id, stop_id) = (attempt.id.clone(), stop.to_owned());
+        if let Some((message, at)) = self.read(move |c| store::stop_reply(c, &id, &stop_id)).await.map_err(rpc_error)? {
+            return Err(rejected("stop_answered", format!("message {message} replied to stop {stop} at {at}")));
+        }
+        let current = attempt.clone();
+        let status = db(instance, move |db| db.read(|c| derive(c, &current))).await.map_err(rpc_error)?;
+        if status.blocked.and_then(|b| b.stop_id).as_deref() != Some(stop) {
+            return Err(rejected("not_stopped", format!("attempt {} is not at stop {stop}", attempt.id)));
+        }
+        Ok(())
     }
 
     pub async fn revise(self: &Arc<Self>, params: CreateTaskParams) -> OpResult<Revised> {
@@ -607,8 +630,8 @@ fn spec_text(spec: &TaskSpec) -> String {
 }
 
 /// Puts the orchestrator's message in the agent's inbox, by the attempt's state: review rework
-/// after a delivery, a continuation after a turn that did not end normally, else the next turn's
-/// input (worker-interface.md §0 rule 4, §3). Returns the instance's message.
+/// after a delivery, a continuation when it replies to a stop (checked by `check_stop`), else the
+/// next turn's input (worker-interface.md §0 rule 4, §3). Returns the instance's message.
 async fn deliver(instance: &TaskInstance, attempt: &AttemptRow, params: &SendMessageParams) -> anyhow::Result<String> {
     let core_task = attempt.core_task.clone();
     let (request, body) = (params.message_id.clone(), params.body.clone());
@@ -633,7 +656,10 @@ async fn deliver(instance: &TaskInstance, attempt: &AttemptRow, params: &SendMes
     let send =
         SendMessage { request_id: request.clone(), role: ROLE.into(), task_id: Some(core_task), body, reply_to: None };
     let id = db(instance, move |db| db.execute(&Caller::User, &send)).await?.id;
-    // After a turn that did not end normally, the role holds until it is continued.
+    // After a turn that did not end normally, the role holds until a reply to the stop continues it.
+    if params.stop_id.is_none() {
+        return Ok(id);
+    }
     let held = db(instance, |db| db.read(|c| hold(c, ROLE))).await?;
     match held {
         Some(Hold::Abnormal { .. }) => {
@@ -1323,11 +1349,13 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
         return Ok(ended.clone());
     }
     let task = load_task(c, &attempt.core_task)?;
-    let blocked = |need, question_id, reason: String| Status {
+    let blocked = |need, question_id, stop_id, reason: String| Status {
         state: AttemptState::Blocked,
-        blocked: Some(Blocked { need, question_id }),
+        blocked: Some(Blocked { need, question_id, stop_id }),
         reason: Some(reason),
     };
+    // A stop is named by the turn whose end made it (worker-interface.md §3).
+    let stop = || Ok::<_, lobotomy_core::Error>(last_turn(c, ROLE)?.map(|t| t.id));
     Ok(match task.phase {
         // Its clone is being made, or its role still works on an earlier attempt.
         Phase::Queued => Status::of(AttemptState::Preparing),
@@ -1341,7 +1369,7 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
             } else if let Some(q) =
                 open_questions(c, Some(ROLE))?.into_iter().find(|q| q.task_id.as_deref() == Some(task.id.as_str()))
             {
-                blocked(Need::Input, Some(q.id), q.body)
+                blocked(Need::Input, Some(q.id), None, q.body)
             } else {
                 match hold(c, ROLE)? {
                     Some(Hold::Abnormal { turn }) => {
@@ -1350,11 +1378,12 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
                             (None, Some(Outcome::Interrupted)) => "the turn was interrupted".to_owned(),
                             _ => "the turn did not end normally".to_owned(),
                         };
-                        blocked(Need::Resume, None, reason)
+                        blocked(Need::Resume, None, Some(turn.id), reason)
                     }
                     Some(Hold::SessionUnidentified { .. }) => blocked(
                         Need::Resume,
                         None,
+                        stop()?,
                         "the harness's session id was not recorded; the next message starts a new session".to_owned(),
                     ),
                     // Nothing runs and nothing waits to: the agent ended its turn without reporting
@@ -1362,6 +1391,7 @@ fn derive(c: &Connection, attempt: &AttemptRow) -> lobotomy_core::Result<Status>
                     None if unfinished.is_none() && queued_messages(c, ROLE)?.is_empty() => blocked(
                         Need::Resume,
                         None,
+                        stop()?,
                         "the agent ended its turn without reporting done or asking; whatever it left running in \
                          the background ended with the turn"
                             .to_owned(),

@@ -612,6 +612,7 @@ impl Workers {
             body,
             refs: Vec::new(),
             question_id: worker.status.question.as_ref().map(|q| q.question_id.clone()),
+            stop_id: None,
         };
         self.call::<ops::SendMessage>(&worker.worker, &params).await?;
         runtime(project, MessageForwarded { message_id: message_id.to_owned() }).await

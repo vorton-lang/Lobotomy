@@ -86,8 +86,14 @@ async fn stops_take_effect_when_the_agent_has_exited_and_a_message_resumes_an_in
     let EventBody::StateChanged { blocked: Some(why), .. } = held.body else { panic!("{held:?}") };
     assert_eq!(why.need, Need::Resume);
 
-    // The same attempt goes on (worker-interface.md §3, 语义更新 2026-10-17).
-    assert_eq!(worker.call::<SendMessage>(&message("t", "go", "FAKE:sleep")).await.unwrap().attempt_id, attempt);
+    // A reply to the stop goes on in the same attempt. A second reply to it is refused: in the
+    // first real acceptance the user and Angela continued at once, and the later one went into the
+    // next turn (worker-interface.md §3).
+    let reply = |id: &str, body: &str| SendMessageParams { stop_id: why.stop_id.clone(), ..message("t", id, body) };
+    assert_eq!(worker.call::<SendMessage>(&reply("go", "FAKE:sleep")).await.unwrap().attempt_id, attempt);
+    let late = worker.call::<SendMessage>(&reply("go-too", "继续")).await.unwrap_err();
+    assert_eq!(late.reason(), Some("stop_answered"), "{late:?}");
+    assert!(late.message.contains("go "), "it names the first reply: {late:?}");
     worker.state("t", AttemptState::Working).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     worker.call::<Stop>(&StopParams { task_id: "t".into(), level: StopLevel::Attempt }).await.unwrap();

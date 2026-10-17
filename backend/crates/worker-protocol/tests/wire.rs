@@ -13,7 +13,7 @@ fn an_event_is_flat_with_its_kind() {
         seq: 3,
         body: EventBody::StateChanged {
             state: AttemptState::Blocked,
-            blocked: Some(Blocked { need: Need::Input, question_id: Some("q".into()) }),
+            blocked: Some(Blocked { need: Need::Input, question_id: Some("q".into()), stop_id: None }),
             reason: None,
         },
     };
@@ -22,7 +22,7 @@ fn an_event_is_flat_with_its_kind() {
         wire,
         json!({
             "task_id": "t", "attempt_id": "a", "seq": 3, "kind": "state_changed", "state": "blocked",
-            "blocked": { "need": "needs_input", "question_id": "q" }, "reason": null,
+            "blocked": { "need": "needs_input", "question_id": "q", "stop_id": null }, "reason": null,
         })
     );
     assert_eq!(serde_json::from_value::<Event>(wire).unwrap(), event);

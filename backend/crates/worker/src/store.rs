@@ -324,6 +324,17 @@ pub fn message(c: &Connection, id: &str) -> anyhow::Result<Option<MessageRow>> {
     Ok(c.query_row(&format!("SELECT {MESSAGE_COLUMNS} FROM message WHERE id = ?1"), [id], message_row).optional()?)
 }
 
+/// The attempt's message that replied to `stop`, and when (UTC), if one did.
+pub fn stop_reply(c: &Connection, attempt_id: &str, stop: &str) -> anyhow::Result<Option<(String, String)>> {
+    Ok(c.query_row(
+        "SELECT id, strftime('%Y-%m-%dT%H:%M:%SZ', created_at / 1000, 'unixepoch') FROM message
+         WHERE attempt_id = ?1 AND json_extract(request, '$.stop_id') = ?2",
+        [attempt_id, stop],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()?)
+}
+
 pub fn attempt_messages(c: &Connection, attempt_id: &str) -> anyhow::Result<Vec<MessageRow>> {
     let mut stmt =
         c.prepare(&format!("SELECT {MESSAGE_COLUMNS} FROM message WHERE attempt_id = ?1 ORDER BY created_at, id"))?;
