@@ -53,7 +53,8 @@ const ASKS: Record<QuestionKind, string> = { confirm: '请你确认', choice: '�
 
 /**
  * Angela's question (tech-plan.md §5 "要你卡"). An option goes to her as the user's answer to this
- * question; the user can always write one instead. Any later message to her also answers it.
+ * question; the user can always write one instead.
+ * A later user message to her without a question ID is also a candidate answer.
  */
 function QuestionCard({ attention: a }: { attention: Extract<Attention, { kind: 'question' }> }) {
   const { submit, busy } = useCommand('send_message');
